@@ -4,7 +4,7 @@ use crate::{
     shell::WorkspaceDelta,
     utils::prelude::*,
     wayland::protocols::workspace::{
-        Request, State as WState, WorkspaceHandler, WorkspaceState, delegate_workspace,
+        delegate_workspace, Request, State as WState, WorkspaceHandler, WorkspaceState,
     },
 };
 use cosmic_protocols::workspace::v2::server::zcosmic_workspace_handle_v2::TilingState;

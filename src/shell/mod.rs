@@ -3754,7 +3754,7 @@ impl Shell {
             GrabStartData::Touch(start_data) => Trigger::Touch(start_data.slot),
         };
         let active_hint = if config.cosmic_conf.active_hint {
-            self.theme.cosmic().active_hint as u8
+            (self.theme.cosmic().active_hint as u8).min(1)
         } else {
             0
         };

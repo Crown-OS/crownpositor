@@ -207,7 +207,7 @@ impl IndicatorShader {
         inner_radius: [u8; 4],
         alpha: f32,
         scale: f64,
-        active_window_hint: [f32; 3],
+        _active_window_hint: [f32; 3],
     ) -> PixelShaderElement {
         let t = thickness as i32;
         element_geo.loc -= (t, t).into();
@@ -220,9 +220,9 @@ impl IndicatorShader {
             element_geo,
             thickness,
             outer_radius,
-            alpha,
+            alpha * 0.4,
             scale,
-            active_window_hint,
+            [0.5, 0.5, 0.5],
         )
     }
 
@@ -782,7 +782,7 @@ where
         .ok_or(OutputNoMode)?;
     let is_active_space = workspace.output == focused_output;
     let active_hint = if shell.active_hint {
-        theme.cosmic().active_hint as u8
+        (theme.cosmic().active_hint as u8).min(1)
     } else {
         0
     };

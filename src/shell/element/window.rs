@@ -1,10 +1,10 @@
 use crate::{
     backend::render::{
-        IndicatorShader, Key, Usage,
         clipped_surface::ClippedSurfaceRenderElement,
         cursor::CursorState,
         element::{AsGlowRenderer, FromGlesError},
         shadow::ShadowShader,
+        IndicatorShader, Key, Usage,
     },
     hooks::{Decorations, HOOKS},
     shell::{
@@ -25,20 +25,19 @@ use smithay::{
     backend::{
         input::KeyState,
         renderer::{
-            ImportAll, ImportMem, Renderer,
             element::{
+                memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
                 AsRenderElements, Element, Id as RendererId, Kind, RenderElement,
-                UnderlyingStorage, memory::MemoryRenderBufferRenderElement,
-                surface::WaylandSurfaceRenderElement,
+                UnderlyingStorage,
             },
             gles::element::PixelShaderElement,
             glow::GlowRenderer,
             utils::{CommitCounter, DamageSet, OpaqueRegions},
+            ImportAll, ImportMem, Renderer,
         },
     },
-    desktop::{WindowSurfaceType, space::SpaceElement},
+    desktop::{space::SpaceElement, WindowSurfaceType},
     input::{
-        Seat,
         keyboard::{KeyboardTarget, KeysymHandle, ModifiersState},
         pointer::{
             AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, GestureHoldBeginEvent,
@@ -50,12 +49,13 @@ use smithay::{
             DownEvent, MotionEvent as TouchMotionEvent, OrientationEvent, ShapeEvent, TouchTarget,
             UpEvent,
         },
+        Seat,
     },
     output::Output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{
-        Buffer, IsAlive, Logical, Physical, Point, Rectangle, Scale, Serial, Size, Transform,
-        user_data::UserDataMap,
+        user_data::UserDataMap, Buffer, IsAlive, Logical, Physical, Point, Rectangle, Scale,
+        Serial, Size, Transform,
     },
     wayland::{pointer_constraints::with_pointer_constraint, seat::WaylandFocus},
 };
@@ -64,8 +64,8 @@ use std::{
     fmt,
     hash::Hash,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
+        Arc, Mutex,
     },
 };
 use wayland_backend::server::ObjectId;
@@ -445,7 +445,7 @@ impl CosmicWindow {
             }
 
             let window_key =
-                CosmicMappedKey(CosmicMappedKeyInner::Window(Arc::downgrade(&self.0.0)));
+                CosmicMappedKey(CosmicMappedKeyInner::Window(Arc::downgrade(&self.0 .0)));
 
             Some(
                 CosmicWindowRenderElement::Shadow(ShadowShader::element(
@@ -529,7 +529,7 @@ impl CosmicWindow {
 
         if (has_ssd || clip) && !is_maximized {
             let window_key =
-                CosmicMappedKey(CosmicMappedKeyInner::Window(Arc::downgrade(&self.0.0)));
+                CosmicMappedKey(CosmicMappedKeyInner::Window(Arc::downgrade(&self.0 .0)));
 
             let (r, g, b, a) = bg_divider.into_components();
             let elem = CosmicWindowRenderElement::Border(IndicatorShader::element(

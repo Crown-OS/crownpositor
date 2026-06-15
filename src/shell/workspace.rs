@@ -3,15 +3,15 @@ use crate::shell::layout::tiling::RestoreTilingState;
 use crate::wayland::handlers::xdg_activation::ActivationContext;
 use crate::{
     backend::render::{
-        BackdropShader,
         element::{AsGlowRenderer, FromGlesError},
+        BackdropShader,
     },
     shell::{
-        ANIMATION_DURATION, OverviewMode, SeatMoveGrabState,
         layout::{
             floating::{FloatingLayout, TiledCorners},
             tiling::TilingLayout,
         },
+        OverviewMode, SeatMoveGrabState, ANIMATION_DURATION,
     },
     state::State,
     utils::{prelude::*, tween::EaseRectangle},
@@ -23,8 +23,8 @@ use crate::{
         },
     },
 };
-use cosmic_comp_config::AppearanceConfig;
 use cosmic_comp_config::workspace::{OutputMatch, PinnedWorkspace};
+use cosmic_comp_config::AppearanceConfig;
 
 use cosmic::theme::CosmicTheme;
 use cosmic_protocols::workspace::v2::server::zcosmic_workspace_handle_v2::TilingState;
@@ -37,14 +37,14 @@ use smithay::utils::user_data::UserDataMap;
 use smithay::{
     backend::renderer::{
         element::{
-            Element, Id, RenderElement, surface::WaylandSurfaceRenderElement,
-            texture::TextureRenderElement, utils::RescaleRenderElement,
+            surface::WaylandSurfaceRenderElement, texture::TextureRenderElement,
+            utils::RescaleRenderElement, Element, Id, RenderElement,
         },
         gles::GlesTexture,
         glow::GlowRenderer,
         utils::{DamageSet, OpaqueRegions},
     },
-    desktop::{WindowSurfaceType, layer_map_for_output, space::SpaceElement},
+    desktop::{layer_map_for_output, space::SpaceElement, WindowSurfaceType},
     input::Seat,
     output::Output,
     reexports::wayland_server::Client,
@@ -59,18 +59,18 @@ use std::{
 use wayland_backend::server::ClientId;
 
 use super::{
-    CosmicMappedRenderElement, CosmicSurface, ResizeDirection, ResizeMode,
     element::{
-        CosmicMapped, MaximizedState, resize_indicator::ResizeIndicator,
-        stack::CosmicStackRenderElement, swap_indicator::SwapIndicator,
-        window::CosmicWindowRenderElement,
+        resize_indicator::ResizeIndicator, stack::CosmicStackRenderElement,
+        swap_indicator::SwapIndicator, window::CosmicWindowRenderElement, CosmicMapped,
+        MaximizedState,
     },
     focus::{
-        FocusStack, FocusStackMut,
         target::{KeyboardFocusTarget, PointerFocusTarget, WindowGroup},
+        FocusStack, FocusStackMut,
     },
     grabs::ResizeEdge,
     layout::tiling::{Data, NodeDesc},
+    CosmicMappedRenderElement, CosmicSurface, ResizeDirection, ResizeMode,
 };
 
 const FULLSCREEN_ANIMATION_DURATION: Duration = Duration::from_millis(200);
