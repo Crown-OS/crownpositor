@@ -1,8 +1,8 @@
 use smithay::{
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
-    reexports::wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
+    reexports::wayland_server::{protocol::wl_surface::WlSurface, DisplayHandle},
     utils::{Logical, Point},
-    wayland::shell::xdg::XdgShellState,
+    wayland::shell::{wlr_layer::WlrLayerShellState, xdg::XdgShellState},
 };
 
 use crate::state::State;
@@ -11,12 +11,14 @@ pub struct ShellState {
     pub xdg_shell_state: XdgShellState,
     pub space: Space<Window>,
     pub popups: PopupManager,
+    pub layer_shell: WlrLayerShellState,
 }
 
 impl ShellState {
     pub fn try_new(display: &DisplayHandle) -> anyhow::Result<Self> {
         Ok(Self {
-            xdg_shell_state: XdgShellState::new::<State>(display),
+            layer_shell: WlrLayerShellState::new::<State>(&display),
+            xdg_shell_state: XdgShellState::new::<State>(&display),
             space: Space::default(),
             popups: PopupManager::default(),
         })

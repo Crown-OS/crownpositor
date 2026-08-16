@@ -5,6 +5,7 @@ mod idle_inhibit;
 mod idle_notify;
 mod kde_decoration;
 mod keyboard_shortcuts_inhibit;
+mod layer_shell;
 mod output;
 mod seat;
 mod selection;

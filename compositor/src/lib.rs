@@ -1,9 +1,13 @@
+mod animations;
 mod backend;
 mod handlers;
 mod input;
+mod layout;
 mod logging;
 mod shell;
 mod state;
+mod theme;
+mod utils;
 
 use anyhow::Context;
 use calloop::EventLoop;
