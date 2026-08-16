@@ -1,0 +1,36 @@
+[package]
+name = "compositor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies.smithay]
+version = "0.7.0"
+default-features = false
+features = [
+  "backend_drm",
+  "backend_gbm",
+  "backend_egl",
+  "backend_libinput",
+  "backend_session_libseat",
+  "backend_udev",
+  "backend_winit",
+  "backend_vulkan",
+  "backend_x11",
+  "desktop",
+  "renderer_glow",
+  "renderer_multi",
+  "renderer_pixman",
+  "wayland_frontend",
+  "xwayland",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+calloop = { workspace = true }
+parking_lot = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+tracing-journald = { workspace = true }
+tracing-subscriber = { workspace = true }
+wayland-server = { workspace = true }
