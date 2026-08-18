@@ -25,6 +25,7 @@ features = [
 ]
 
 [dependencies]
+crownos-config = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 calloop = { workspace = true }
@@ -34,3 +35,4 @@ tracing = { workspace = true }
 tracing-journald = { workspace = true }
 tracing-subscriber = { workspace = true }
 wayland-server = { workspace = true }
+tiny-skia = "0.12.0"

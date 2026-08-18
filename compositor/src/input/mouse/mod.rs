@@ -1,14 +1,15 @@
+mod gestures;
+
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend,
         PointerAxisEvent, PointerButtonEvent,
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{SERIAL_COUNTER, Serial},
+    utils::{Serial, SERIAL_COUNTER},
 };
 
-use crate::state::State;
+use crate::{handlers::seat::KeyboardFocusTarget, state::State};
 
 impl State {
     pub(super) fn on_pointer_motion_absolute<I: InputBackend>(
@@ -116,13 +117,14 @@ impl State {
                 let surface = window
                     .toplevel()
                     .map(|toplevel| toplevel.wl_surface().clone());
-                keyboard.set_focus(self, surface, serial);
+
+                keyboard.set_focus(self, Some(KeyboardFocusTarget::from(surface)), serial);
             }
             None => {
                 for window in self.shell.space.elements() {
                     window.set_activated(false);
                 }
-                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                keyboard.set_focus(self, Option::<KeyboardFocusTarget>::None, serial);
             }
         }
 

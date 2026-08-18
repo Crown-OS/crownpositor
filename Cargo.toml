@@ -3,7 +3,6 @@ members = ["compositor"]
 resolver = "3"
 
 [workspace.dependencies]
-crownshell = { git = "https://github.com/crown-os/crownshell" }
 crownos-config = { git = "https://github.com/crown-os/crownos-config" }
 
 anyhow = "1.0.104"

@@ -20,10 +20,19 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        // The initial configure is deferred to the first commit, as the protocol requires.
-        // TODO: let the shell pick a position instead of stacking everything at the origin.
         let window = Window::new_wayland_window(surface);
-        self.shell.space.map_element(window, (0, 0), false);
+
+        let position = self.shell.layout_manager.add_window(window.clone());
+        self.shell.space.map_element(window, position, false);
+    }
+
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        let window = self.shell.window_for_surface(surface.wl_surface()).cloned();
+        if let Some(window) = window {
+            self.shell.space.unmap_elem(&window);
+            // TODO:
+            // self.shell.layout_manager.remove_window(window);
+        }
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
@@ -44,13 +53,6 @@ impl XdgShellHandler for State {
             state.positioner = positioner;
         });
         surface.send_repositioned(token);
-    }
-
-    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        let window = self.shell.window_for_surface(surface.wl_surface()).cloned();
-        if let Some(window) = window {
-            self.shell.space.unmap_elem(&window);
-        }
     }
 
     fn popup_destroyed(&mut self, _surface: PopupSurface) {}

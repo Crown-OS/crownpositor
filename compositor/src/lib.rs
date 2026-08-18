@@ -4,6 +4,7 @@ mod handlers;
 mod input;
 mod layout;
 mod logging;
+mod shaders;
 mod shell;
 mod state;
 mod theme;

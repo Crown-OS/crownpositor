@@ -1,3 +1,4 @@
+mod background_effect;
 mod compositor;
 mod dmabuf;
 mod fractional_scale;
@@ -7,7 +8,7 @@ mod kde_decoration;
 mod keyboard_shortcuts_inhibit;
 mod layer_shell;
 mod output;
-mod seat;
+pub mod seat;
 mod selection;
 mod session_lock;
 mod shm;

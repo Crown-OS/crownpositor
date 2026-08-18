@@ -5,10 +5,14 @@ use smithay::{
     wayland::shell::{wlr_layer::WlrLayerShellState, xdg::XdgShellState},
 };
 
-use crate::state::State;
+use crate::{
+    layout::manager::{LayoutManager, LayoutMode},
+    state::State,
+};
 
 pub struct ShellState {
     pub xdg_shell_state: XdgShellState,
+    pub layout_manager: LayoutManager,
     pub space: Space<Window>,
     pub popups: PopupManager,
     pub layer_shell: WlrLayerShellState,
@@ -17,8 +21,10 @@ pub struct ShellState {
 impl ShellState {
     pub fn try_new(display: &DisplayHandle) -> anyhow::Result<Self> {
         Ok(Self {
-            layer_shell: WlrLayerShellState::new::<State>(&display),
-            xdg_shell_state: XdgShellState::new::<State>(&display),
+            // TODO: LayoutMode should be loaded from config
+            layout_manager: LayoutManager::new(LayoutMode::Tiling),
+            layer_shell: WlrLayerShellState::new::<State>(display),
+            xdg_shell_state: XdgShellState::new::<State>(display),
             space: Space::default(),
             popups: PopupManager::default(),
         })
