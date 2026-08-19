@@ -32,7 +32,7 @@ use smithay::backend::{
         },
     },
     renderer::{
-        ImportAll, ImportDma, Renderer,
+        ImportAll, ImportDma, ImportMem, Renderer,
         gles::GlesRenderer,
         multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend},
     },
@@ -115,9 +115,12 @@ pub enum RenderInitError {
 /// The supertraits are exactly what `rendering::output_elements` and the
 /// dmabuf/shm import paths demand — nothing KMS- or winit-specific, so both
 /// backends (and tests) can be generic over this.
-pub trait CrownRenderer: Renderer + ImportAll + ImportDma + Sized
+/// `ImportMem` is here for the cursor: a themed shape is rasterised on the CPU,
+/// so the renderer has to be able to take pixels from main memory, and the
+/// element that draws it wants a `Send` texture handle.
+pub trait CrownRenderer: Renderer + ImportAll + ImportDma + ImportMem + Sized
 where
-    Self::TextureId: Clone + 'static,
+    Self::TextureId: Send + Clone + 'static,
 {
     /// The effect stack this renderer supports. [`PassThrough`] for a
     /// renderer with no custom shaders.
@@ -268,7 +271,7 @@ mod tests {
     fn assert_renderable<R>()
     where
         R: CrownRenderer,
-        R::TextureId: Clone + 'static,
+        R::TextureId: Send + Clone + 'static,
     {
         fn takes_decorator<R, D>()
         where

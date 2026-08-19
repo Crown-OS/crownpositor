@@ -311,6 +311,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         common,
         config,
         clock,
+        input,
         ..
     } = state;
     let radius = config.current.border_radius as f32;
@@ -398,6 +399,8 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         monitor,
         &mut renderer,
         &mut MultiDecorator,
+        &mut input.cursor,
+        input.pointer_location,
         scale,
         radius,
     );
@@ -452,6 +455,9 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
             });
         }
     }
+    // A client's cursor surface is in neither the shell model nor the layer
+    // map, so it needs its own callback or an animated cursor draws once.
+    input.cursor.send_frame(&surface.output, now, throttle);
 
     if submitted {
         // The real vblank takes over: it anchors the frame clock and decides

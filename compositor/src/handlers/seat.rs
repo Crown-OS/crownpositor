@@ -143,7 +143,17 @@ impl SeatHandler for State {
         &mut self.wayland.seat_state
     }
 
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: CursorImageStatus) {}
+    /// A client set the cursor. Nothing else draws it, so this has to reach the
+    /// screen: the shape only changes on a client's say-so, and if it does not
+    /// force a frame the pointer keeps the previous image until something else
+    /// happens to damage the output.
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        if self.input.cursor.status == image {
+            return;
+        }
+        self.input.cursor.status = image;
+        self.queue_pointer_redraw();
+    }
 
     /// Only records which window holds focus. The `Activated` state and its
     /// configure are `Shell::refresh`'s job, so exactly one pass decides what

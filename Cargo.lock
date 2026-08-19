@@ -295,6 +295,7 @@ dependencies = [
  "tracing-journald",
  "tracing-subscriber",
  "wayland-server",
+ "xcursor",
 ]
 
 [[package]]

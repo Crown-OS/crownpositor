@@ -44,6 +44,7 @@ impl State {
             return;
         };
 
+        let previous = self.input.pointer_location;
         self.input.pointer_location = location;
         let under = self.shell.surface_under(location);
 
@@ -57,6 +58,13 @@ impl State {
             },
         );
         pointer.frame(self);
+
+        // The compositor draws the cursor, so a mouse move is damage like any
+        // other. Both ends of the move: the output the pointer left still has
+        // the old image on it. `queue` is idempotent, so a move within one
+        // output costs one frame, not two.
+        self.queue_redraw_at(previous);
+        self.queue_redraw_at(location);
     }
 
     /// Keeps the pointer inside the union of the mapped outputs.

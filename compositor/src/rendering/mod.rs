@@ -9,6 +9,7 @@
 //! front of the space, which is right for Overlay and Top and wrong for Bottom
 //! and Background, so a wallpaper would cover the desktop.
 
+pub mod cursor;
 pub mod decorate;
 pub mod element;
 pub mod rounded;
@@ -19,15 +20,15 @@ use smithay::{
             surface::WaylandSurfaceRenderElement, utils::CropRenderElement, AsRenderElements,
             RenderElement, Wrap,
         },
-        ImportAll, Renderer,
+        ImportAll, ImportMem, Renderer,
     },
     desktop::layer_map_for_output,
-    utils::{Physical, Point, Rectangle, Scale},
+    utils::{Logical, Physical, Point, Rectangle, Scale},
     wayland::shell::wlr_layer::Layer,
 };
 
 use crate::{
-    rendering::{decorate::TileDecorator, element::CrownElement},
+    rendering::{cursor::Cursor, decorate::TileDecorator, element::CrownElement},
     shell::{monitor::Monitor, tile::Tile, Shell},
 };
 
@@ -40,16 +41,28 @@ pub fn output_elements<R, D>(
     monitor: &Monitor,
     renderer: &mut R,
     decorator: &mut D,
+    cursor: &mut Cursor,
+    pointer: Point<f64, Logical>,
     scale: Scale<f64>,
     radius: f32,
 ) -> Elements<R, D>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
     D: TileDecorator<R>,
 {
     let mut elements = Elements::<R, D>::new();
     let workspace = monitor.active();
+
+    // First in the list is nearest the eye: the cursor is over everything,
+    // fullscreen windows included.
+    cursor.render(
+        &mut elements,
+        renderer,
+        monitor.geometry().loc,
+        pointer,
+        scale,
+    );
 
     layer_elements(
         &mut elements,
@@ -90,7 +103,7 @@ fn tile_elements<R, D>(
     scale: Scale<f64>,
     radius: f32,
 ) where
-    R: Renderer + ImportAll,
+    R: Renderer + ImportAll + ImportMem,
     R::TextureId: Clone + 'static,
     D: TileDecorator<R>,
 {
@@ -128,7 +141,7 @@ fn layer_elements<R, E>(
     scale: Scale<f64>,
     layers: &[Layer],
 ) where
-    R: Renderer + ImportAll,
+    R: Renderer + ImportAll + ImportMem,
     R::TextureId: Clone + 'static,
     E: RenderElement<R>,
 {

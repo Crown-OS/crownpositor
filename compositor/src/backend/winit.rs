@@ -164,6 +164,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         shell,
         clock,
         config,
+        input,
         ..
     } = state;
     // Physical pixels, because that is the space the shader works in.
@@ -200,6 +201,8 @@ fn render(state: &mut State) -> anyhow::Result<()> {
             monitor,
             renderer,
             &mut GlesDecorator,
+            &mut input.cursor,
+            input.pointer_location,
             scale,
             radius,
         );
@@ -237,6 +240,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
             });
         }
     }
+    input.cursor.send_frame(&winit.output, now, throttle);
 
     // Winit only redraws on demand. Scheduling only while something is moving is
     // what takes an idle desktop from a permanent 60 Hz loop to ~0% CPU; a client

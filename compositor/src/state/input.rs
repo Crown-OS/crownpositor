@@ -1,15 +1,18 @@
 use std::collections::HashSet;
 
 use smithay::{
-    input::{keyboard::Keycode, pointer::CursorImageStatus},
+    input::keyboard::Keycode,
     utils::{Logical, Point},
 };
 
 use config::Config;
 
-use crate::input::{
-    mouse::gestures::GestureState,
-    shortcuts::{Bindings, GestureBindings, ModMask},
+use crate::{
+    input::{
+        mouse::gestures::GestureState,
+        shortcuts::{Bindings, GestureBindings, ModMask},
+    },
+    rendering::cursor::Cursor,
 };
 
 pub struct InputState {
@@ -30,7 +33,10 @@ pub struct InputState {
 
     /// Global logical coordinates, not per-output.
     pub pointer_location: Point<f64, Logical>,
-    pub cursor_image: CursorImageStatus,
+    /// What the pointer looks like, and the theme it is drawn from. Owned here
+    /// rather than per-output: the image cache is keyed on scale, so two
+    /// monitors share every entry they have in common.
+    pub cursor: Cursor,
 }
 
 impl InputState {
@@ -43,7 +49,7 @@ impl InputState {
             mod_chord_armed: None,
             mod_chord_polluted: false,
             pointer_location: (0.0, 0.0).into(),
-            cursor_image: CursorImageStatus::default_named(),
+            cursor: Cursor::new(),
         }
     }
 }

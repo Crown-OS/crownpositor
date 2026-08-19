@@ -7,6 +7,7 @@ mod input;
 mod wayland;
 
 use calloop::EventLoop;
+use smithay::utils::{Logical, Point};
 
 use crate::{animations::spring::Clock, shell::Shell};
 pub use crate::state::{
@@ -33,6 +34,26 @@ impl State {
     /// is animating; client damage and model changes have to ask explicitly.
     pub fn queue_redraw(&mut self) {
         self.backend.queue_redraw(None);
+    }
+
+    /// Schedules a frame on the output containing `location`, and nowhere else.
+    ///
+    /// The pointer cannot be on two monitors at once, so cursor work — a move,
+    /// a shape change — has no business repainting the others.
+    pub fn queue_redraw_at(&mut self, location: Point<f64, Logical>) {
+        let Some(output) = self
+            .shell
+            .monitor_at(location)
+            .map(|monitor| monitor.output().clone())
+        else {
+            return;
+        };
+        self.backend.queue_redraw(Some(&output));
+    }
+
+    /// Schedules a frame wherever the cursor currently is.
+    pub fn queue_pointer_redraw(&mut self) {
+        self.queue_redraw_at(self.input.pointer_location);
     }
 
     pub fn try_new(event_loop: &mut EventLoop<'static, State>) -> anyhow::Result<Self> {
