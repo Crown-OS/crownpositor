@@ -52,7 +52,6 @@ where
     D: TileDecorator<R>,
 {
     let mut elements = Elements::<R, D>::new();
-    let workspace = monitor.active();
 
     // First in the list is nearest the eye: the cursor is over everything,
     // fullscreen windows included.
@@ -72,24 +71,38 @@ where
         &[Layer::Overlay, Layer::Top],
     );
 
-    if let Some(tile) = workspace.fullscreen().and_then(|id| workspace.tile(id)) {
-        // A fullscreen window covers the screen edge to edge, so rounding it
-        // would just cut four notches out of the display.
-        tile_elements(&mut elements, tile, renderer, decorator, scale, 0.0);
-        return elements;
+    // One workspace once the viewport has settled, two while it is sliding —
+    // and the slide is nothing but the offset each tile is drawn at, so the GPU
+    // recomposites textures it already holds instead of anyone touching pixels.
+    // Layer surfaces sit outside the loop: a bar does not travel with the
+    // workspace under it.
+    let mut covered = false;
+    for (workspace, offset) in monitor.visible_workspaces() {
+        match workspace.fullscreen().and_then(|id| workspace.tile(id)) {
+            // A fullscreen window covers its page edge to edge, so rounding it
+            // would just cut four notches out of the display — and while it is
+            // the only page on screen there is nothing behind it to draw.
+            Some(tile) => {
+                covered |= offset.x == 0.0;
+                tile_elements(&mut elements, tile, renderer, decorator, scale, offset, 0.0);
+            }
+            None => {
+                for tile in workspace.stacking_order() {
+                    tile_elements(&mut elements, tile, renderer, decorator, scale, offset, radius);
+                }
+            }
+        }
     }
 
-    for tile in workspace.stacking_order() {
-        tile_elements(&mut elements, tile, renderer, decorator, scale, radius);
+    if !covered {
+        layer_elements(
+            &mut elements,
+            monitor,
+            renderer,
+            scale,
+            &[Layer::Bottom, Layer::Background],
+        );
     }
-
-    layer_elements(
-        &mut elements,
-        monitor,
-        renderer,
-        scale,
-        &[Layer::Bottom, Layer::Background],
-    );
 
     let _ = shell;
     elements
@@ -101,6 +114,7 @@ fn tile_elements<R, D>(
     renderer: &mut R,
     decorator: &mut D,
     scale: Scale<f64>,
+    offset: Point<f64, Logical>,
     radius: f32,
 ) where
     R: Renderer + ImportAll + ImportMem,
@@ -109,8 +123,10 @@ fn tile_elements<R, D>(
 {
     // The interpolated rect, not the target: this is what makes a window slide.
     // Output-local, because the damage tracker works in this output's own space.
+    // `offset` slides the whole workspace the tile belongs to; rounding only at
+    // the physical step keeps both motions sub-pixel smooth.
     let rect = tile.render_rect();
-    let location: Point<i32, Physical> = rect.loc.to_physical_precise_round(scale);
+    let location: Point<i32, Physical> = (rect.loc + offset).to_physical_precise_round(scale);
     let clip = Rectangle::new(location, rect.size.to_physical_precise_round(scale));
     let size = (clip.size.w as f32, clip.size.h as f32);
 

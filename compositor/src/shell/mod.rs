@@ -6,6 +6,7 @@ pub mod monitor;
 pub mod tile;
 pub mod transaction;
 pub mod workspace;
+pub mod workspace_switch;
 
 use std::{collections::HashMap, time::Instant};
 
@@ -28,6 +29,7 @@ use smithay::{
 use config::{Config, ResolvedRule};
 
 use crate::{
+    animations::spring::SpringProfile,
     layout::{Direction, Gaps, LayoutKind, LayoutOp},
     shell::{
         monitor::{output_from_descriptor, output_id, ConnectorId, Monitor, OutputConfig, OutputDescriptor},
@@ -132,6 +134,9 @@ pub struct Shell {
 
     global_layout: LayoutKind,
     gaps: Gaps,
+    /// The feel every monitor's viewport is given, kept here so a monitor
+    /// plugged in later gets the same one. `None` disables motion.
+    animation: Option<SpringProfile>,
     unmapped: Vec<UnmappedWindow>,
     /// Grouped configures still waiting on their acks.
     transactions: Vec<Transaction>,
@@ -158,6 +163,7 @@ impl Shell {
                 inner: config.gaps_inner,
                 outer: config.gaps_outer,
             },
+            animation: SpringProfile::from_config(config.animation),
             unmapped: Vec::new(),
             transactions: Vec::new(),
             cascade: 0,
@@ -252,7 +258,7 @@ impl Shell {
             output_config.enabled = setting.enabled.unwrap_or(true);
         }
 
-        let monitor = Monitor::new(
+        let mut monitor = Monitor::new(
             id,
             output.clone(),
             Some(global),
@@ -260,6 +266,7 @@ impl Shell {
             self.global_layout,
             self.gaps,
         );
+        monitor.set_animation_profile(self.animation);
         self.monitors.push(monitor);
 
         self.reclaim_migrated(&connector, id);
@@ -521,6 +528,49 @@ impl Shell {
         }
     }
 
+    /// The feel every viewport animates with. `None` switches motion off.
+    pub fn set_workspace_animation(&mut self, profile: Option<SpringProfile>) {
+        self.animation = profile;
+        for monitor in &mut self.monitors {
+            monitor.set_animation_profile(profile);
+        }
+    }
+
+    // ---- interactive workspace switching ----
+
+    pub fn is_swiping_workspaces(&self) -> bool {
+        self.focused_monitor().is_some_and(Monitor::is_swiping)
+    }
+
+    /// Hands the focused output's viewport to the fingers.
+    pub fn begin_workspace_swipe(&mut self) {
+        if let Some(monitor) = self.focused_monitor_mut() {
+            monitor.begin_switch_gesture();
+        }
+    }
+
+    /// `travelled` is cumulative horizontal travel in logical pixels, positive
+    /// rightward.
+    pub fn update_workspace_swipe(&mut self, travelled: f64) {
+        if let Some(monitor) = self.focused_monitor_mut() {
+            monitor.update_switch_gesture(travelled);
+        }
+    }
+
+    /// Releases the swipe into its spring. `velocity` is in logical pixels per
+    /// second, positive rightward; returns whether the active workspace moved.
+    pub fn end_workspace_swipe(&mut self, velocity: f64) -> bool {
+        let global = self.global_layout;
+        self.focused_monitor_mut()
+            .is_some_and(|monitor| monitor.end_switch_gesture(velocity, global))
+    }
+
+    pub fn cancel_workspace_swipe(&mut self) {
+        if let Some(monitor) = self.focused_monitor_mut() {
+            monitor.cancel_switch_gesture();
+        }
+    }
+
     pub fn window_id(&self, surface: &WlSurface) -> Option<WindowId> {
         self.surface_to_window.get(surface).copied()
     }
@@ -652,31 +702,36 @@ impl Shell {
 
     /// The topmost window at a global logical point, and where it sits.
     ///
-    /// Walks the same `stacking_order` the renderer draws, so what you click is
-    /// what you see on top.
+    /// Walks the same workspaces, in the same order, that the renderer draws,
+    /// so what you click is what you see on top — including mid-switch, where
+    /// two workspaces share the output and both are shifted sideways.
     pub fn window_under(
         &self,
         location: Point<f64, Logical>,
     ) -> Option<(WindowId, Point<i32, Logical>)> {
         let monitor = self.monitor_at(location)?;
         let origin = monitor.geometry().loc;
-        let local = location - origin.to_f64();
-        let workspace = monitor.active();
+        let output_local = location - origin.to_f64();
 
-        // A fullscreen window swallows every click on that workspace.
-        if let Some(tile) = workspace.fullscreen().and_then(|id| workspace.tile(id)) {
-            return Some((tile.id(), origin + tile.target().loc));
-        }
+        monitor.visible_workspaces().find_map(|(workspace, offset)| {
+            let local = output_local - offset;
+            let at = |tile: &Tile| (tile.id(), origin + (tile.target().loc.to_f64() + offset).to_i32_round());
 
-        workspace
-            .stacking_order()
-            .find(|tile| {
-                tile.target().to_f64().contains(local)
-                    && tile
-                        .window()
-                        .is_in_input_region(&(local - tile.target().loc.to_f64()))
-            })
-            .map(|tile| (tile.id(), origin + tile.target().loc))
+            // A fullscreen window swallows every click on its workspace.
+            if let Some(tile) = workspace.fullscreen().and_then(|id| workspace.tile(id)) {
+                return Some(at(tile));
+            }
+
+            workspace
+                .stacking_order()
+                .find(|tile| {
+                    tile.target().to_f64().contains(local)
+                        && tile
+                            .window()
+                            .is_in_input_region(&(local - tile.target().loc.to_f64()))
+                })
+                .map(at)
+        })
     }
 
     pub fn surface_under(
@@ -1095,6 +1150,7 @@ impl Shell {
     /// frame nobody sees.
     pub fn advance_animations(&mut self, dt: f32) {
         for monitor in &mut self.monitors {
+            monitor.switch_mut().step(dt);
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().step(dt);
@@ -1107,16 +1163,18 @@ impl Shell {
     /// frame to decide whether to schedule another.
     pub fn is_animating(&self) -> bool {
         self.monitors.iter().any(|monitor| {
-            monitor
-                .workspaces()
-                .iter()
-                .any(|workspace| workspace.tiles().iter().any(|tile| !tile.anim().at_rest()))
+            monitor.is_switching()
+                || monitor
+                    .workspaces()
+                    .iter()
+                    .any(|workspace| workspace.tiles().iter().any(|tile| !tile.anim().at_rest()))
         })
     }
 
     /// Lands every spring on exact integers once motion stops.
     pub fn settle_animations(&mut self) {
         for monitor in &mut self.monitors {
+            monitor.switch_mut().settle();
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().settle();
@@ -1126,8 +1184,14 @@ impl Shell {
     }
 
     /// The windows drawn on an output right now, front to back.
+    ///
+    /// Mid-switch that spans two workspaces, which is what keeps the incoming
+    /// one's clients receiving frame callbacks — without them a swipe reveals a
+    /// workspace frozen on its last frame.
     pub fn visible_windows<'a>(&self, monitor: &'a Monitor) -> impl Iterator<Item = &'a Tile> {
-        monitor.active().stacking_order()
+        monitor
+            .visible_workspaces()
+            .flat_map(|(workspace, _)| workspace.stacking_order())
     }
 
     /// Drops tiles whose window is gone. This is the logic the old

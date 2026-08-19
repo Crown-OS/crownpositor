@@ -3,14 +3,18 @@ use std::time::Duration;
 use smithay::{
     output::{Mode, Output, PhysicalProperties, Scale},
     reexports::wayland_server::backend::GlobalId,
-    utils::{Logical, Rectangle, Size, Transform},
+    utils::{Logical, Point, Rectangle, Size, Transform},
 };
 
 use config::{OutputSetting, OutputTransform};
 
 use crate::{
+    animations::spring::SpringProfile,
     layout::{Gaps, LayoutKind},
-    shell::workspace::{Workspace, WorkspaceRef},
+    shell::{
+        workspace::{Workspace, WorkspaceRef},
+        workspace_switch::{PAGE_GAP, WorkspaceSwitch},
+    },
     utils::id::{OutputId, WorkspaceId},
 };
 
@@ -99,6 +103,9 @@ pub struct Monitor {
     workspaces: Vec<Workspace>,
     active: usize,
     previous: usize,
+    /// Where the viewport actually is, which trails `active` by an animation
+    /// and leads it during a swipe.
+    switch: WorkspaceSwitch,
 
     /// `layer_map_for_output(..).non_exclusive_zone()`, output-local.
     usable: Rectangle<i32, Logical>,
@@ -127,6 +134,7 @@ impl Monitor {
             workspaces: Vec::new(),
             active: 0,
             previous: 0,
+            switch: WorkspaceSwitch::new(0),
             usable,
             gaps,
             fixed_position: None,
@@ -204,12 +212,88 @@ impl Monitor {
     pub(super) fn drain_workspaces(&mut self) -> Vec<Workspace> {
         self.active = 0;
         self.previous = 0;
+        self.switch.snap_to(0);
         std::mem::take(&mut self.workspaces)
     }
 
     pub(super) fn take_workspace(&mut self, id: WorkspaceId) -> Option<Workspace> {
         let index = self.index_of(id)?;
-        Some(self.workspaces.remove(index))
+        let workspace = self.workspaces.remove(index);
+        // Removing renumbers everything after `index`, and a fractional
+        // viewport position means nothing across a renumbering.
+        let last = self.workspaces.len().saturating_sub(1);
+        self.active = self.active.min(last);
+        self.previous = self.previous.min(last);
+        self.switch.snap_to(self.active);
+        Some(workspace)
+    }
+
+    // ---- the viewport ----
+
+    pub fn switch(&self) -> &WorkspaceSwitch {
+        &self.switch
+    }
+
+    pub fn switch_mut(&mut self) -> &mut WorkspaceSwitch {
+        &mut self.switch
+    }
+
+    pub fn set_animation_profile(&mut self, profile: Option<SpringProfile>) {
+        self.switch.set_profile(profile);
+    }
+
+    /// Logical pixels from one workspace to the next while they slide past
+    /// each other.
+    pub fn page_stride(&self) -> f64 {
+        (self.config.logical_size().w + PAGE_GAP) as f64
+    }
+
+    /// Every workspace with part of itself on screen and where to draw it,
+    /// output-local, nearest the centre first.
+    ///
+    /// Only ever one entry once the viewport has settled, so the ordinary case
+    /// costs the same as reading `active`.
+    pub fn visible_workspaces(&self) -> impl Iterator<Item = (&Workspace, Point<f64, Logical>)> {
+        let stride = self.page_stride();
+        let workspaces = &self.workspaces;
+        self.switch
+            .visible(workspaces.len())
+            .filter_map(move |(index, offset)| {
+                Some((workspaces.get(index)?, Point::from((offset * stride, 0.0))))
+            })
+    }
+
+    pub fn is_switching(&self) -> bool {
+        self.switch.is_active()
+    }
+
+    pub fn is_swiping(&self) -> bool {
+        self.switch.is_dragging()
+    }
+
+    pub fn begin_switch_gesture(&mut self) {
+        self.switch.begin();
+    }
+
+    /// `travelled` is the fingers' cumulative horizontal travel in logical
+    /// pixels, positive rightward.
+    pub fn update_switch_gesture(&mut self, travelled: f64) {
+        let last = self.workspaces.len().saturating_sub(1);
+        let pages = travelled / self.page_stride();
+        self.switch.drag_to(pages, last);
+    }
+
+    /// Ends the swipe and makes whichever workspace it landed on active, while
+    /// the spring — started at the fingers' own speed — covers the rest of the
+    /// distance. `velocity` is in logical pixels per second, positive rightward.
+    pub fn end_switch_gesture(&mut self, velocity: f64, global: LayoutKind) -> bool {
+        let last = self.workspaces.len().saturating_sub(1);
+        let target = self.switch.release(velocity / self.page_stride(), last);
+        self.commit(target, global)
+    }
+
+    pub fn cancel_switch_gesture(&mut self) {
+        self.switch.cancel(self.active);
     }
 
     /// Pushes the current usable and output areas down to every workspace.
@@ -345,7 +429,13 @@ impl Monitor {
 
     /// Restores the workspace-list invariants. Every mutation ends here.
     pub fn normalize(&mut self, global: LayoutKind) {
-        self.reap_empty();
+        // Reaping renumbers the list, and a viewport in flight sits *between*
+        // two numbers — rebasing it would jump the animation. It happens on the
+        // first normalize after the switch lands, which the render loop
+        // guarantees will come.
+        if !self.switch.is_active() {
+            self.reap_empty();
+        }
         self.ensure_trailing_empty(global);
         debug_assert!(self.workspaces.last().is_some_and(Workspace::is_empty));
         debug_assert!(self.active < self.workspaces.len());
@@ -376,6 +466,9 @@ impl Monitor {
 
         self.active = self.index_of(active_id).unwrap_or(0);
         self.previous = self.index_of(previous_id).unwrap_or(self.active);
+        // The viewport is at rest on the old index; re-anchor it on the new one
+        // so the same workspace stays on screen.
+        self.switch.snap_to(self.active);
     }
 
     fn ensure_trailing_empty(&mut self, global: LayoutKind) {
@@ -413,13 +506,22 @@ impl Monitor {
 
     pub fn activate(&mut self, index: usize, global: LayoutKind) -> bool {
         let index = index.min(self.workspaces.len().saturating_sub(1));
-        if index == self.active {
-            return false;
+        self.switch.animate_to(index);
+        self.commit(index, global)
+    }
+
+    /// Moves the model onto `index`, leaving the viewport alone — the caller
+    /// has already aimed it, and a swipe's whole point is that its release
+    /// velocity survives this step.
+    fn commit(&mut self, index: usize, global: LayoutKind) -> bool {
+        let index = index.min(self.workspaces.len().saturating_sub(1));
+        let changed = index != self.active;
+        if changed {
+            self.previous = self.active;
+            self.active = index;
         }
-        self.previous = self.active;
-        self.active = index;
         self.normalize(global);
-        true
+        changed
     }
 
     pub fn previous_index(&self) -> usize {
@@ -520,6 +622,7 @@ mod tests {
             workspaces: Vec::new(),
             active: 0,
             previous: 0,
+            switch: WorkspaceSwitch::new(0),
             usable: Rectangle::from_size((1920, 1080).into()),
             gaps: Gaps::default(),
             fixed_position: None,
@@ -607,13 +710,129 @@ mod tests {
         assert_invariants(&monitor);
     }
 
+    /// Runs the viewport spring at 60 Hz until it lands, then snaps it onto the
+    /// target — the same two-step the render loop performs every frame.
+    fn settle(monitor: &mut Monitor) {
+        for _ in 0..600 {
+            if !monitor.is_switching() {
+                monitor.switch_mut().settle();
+                return;
+            }
+            monitor.switch_mut().step(1.0 / 60.0);
+        }
+        panic!("the viewport never came to rest");
+    }
+
     #[test]
-    fn switching_away_reaps_the_workspace_you_left() {
+    fn switching_away_reaps_the_workspace_you_left_once_the_viewport_lands() {
         let mut monitor = monitor(3);
         monitor.activate(1, LayoutKind::MasterStack);
-        assert_invariants(&monitor);
-        // Index 0 was empty and is no longer active, so it is gone.
+        assert_eq!(
+            monitor.workspaces().len(),
+            3,
+            "renumbering the list under a sliding viewport would jump the animation"
+        );
+
+        settle(&mut monitor);
+        monitor.normalize(LayoutKind::MasterStack);
+
+        // Index 0 was empty and is no longer active, so it is gone — and the
+        // viewport followed the workspace, not the index.
         assert_eq!(monitor.workspaces().len(), 2);
+        assert_eq!(monitor.active_index(), 0);
+        assert_eq!(monitor.switch().position(), 0.0);
+        assert_invariants(&monitor);
+    }
+
+    #[test]
+    fn activating_slides_the_viewport_rather_than_teleporting_it() {
+        let mut monitor = monitor(4);
+        monitor.activate(2, LayoutKind::MasterStack);
+
+        assert_eq!(monitor.active_index(), 2, "the model commits immediately");
+        assert!(monitor.switch().position() < 2.0, "the pixels catch up");
+        assert!(monitor.is_switching());
+
+        settle(&mut monitor);
+        assert_eq!(monitor.switch().position(), monitor.active_index() as f64);
+    }
+
+    #[test]
+    fn a_swipe_commits_the_workspace_it_lands_on() {
+        let mut monitor = monitor(4);
+        let stride = monitor.page_stride();
+
+        monitor.begin_switch_gesture();
+        assert!(monitor.is_swiping());
+        // Two thirds of the way to the next workspace, then let go still moving
+        // at about a page a second.
+        monitor.update_switch_gesture(-stride * 0.66);
+        let changed = monitor.end_switch_gesture(-stride, LayoutKind::MasterStack);
+
+        assert!(changed);
+        assert_eq!(monitor.active_index(), 1);
+        assert!(!monitor.is_swiping());
+        settle(&mut monitor);
+        assert_eq!(monitor.switch().position(), 1.0);
+    }
+
+    #[test]
+    fn an_abandoned_swipe_leaves_the_active_workspace_alone() {
+        let mut monitor = monitor(4);
+        monitor.activate(2, LayoutKind::MasterStack);
+        settle(&mut monitor);
+
+        let stride = monitor.page_stride();
+        monitor.begin_switch_gesture();
+        monitor.update_switch_gesture(-stride * 0.2);
+        assert!(!monitor.end_switch_gesture(0.0, LayoutKind::MasterStack));
+        assert_eq!(monitor.active_index(), 2);
+    }
+
+    #[test]
+    fn a_cancelled_swipe_returns_to_where_it_started() {
+        let mut monitor = monitor(4);
+        let stride = monitor.page_stride();
+
+        monitor.begin_switch_gesture();
+        monitor.update_switch_gesture(-stride * 0.9);
+        monitor.cancel_switch_gesture();
+
+        settle(&mut monitor);
+        assert_eq!(monitor.active_index(), 0);
+        assert_eq!(monitor.switch().position(), 0.0);
+    }
+
+    #[test]
+    fn two_workspaces_are_on_screen_mid_swipe_and_one_at_rest() {
+        let mut monitor = monitor(4);
+        assert_eq!(monitor.visible_workspaces().count(), 1);
+
+        let stride = monitor.page_stride();
+        monitor.begin_switch_gesture();
+        monitor.update_switch_gesture(-stride * 0.5);
+
+        let visible: Vec<_> = monitor
+            .visible_workspaces()
+            .map(|(_, offset)| offset.x)
+            .collect();
+        assert_eq!(visible.len(), 2);
+        // One page leaving to the left, its neighbour arriving from the right.
+        assert!(visible.iter().any(|x| *x < 0.0));
+        assert!(visible.iter().any(|x| *x > 0.0));
+    }
+
+    #[test]
+    fn disabled_animations_switch_without_a_single_extra_frame() {
+        let mut monitor = monitor(4);
+        monitor.set_animation_profile(None);
+        monitor.activate(2, LayoutKind::MasterStack);
+
+        assert!(!monitor.is_switching(), "nothing left to animate");
+        // Nothing was in flight, so reaping was not deferred — which renumbers
+        // the list. The viewport must have followed the workspace through it.
+        assert_eq!(monitor.switch().position(), monitor.active_index() as f64);
+        assert_invariants(&monitor);
     }
 
     #[test]

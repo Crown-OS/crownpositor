@@ -9,9 +9,18 @@
 //! Pick a "feel" per widget by choosing a [`SpringProfile`]. The default
 //! [`SpringProfile::SNAPPY`] settles in roughly 200 ms with no overshoot; the
 //! softer [`SpringProfile::SMOOTH`] is what dropdown / picker-style widgets use
-//! when a value slides across a distance and needs to look unhurried.
+//! when a value slides across a distance and needs to look unhurried;
+//! [`SpringProfile::GESTURE`] catches a value the user was dragging.
+//!
+//! That last case is what [`Spring::hold`] and
+//! [`Spring::set_target_with_velocity`] exist for: while a gesture owns the
+//! value the spring is pinned to it, and on release the gesture's measured
+//! velocity becomes the spring's, so the motion out of the fingers has no seam
+//! in it.
 
 use std::time::Instant;
+
+use config::AnimationProfile;
 
 /// Fixed integrator sub-step.
 const SUBSTEP: f32 = 1.0 / 240.0;
@@ -43,6 +52,26 @@ impl SpringProfile {
         stiffness: 180.0,
         damping: 26.83,
     };
+    /// Catches a released gesture (~350 ms). Deliberately softer than
+    /// [`SNAPPY`](Self::SNAPPY): a spring far stiffer than the speeds fingers
+    /// actually move at swamps the velocity handed to it, and the handoff stops
+    /// being felt. Critically damped, so it never bounces on its own — only a
+    /// hard flick with little distance left carries past the target at all.
+    pub const GESTURE: Self = Self {
+        stiffness: 200.0,
+        damping: 28.284,
+    };
+
+    /// The user-facing animation setting, resolved to a feel. `None` means
+    /// motion is switched off and values should jump to their target.
+    pub fn from_config(profile: AnimationProfile) -> Option<Self> {
+        match profile {
+            AnimationProfile::None => None,
+            AnimationProfile::Snappy => Some(Self::SNAPPY),
+            AnimationProfile::Standard => Some(Self::GESTURE),
+            AnimationProfile::Smooth => Some(Self::SMOOTH),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +98,21 @@ impl Spring {
 
     pub fn set_target(&mut self, target: f32) {
         self.target = target;
+    }
+
+    pub fn set_profile(&mut self, profile: SpringProfile) {
+        self.profile = profile;
+    }
+
+    /// Pins the value to something the user is dragging directly.
+    ///
+    /// The target follows the position so the spring exerts no force while the
+    /// input owns the value, and the velocity is dropped because the gesture —
+    /// not the integrator — is the one measuring how fast it is moving.
+    pub fn hold(&mut self, position: f32) {
+        self.position = position;
+        self.target = position;
+        self.velocity = 0.0;
     }
 
     /// Retarget while injecting a starting velocity — useful when the caller
@@ -287,6 +331,87 @@ mod tests {
             "moved only {}",
             1.0 - kicked.position
         );
+    }
+
+    #[test]
+    fn a_released_flick_carries_its_own_speed_into_the_spring() {
+        // Magnitudes a touchpad actually produces: a fifth of a page left to
+        // travel, fingers leaving at about two pages a second. If the profile
+        // is stiff enough to swamp that, the handoff is invisible and there was
+        // no point measuring the velocity at all.
+        let mut flicked = Spring::with_profile(0.8, SpringProfile::GESTURE);
+        flicked.set_target_with_velocity(1.0, 2.0);
+
+        let mut from_rest = Spring::with_profile(0.8, SpringProfile::GESTURE);
+        from_rest.set_target(1.0);
+
+        flicked.step(1.0 / 60.0);
+        from_rest.step(1.0 / 60.0);
+        let with_speed = flicked.position - 0.8;
+        let unaided = from_rest.position - 0.8;
+        assert!(
+            with_speed > unaided * 1.5,
+            "the flick barely led: {with_speed} against {unaided}"
+        );
+
+        // And it still lands, rather than trading convergence for the kick.
+        for _ in 0..120 {
+            flicked.step(1.0 / 60.0);
+        }
+        assert!(flicked.at_rest() && (flicked.position - 1.0).abs() < EPSILON_POS);
+    }
+
+    #[test]
+    fn a_critically_damped_spring_never_bounces_on_its_own() {
+        let mut spring = Spring::with_profile(0.0, SpringProfile::GESTURE);
+        spring.set_target(1.0);
+        for _ in 0..120 {
+            spring.step(1.0 / 60.0);
+            assert!(spring.position <= 1.0, "overshot to {}", spring.position);
+        }
+        assert!(spring.at_rest());
+    }
+
+    #[test]
+    fn holding_a_value_freezes_the_spring_on_it() {
+        let mut spring = Spring::new(0.0);
+        spring.set_target_with_velocity(10.0, 50.0);
+        spring.hold(3.5);
+
+        assert!(spring.at_rest(), "a held spring exerts no force");
+        spring.step(1.0 / 60.0);
+        assert_eq!(spring.position, 3.5, "it must not drift under the fingers");
+    }
+
+    #[test]
+    fn every_profile_is_critically_damped() {
+        // `damping = 2√k` is the line between a spring that eases in and one
+        // that rings. A profile that drifts off it should be a deliberate
+        // choice, not a typo in a literal.
+        for profile in [
+            SpringProfile::SNAPPY,
+            SpringProfile::SMOOTH,
+            SpringProfile::GESTURE,
+        ] {
+            let critical = 2.0 * profile.stiffness.sqrt();
+            assert!(
+                (profile.damping - critical).abs() < 0.01,
+                "{profile:?} damps at {}, critical is {critical}",
+                profile.damping
+            );
+        }
+    }
+
+    #[test]
+    fn disabling_animations_resolves_to_no_profile() {
+        assert!(SpringProfile::from_config(AnimationProfile::None).is_none());
+        for profile in [
+            AnimationProfile::Snappy,
+            AnimationProfile::Standard,
+            AnimationProfile::Smooth,
+        ] {
+            assert!(SpringProfile::from_config(profile).is_some(), "{profile:?}");
+        }
     }
 
     #[test]

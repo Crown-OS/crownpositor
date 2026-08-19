@@ -9,8 +9,8 @@ use config::Config;
 
 use crate::{
     input::{
-        mouse::gestures::GestureState,
         shortcuts::{Bindings, GestureBindings, ModMask},
+        trackpad::gestures::GestureState,
     },
     rendering::cursor::Cursor,
 };

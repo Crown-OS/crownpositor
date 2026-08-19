@@ -10,6 +10,7 @@ use smithay::utils::Serial;
 use config::Config;
 
 use crate::{
+    animations::spring::SpringProfile,
     handlers::seat::KeyboardFocusTarget,
     input::shortcuts::{Action, Bindings},
     layout::{Gaps, LayoutOp},
@@ -150,6 +151,8 @@ impl State {
             inner: new.gaps_inner,
             outer: new.gaps_outer,
         });
+        self.shell
+            .set_workspace_animation(SpringProfile::from_config(new.animation));
 
         self.config.current = new;
         self.shell.apply_output_settings(&self.config.current);

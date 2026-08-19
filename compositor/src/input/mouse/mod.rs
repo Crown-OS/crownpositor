@@ -1,10 +1,7 @@
-pub mod gestures;
-
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent,
-        GestureEndEvent, GestureSwipeUpdateEvent, InputBackend, PointerAxisEvent,
-        PointerButtonEvent, PointerMotionEvent,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend,
+        PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
     utils::{Logical, Point, Serial, SERIAL_COUNTER},
@@ -141,28 +138,6 @@ impl State {
 
         pointer.axis(self, frame);
         pointer.frame(self);
-    }
-
-    pub(super) fn on_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
-        self.input.gesture.begin(event.fingers());
-    }
-
-    pub(super) fn on_swipe_update<I: InputBackend>(&mut self, event: I::GestureSwipeUpdateEvent) {
-        let delta = event.delta();
-        let timestamp = std::time::Duration::from_micros(Event::time(&event));
-        // TODO: feed the returned progress to the workspace-switch spring.
-        let _ = self.input.gesture.update((delta.x, delta.y), timestamp);
-    }
-
-    pub(super) fn on_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
-        let timestamp = std::time::Duration::from_micros(Event::time(&event));
-        let Some(gesture) = self.input.gesture.end(event.cancelled(), timestamp) else {
-            return;
-        };
-
-        if let Some(action) = self.input.gesture_bindings.lookup(gesture) {
-            self.handle_action(action, SERIAL_COUNTER.next_serial());
-        }
     }
 
     /// Raises and focuses the window under the pointer, dropping focus entirely otherwise.

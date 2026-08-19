@@ -285,12 +285,12 @@ impl Bindings {
 /// Touchpad gestures resolve to the same [`Action`]s the keyboard produces.
 #[derive(Debug, Default)]
 pub struct GestureBindings {
-    map: HashMap<crate::input::mouse::gestures::SwipeGesture, Action>,
+    map: HashMap<crate::input::trackpad::gestures::SwipeGesture, Action>,
 }
 
 impl GestureBindings {
     pub fn defaults() -> Self {
-        use crate::input::mouse::gestures::{Fingers, SwipeGesture};
+        use crate::input::trackpad::gestures::{Fingers, SwipeGesture};
 
         let mut map = HashMap::new();
         map.insert(
@@ -312,7 +312,7 @@ impl GestureBindings {
         Self { map }
     }
 
-    pub fn lookup(&self, gesture: crate::input::mouse::gestures::SwipeGesture) -> Option<Action> {
+    pub fn lookup(&self, gesture: crate::input::trackpad::gestures::SwipeGesture) -> Option<Action> {
         self.map.get(&gesture).cloned()
     }
 }

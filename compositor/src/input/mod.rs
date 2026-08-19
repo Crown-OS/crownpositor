@@ -1,7 +1,7 @@
 mod keyboard;
 pub mod mouse;
 pub mod shortcuts;
-mod trackpad;
+pub mod trackpad;
 
 use smithay::backend::input::{InputBackend, InputEvent};
 
