@@ -4,19 +4,21 @@ use anyhow::{Context, anyhow};
 use smithay::{
     backend::{
         egl::EGLDevice,
-        renderer::{
-            ImportDma, damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
-            gles::GlesRenderer,
-        },
+        renderer::{damage::OutputDamageTracker, gles::GlesRenderer, ImportDma},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
-    desktop::space::render_output,
+    desktop::layer_map_for_output,
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    utils::{Rectangle, Transform},
+    utils::{Scale, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
 };
 
-use crate::state::{BackendState, State};
+use crate::{
+    rendering::{self, rounded::GlesDecorator},
+    shaders::rounded_corner::RoundedCornerShader,
+    shell::monitor::OutputDescriptor,
+    state::{BackendState, State},
+};
 
 const REFRESH_RATE: i32 = 60_000;
 const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
@@ -38,26 +40,35 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         refresh: REFRESH_RATE,
     };
 
-    let output = Output::new(
-        "winit".to_string(),
-        PhysicalProperties {
-            size: (0, 0).into(),
-            subpixel: Subpixel::Unknown,
-            make: "Crownpositor".into(),
-            model: "Winit".into(),
+    // The backend describes the output; the shell builds it. That is what makes
+    // registration impossible to forget.
+    let output = state.shell.add_output(
+        &state.common.display_handle,
+        &state.config.current,
+        OutputDescriptor {
+            name: "winit".to_string(),
+            physical: PhysicalProperties {
+                size: (0, 0).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Crownpositor".into(),
+                model: "Winit".into(),
+            },
+            modes: vec![mode],
+            preferred: Some(mode),
+            current: mode,
+            // Winit renders bottom-up, so the output is flipped to compensate.
+            native_transform: Transform::Flipped180,
+            refresh_interval: Some(Duration::from_nanos(
+                1_000_000_000_000 / REFRESH_RATE as u64,
+            )),
+            serial: None,
         },
     );
-    output.create_global::<State>(&state.common.display_handle);
-    // Winit renders bottom-up, so the output is flipped to compensate.
-    output.change_current_state(
-        Some(mode),
-        Some(Transform::Flipped180),
-        None,
-        Some((0, 0).into()),
-    );
-    output.set_preferred(mode);
 
-    state.shell.space.map_output(&output, (0, 0));
+    if let Err(err) = RoundedCornerShader::init(backend.renderer()) {
+        // Cosmetic, so a compile failure degrades to square corners.
+        tracing::warn!(%err, "failed to compile the rounded-corner shader");
+    }
 
     let (dmabuf_global, dmabuf_feedback) = init_dmabuf(state, &mut backend);
 
@@ -74,17 +85,23 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         .common
         .event_loop_handle
         .insert_source(winit_events, move |event, _, state| match event {
+            // Winit re-emits Resized on focus changes with an unchanged size,
+            // so `set_mode` short-circuits rather than reconfiguring everything.
             WinitEvent::Resized { size, .. } => {
-                if let Some(winit) = state.backend.winit() {
-                    winit.output.change_current_state(
-                        Some(Mode {
-                            size,
-                            refresh: REFRESH_RATE,
-                        }),
-                        None,
-                        None,
-                        None,
-                    );
+                let Some(output) = state.backend.winit().map(|winit| winit.output.clone()) else {
+                    return;
+                };
+                let mode = Mode {
+                    size,
+                    refresh: REFRESH_RATE,
+                };
+                if state
+                    .shell
+                    .monitor_mut(&output)
+                    .is_some_and(|monitor| monitor.set_mode(mode))
+                {
+                    state.shell.arrange_outputs();
+                    state.shell.refresh_usable(&output);
                 }
             }
             WinitEvent::Input(event) => state.process_input_event(event),
@@ -145,51 +162,88 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         backend,
         common,
         shell,
+        clock,
+        config,
         ..
     } = state;
+    // Physical pixels, because that is the space the shader works in.
+    let radius = config.current.border_radius as f32;
 
     let Some(winit) = backend.winit() else {
         return Ok(());
     };
 
-    let damage = Rectangle::from_size(winit.backend.window_size());
+    let scale = Scale::from(winit.output.current_scale().fractional_scale());
+    // A hardcoded age of 0 makes every frame a full repaint.
+    let age = winit.backend.buffer_age().unwrap_or(0);
 
-    {
+    let dt = clock.tick();
+    shell.advance_animations(dt);
+    let animating = shell.is_animating();
+    if !animating {
+        // Land the last frame on exact integers rather than resting a fraction
+        // of a pixel off, where the spring's epsilon stopped it.
+        shell.settle_animations();
+    }
+
+    let submitted = {
         let (renderer, mut framebuffer) = winit
             .backend
             .bind()
             .map_err(|err| anyhow!("Failed to bind the winit framebuffer: {err}"))?;
 
-        render_output::<_, WaylandSurfaceRenderElement<GlesRenderer>, _, _>(
-            &winit.output,
+        let Some(monitor) = shell.monitor(&winit.output) else {
+            return Ok(());
+        };
+        let elements = rendering::output_elements(
+            shell,
+            monitor,
             renderer,
-            &mut framebuffer,
-            1.0,
-            0,
-            [&shell.space],
-            &[],
-            &mut winit.damage_tracker,
-            CLEAR_COLOR,
-        )
-        .with_context(|| "Failed to render the output")?;
-    }
+            &mut GlesDecorator,
+            scale,
+            radius,
+        );
+
+        let result = winit
+            .damage_tracker
+            .render_output(renderer, &mut framebuffer, age, &elements, CLEAR_COLOR)
+            .with_context(|| "Failed to render the output")?;
+
+        result.damage.cloned()
+    };
 
     winit
         .backend
-        .submit(Some(&[damage]))
+        .submit(submitted.as_deref())
         .map_err(|err| anyhow!("Failed to submit the winit frame: {err}"))?;
 
-    for window in shell.space.elements() {
-        window.send_frame(
-            &winit.output,
-            common.start_time.elapsed(),
-            Some(Duration::ZERO),
-            |_, _| Some(winit.output.clone()),
-        );
+    let now = common.start_time.elapsed();
+    let throttle = Some(Duration::ZERO);
+
+    if let Some(monitor) = shell.monitor(&winit.output) {
+        for tile in shell.visible_windows(monitor) {
+            tile.window().send_frame(&winit.output, now, throttle, |_, _| {
+                Some(winit.output.clone())
+            });
+        }
     }
 
-    // Winit only redraws on demand, so keep the frame loop going.
-    winit.backend.window().request_redraw();
+    // Without these a bar with a clock renders once and freezes.
+    {
+        let map = layer_map_for_output(&winit.output);
+        for layer in map.layers() {
+            layer.send_frame(&winit.output, now, throttle, |_, _| {
+                Some(winit.output.clone())
+            });
+        }
+    }
+
+    // Winit only redraws on demand. Scheduling only while something is moving is
+    // what takes an idle desktop from a permanent 60 Hz loop to ~0% CPU; a client
+    // that damages its surface wakes us through its own commit.
+    if animating {
+        winit.backend.window().request_redraw();
+    }
 
     Ok(())
 }

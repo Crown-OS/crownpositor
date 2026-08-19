@@ -24,14 +24,14 @@ impl RoundedCornerShader {
         Ok(())
     }
 
-    pub fn get(renderer: &GlesRenderer) -> GlesTexProgram {
+    /// `None` when `init` was never called, so a missing shader degrades to
+    /// square corners rather than taking the compositor down mid-frame.
+    pub fn get(renderer: &GlesRenderer) -> Option<GlesTexProgram> {
         renderer
             .egl_context()
             .user_data()
             .get::<RoundedCornerShader>()
-            .expect("Custom shaders not initialized")
-            .0
-            .clone()
+            .map(|shader| shader.0.clone())
     }
 
     pub fn uniform_values(size: (f32, f32), radius: f32) -> [Uniform<'static>; 2] {

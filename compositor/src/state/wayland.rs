@@ -7,8 +7,8 @@ use smithay::{
     reexports::{
         wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDefaultMode,
         wayland_server::{
-            Client, DisplayHandle,
             protocol::{wl_shm, wl_surface::WlSurface},
+            Client, DisplayHandle,
         },
     },
     utils::{Clock, Monotonic},
@@ -61,6 +61,8 @@ pub struct WaylandState {
     pub idle_notifier_state: IdleNotifierState<State>,
     pub idle_inhibit_manager_state: IdleInhibitManagerState,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
+    /// Surfaces holding an active `zwp_keyboard_shortcuts_inhibitor`.
+    pub shortcuts_inhibiting_surfaces: HashSet<WlSurface>,
     pub shm_state: ShmState,
     pub cursor_shape_manager_state: CursorShapeManagerState,
     // pub wl_drm_state: Option<WlDrmState<Option<DrmNode>>>,
@@ -123,6 +125,7 @@ impl WaylandState {
             idle_notifier_state: IdleNotifierState::new(display, loop_handle),
             idle_inhibit_manager_state: IdleInhibitManagerState::new::<State>(display),
             idle_inhibiting_surfaces: HashSet::new(),
+            shortcuts_inhibiting_surfaces: HashSet::new(),
             shm_state: ShmState::new::<State>(display, shm_formats),
             cursor_shape_manager_state: CursorShapeManagerState::new::<State>(display),
             viewporter_state: ViewporterState::new::<State>(display),

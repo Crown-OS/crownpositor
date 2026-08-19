@@ -1,5 +1,5 @@
 use smithay::{
-    backend::{allocator::dmabuf::Dmabuf, renderer::ImportDma},
+    backend::allocator::dmabuf::Dmabuf,
     delegate_dmabuf,
     wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
 };
@@ -17,15 +17,7 @@ impl DmabufHandler for State {
         dmabuf: Dmabuf,
         notifier: ImportNotifier,
     ) {
-        let imported = self.backend.winit().is_some_and(|winit| {
-            winit
-                .backend
-                .renderer()
-                .import_dmabuf(&dmabuf, None)
-                .is_ok()
-        });
-
-        if imported {
+        if self.backend.can_import_dmabuf(&dmabuf) {
             let _ = notifier.successful::<Self>();
         } else {
             notifier.failed();

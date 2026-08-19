@@ -1,1 +1,1 @@
-mod rounded_corner;
+pub mod rounded_corner;

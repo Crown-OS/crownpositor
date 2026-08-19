@@ -1,16 +1,22 @@
 [workspace]
-members = ["compositor"]
+members = ["compositor", "config"]
 resolver = "3"
 
 [workspace.dependencies]
-crownos-config = { git = "https://github.com/crown-os/crownos-config" }
+crownos-config = { git = "https://github.com/crown-os/crownos-config", default-features = false }
 
 anyhow = "1.0.104"
 thiserror = "2.0.20"
 calloop = "0.14.4"
 parking_lot = "0.12.5"
 regex = "1.13.1"
+serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1.44"
 tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 wayland-server = "0.31.14"
+
+# The compositor section is developed alongside the compositor, so build against
+# the checkout next door rather than the last push.
+[patch."https://github.com/crown-os/crownos-config"]
+crownos-config = { path = "../crownos-config" }

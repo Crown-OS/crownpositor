@@ -46,7 +46,9 @@ impl CompositorHandler for State {
             }
         }
 
-        xdg_shell::handle_commit(&mut self.shell, surface);
+        xdg_shell::handle_commit(self, surface);
+        self.handle_layer_commit(surface);
+        self.queue_redraw();
     }
 
     fn destroyed(&mut self, _surface: &WlSurface) {}

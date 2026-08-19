@@ -1,0 +1,10 @@
+[package]
+name = "config"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crownos-config = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

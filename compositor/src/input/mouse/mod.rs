@@ -1,36 +1,50 @@
-mod gestures;
+pub mod gestures;
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend,
-        PointerAxisEvent, PointerButtonEvent,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent,
+        GestureEndEvent, GestureSwipeUpdateEvent, InputBackend, PointerAxisEvent,
+        PointerButtonEvent, PointerMotionEvent,
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
-    utils::{Serial, SERIAL_COUNTER},
+    utils::{Logical, Point, Serial, SERIAL_COUNTER},
 };
 
-use crate::{handlers::seat::KeyboardFocusTarget, state::State};
+use crate::{handlers::seat::KeyboardFocusTarget, shell::monitor::Monitor, state::State};
 
 impl State {
+    /// Absolute motion, from winit and touchscreens. Transforms against the
+    /// output the pointer is on, not whichever one comes first.
     pub(super) fn on_pointer_motion_absolute<I: InputBackend>(
         &mut self,
         event: I::PointerMotionAbsoluteEvent,
     ) {
-        let Some(pointer) = self.wayland.seat.get_pointer() else {
-            return;
-        };
-        let Some(output_geometry) = self
+        let Some(geometry) = self
             .shell
-            .space
-            .outputs()
-            .next()
-            .and_then(|output| self.shell.space.output_geometry(output))
+            .monitor_at(self.input.pointer_location)
+            .or_else(|| self.shell.focused_monitor())
+            .map(Monitor::geometry)
         else {
             return;
         };
 
-        let location =
-            event.position_transformed(output_geometry.size) + output_geometry.loc.to_f64();
+        let location = event.position_transformed(geometry.size) + geometry.loc.to_f64();
+
+        self.motion(&pointer_serial_time::<I>(&event), location);
+    }
+
+    /// Relative motion, from libinput.
+    pub(super) fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
+        let location = self.clamp_to_outputs(self.input.pointer_location + event.delta());
+        self.motion(&pointer_serial_time::<I>(&event), location);
+    }
+
+    fn motion(&mut self, (serial, time): &(Serial, u32), location: Point<f64, Logical>) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+
+        self.input.pointer_location = location;
         let under = self.shell.surface_under(location);
 
         pointer.motion(
@@ -38,11 +52,36 @@ impl State {
             under,
             &MotionEvent {
                 location,
-                serial: SERIAL_COUNTER.next_serial(),
-                time: event.time_msec(),
+                serial: *serial,
+                time: *time,
             },
         );
         pointer.frame(self);
+    }
+
+    /// Keeps the pointer inside the union of the mapped outputs.
+    fn clamp_to_outputs(&self, location: Point<f64, Logical>) -> Point<f64, Logical> {
+        let Some(bounds) = self
+            .shell
+            .monitors()
+            .iter()
+            .map(Monitor::geometry)
+            .reduce(|acc, geometry| acc.merge(geometry))
+        else {
+            return location;
+        };
+
+        // The far edge is exclusive; a pointer exactly on it is outside every
+        // output, so nothing would be under it.
+        let min_x = bounds.loc.x as f64;
+        let min_y = bounds.loc.y as f64;
+        let max_x = (min_x + bounds.size.w as f64 - 1.0).max(min_x);
+        let max_y = (min_y + bounds.size.h as f64 - 1.0).max(min_y);
+
+        Point::from((
+            location.x.clamp(min_x, max_x),
+            location.y.clamp(min_y, max_y),
+        ))
     }
 
     pub(super) fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
@@ -96,6 +135,28 @@ impl State {
         pointer.frame(self);
     }
 
+    pub(super) fn on_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
+        self.input.gesture.begin(event.fingers());
+    }
+
+    pub(super) fn on_swipe_update<I: InputBackend>(&mut self, event: I::GestureSwipeUpdateEvent) {
+        let delta = event.delta();
+        let timestamp = std::time::Duration::from_micros(Event::time(&event));
+        // TODO: feed the returned progress to the workspace-switch spring.
+        let _ = self.input.gesture.update((delta.x, delta.y), timestamp);
+    }
+
+    pub(super) fn on_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
+        let timestamp = std::time::Duration::from_micros(Event::time(&event));
+        let Some(gesture) = self.input.gesture.end(event.cancelled(), timestamp) else {
+            return;
+        };
+
+        if let Some(action) = self.input.gesture_bindings.lookup(gesture) {
+            self.handle_action(action, SERIAL_COUNTER.next_serial());
+        }
+    }
+
     /// Raises and focuses the window under the pointer, dropping focus entirely otherwise.
     fn focus_under_pointer(&mut self, serial: Serial) {
         let Some(keyboard) = self.wayland.seat.get_keyboard() else {
@@ -105,33 +166,26 @@ impl State {
             return;
         };
 
-        let window = self
+        // Focus moves in the model first; `Shell::refresh` turns that into the
+        // activation state and the two configures it implies.
+        let target = self
             .shell
-            .space
-            .element_under(pointer.current_location())
-            .map(|(window, _)| window.clone());
+            .window_under(pointer.current_location())
+            .map(|(id, _)| id)
+            .and_then(|id| {
+                self.shell.focus_window(id);
+                self.shell
+                    .tile(id)
+                    .map(|tile| KeyboardFocusTarget::from(tile.window().clone()))
+            });
 
-        match window {
-            Some(window) => {
-                self.shell.space.raise_element(&window, true);
-                let surface = window
-                    .toplevel()
-                    .map(|toplevel| toplevel.wl_surface().clone());
-
-                keyboard.set_focus(self, Some(KeyboardFocusTarget::from(surface)), serial);
-            }
-            None => {
-                for window in self.shell.space.elements() {
-                    window.set_activated(false);
-                }
-                keyboard.set_focus(self, Option::<KeyboardFocusTarget>::None, serial);
-            }
+        if keyboard.current_focus() == target {
+            return;
         }
-
-        for window in self.shell.space.elements() {
-            if let Some(toplevel) = window.toplevel() {
-                toplevel.send_pending_configure();
-            }
-        }
+        keyboard.set_focus(self, target, serial);
     }
+}
+
+fn pointer_serial_time<I: InputBackend>(event: &impl Event<I>) -> (Serial, u32) {
+    (SERIAL_COUNTER.next_serial(), event.time_msec())
 }

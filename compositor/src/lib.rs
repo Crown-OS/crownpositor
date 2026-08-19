@@ -4,10 +4,10 @@ mod handlers;
 mod input;
 mod layout;
 mod logging;
+mod rendering;
 mod shaders;
 mod shell;
 mod state;
-mod theme;
 mod utils;
 
 use anyhow::Context;
@@ -22,7 +22,10 @@ pub fn run() -> anyhow::Result<()> {
         EventLoop::<State>::try_new().with_context(|| "Failed to initialize the event loop")?;
     let mut state = State::try_new(&mut event_loop)?;
 
-    backend::winit::init(&mut state)?;
+    match backend::Preference::detect() {
+        backend::Preference::Winit => backend::winit::init(&mut state)?,
+    }
+    tracing::info!(backend = state.backend.name(), "backend started");
 
     // Point child processes at our socket rather than the host compositor.
     //
@@ -32,7 +35,7 @@ pub fn run() -> anyhow::Result<()> {
 
     event_loop
         .run(None, &mut state, |state| {
-            state.shell.space.refresh();
+            state.shell.refresh();
             state.shell.popups.cleanup();
             let _ = state.common.display_handle.flush_clients();
         })

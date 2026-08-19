@@ -25,12 +25,14 @@ features = [
 ]
 
 [dependencies]
+config = { path = "../config" }
 crownos-config = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 calloop = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
+serde = { workspace = true }
 tracing = { workspace = true }
 tracing-journald = { workspace = true }
 tracing-subscriber = { workspace = true }
