@@ -1,6 +1,6 @@
 use smithay::{
     backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent},
-    input::keyboard::FilterResult,
+    input::keyboard::{keysyms, FilterResult, KeysymHandle},
     utils::SERIAL_COUNTER,
 };
 
@@ -8,6 +8,20 @@ use crate::{
     input::shortcuts::{Action, ModMask},
     state::State,
 };
+
+/// The VT a key press asks for, if any.
+///
+/// The stock keymap puts `XF86Switch_VT_1..12` on F1-F12 at the Ctrl+Alt level
+/// (`srvr_ctrl(fkey2vt)`), so this reads the *modified* symbol — the raw one is
+/// still plain `F2`. A keymap without that level simply never yields a match.
+fn vt_switch_target(handle: &KeysymHandle<'_>) -> Option<i32> {
+    handle.modified_syms().iter().find_map(|sym| {
+        let raw = sym.raw();
+        (keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12)
+            .contains(&raw)
+            .then(|| (raw - keysyms::KEY_XF86Switch_VT_1 + 1) as i32)
+    })
+}
 
 impl State {
     pub(super) fn on_keyboard_key<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) {
@@ -31,10 +45,6 @@ impl State {
             serial,
             time,
             |state, modifiers, handle| {
-                if bypass {
-                    return FilterResult::Forward;
-                }
-
                 match key_state {
                     KeyState::Pressed => {
                         /*
@@ -42,6 +52,19 @@ impl State {
                          * not also fire the bare-Super binding on release.
                          */
                         state.input.mod_chord_polluted = true;
+
+                        // Ctrl+Alt+F<n>, before every inhibitor: we hold the
+                        // evdev devices, so the kernel never sees this chord.
+                        // It is the escape hatch out of a wedged session and no
+                        // client grab may take it away.
+                        if let Some(vt) = vt_switch_target(&handle) {
+                            state.input.intercepted.insert(handle.raw_code());
+                            return FilterResult::Intercept(Action::SwitchVt(vt));
+                        }
+
+                        if bypass {
+                            return FilterResult::Forward;
+                        }
 
                         match state.input.bindings.lookup(modifiers, &handle) {
                             Some(action) => {

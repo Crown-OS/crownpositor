@@ -84,6 +84,10 @@ pub enum Action {
     /// argv, never a shell string.
     Spawn(Vec<String>),
 
+    /// Hand the seat to another virtual terminal. Only the KMS backend can do
+    /// this; nested backends log and ignore it.
+    SwitchVt(i32),
+
     CloseWindow,
     Focus(Direction),
     MoveWindow(Direction),
@@ -188,6 +192,16 @@ impl FromStr for Action {
                 }
             }
 
+            // Ctrl+Alt+F<n> is wired up unconditionally in the keyboard filter;
+            // this spelling exists so a config can put a VT on another chord.
+            "switch-vt" => {
+                let raw = arg("vt", parts)?;
+                let vt: i32 = raw
+                    .parse()
+                    .map_err(|_| ParseActionError::bad_argument("vt", &raw))?;
+                Ok(Self::SwitchVt(vt))
+            }
+
             "close-window" | "close" => Ok(Self::CloseWindow),
             "focus" => Ok(Self::Focus(arg("direction", parts)?.parse()?)),
             "move" | "move-window" => Ok(Self::MoveWindow(arg("direction", parts)?.parse()?)),
@@ -258,6 +272,13 @@ mod tests {
     #[test]
     fn spawn_without_a_program_is_an_error() {
         assert!("spawn".parse::<Action>().is_err());
+    }
+
+    #[test]
+    fn switch_vt_takes_a_number() {
+        assert_eq!(parse("switch-vt 3"), Action::SwitchVt(3));
+        assert!("switch-vt".parse::<Action>().is_err());
+        assert!("switch-vt tty3".parse::<Action>().is_err());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use smithay::{
-    backend::{allocator::dmabuf::Dmabuf, renderer::ImportDma},
+    backend::{allocator::dmabuf::Dmabuf, renderer::ImportDma, session::Session as _},
     output::Output,
 };
 
@@ -60,6 +60,24 @@ impl BackendState {
                 .import_dmabuf(dmabuf, None)
                 .is_ok(),
             Self::Kms(kms) => kms.can_import_dmabuf(dmabuf),
+        }
+    }
+
+    /// Hands the seat to another virtual terminal.
+    ///
+    /// Only the KMS backend owns a session to switch; nested backends have a
+    /// host compositor sitting between them and the VT, so this is a no-op
+    /// there rather than an error.
+    pub fn switch_vt(&mut self, vt: i32) {
+        match self {
+            Self::Unset | Self::Winit(_) => {
+                tracing::debug!(vt, backend = self.name(), "no session to switch VTs on");
+            }
+            Self::Kms(kms) => {
+                if let Err(err) = kms.session.change_vt(vt) {
+                    tracing::error!(%err, vt, "failed to switch VT");
+                }
+            }
         }
     }
 

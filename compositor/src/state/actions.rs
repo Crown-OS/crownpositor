@@ -35,6 +35,13 @@ impl State {
 
             Action::Spawn(argv) => self.spawn(&argv),
 
+            Action::SwitchVt(vt) => {
+                // Nothing local changes: the session notifier will pause us and
+                // force full redraws when the seat comes back.
+                self.backend.switch_vt(vt);
+                return;
+            }
+
             Action::CloseWindow => {
                 if let Some(window) = self.shell.activated.clone()
                     && let Some(toplevel) = window.toplevel()
