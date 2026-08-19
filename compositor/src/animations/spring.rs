@@ -105,10 +105,19 @@ impl Spring {
     }
 }
 
-/// Wall-clock dt source for animation loops. `tick` returns the delta since
-/// the previous call (or a 60-Hz frame on first call), clamped to MAX_DT.
+/// Dt source for animation loops.
+///
+/// Two ways to step it, one per backend style:
+/// * [`Clock::tick`] — wall-clock delta since the previous call. For backends
+///   without presentation feedback (winit).
+/// * [`Clock::tick_to`] — delta between *target presentation times*. The KMS
+///   backend passes the instant the frame being rendered will actually reach
+///   the screen, so a spring's position is sampled at display time rather
+///   than render time. Rendering jitter then stops being motion jitter.
 pub struct Clock {
     last: Option<Instant>,
+    /// The most recent target passed to `tick_to`, on the monotonic clock.
+    last_target: Option<std::time::Duration>,
 }
 
 impl Default for Clock {
@@ -119,11 +128,15 @@ impl Default for Clock {
 
 impl Clock {
     pub const fn new() -> Self {
-        Self { last: None }
+        Self {
+            last: None,
+            last_target: None,
+        }
     }
 
     pub fn reset(&mut self) {
         self.last = None;
+        self.last_target = None;
     }
 
     pub fn tick(&mut self) -> f32 {
@@ -135,6 +148,59 @@ impl Clock {
             .min(MAX_DT);
         self.last = Some(now);
         dt
+    }
+
+    /// Steps to a target presentation time (monotonic clock).
+    ///
+    /// A target older than the last one (a second output rendering for an
+    /// earlier slot) contributes zero: springs already sit where that frame
+    /// needs them, and stepping backwards would rewind visible motion.
+    pub fn tick_to(&mut self, target: std::time::Duration) -> f32 {
+        let dt = match self.last_target {
+            Some(last) => target.saturating_sub(last).as_secs_f32().min(MAX_DT),
+            None => 1.0 / 60.0,
+        };
+        if self.last_target.is_none_or(|last| target > last) {
+            self.last_target = Some(target);
+        }
+        dt
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn tick_to_measures_between_targets() {
+        let mut clock = Clock::new();
+        let base = Duration::from_secs(100);
+        clock.tick_to(base);
+        let dt = clock.tick_to(base + Duration::from_micros(16_667));
+        assert!((dt - 0.016_667).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tick_to_never_steps_backwards() {
+        let mut clock = Clock::new();
+        let base = Duration::from_secs(100);
+        clock.tick_to(base);
+        // A second output rendering for an earlier slot.
+        assert_eq!(clock.tick_to(base - Duration::from_millis(5)), 0.0);
+        // And the anchor stays at the newest target.
+        let dt = clock.tick_to(base + Duration::from_millis(10));
+        assert!((dt - 0.010).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tick_to_clamps_long_gaps() {
+        let mut clock = Clock::new();
+        clock.tick_to(Duration::from_secs(100));
+        // A VT switch later: one bounded step, not a teleport.
+        let dt = clock.tick_to(Duration::from_secs(200));
+        assert_eq!(dt, MAX_DT);
     }
 }
 

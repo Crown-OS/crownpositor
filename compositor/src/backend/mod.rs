@@ -30,29 +30,39 @@
 //! [`PassThrough`]: crate::rendering::decorate::PassThrough
 //! [`BackendState`]: crate::state::BackendState
 
+pub mod frame_clock;
+pub mod kms;
+pub mod render;
 pub mod winit;
 
 /// Which backend to start, chosen from the environment.
-///
-/// TODO: `Udev` once that backend exists; the selection below is what decides
-/// between them, so it is the only place that needs to change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preference {
     /// Nested inside an existing Wayland or X11 session.
     Winit,
+    /// A bare TTY: DRM/KMS outputs, libinput input, libseat session.
+    Kms,
 }
 
 impl Preference {
-    /// A running session means we are nested; a bare TTY would mean DRM.
+    /// A running session means we are nested; a bare TTY means DRM. The
+    /// `CROWN_BACKEND` variable overrides the heuristic (`winit` / `kms`),
+    /// because "run the KMS backend nested under a session that leaks
+    /// `DISPLAY`" is a real debugging situation.
     pub fn detect() -> Self {
+        if let Ok(value) = std::env::var("CROWN_BACKEND") {
+            match value.to_ascii_lowercase().as_str() {
+                "winit" => return Self::Winit,
+                "kms" | "drm" | "udev" => return Self::Kms,
+                other => {
+                    tracing::warn!(requested = other, "unknown CROWN_BACKEND, autodetecting");
+                }
+            }
+        }
+
         let nested = std::env::var_os("WAYLAND_DISPLAY").is_some()
             || std::env::var_os("DISPLAY").is_some();
 
-        if !nested {
-            // Honest about it rather than failing to start: winit will report a
-            // clearer error than a half-initialised DRM path would.
-            tracing::warn!("no nested session detected, but only the winit backend exists");
-        }
-        Self::Winit
+        if nested { Self::Winit } else { Self::Kms }
     }
 }

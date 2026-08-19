@@ -4,17 +4,25 @@
 //! element, so this wraps an element and brackets its draw call: bind the
 //! program, draw, unbind. Without the unbind every element after it in the list
 //! would be drawn with rounded corners too.
+//!
+//! Two renderers can drive the shader: the plain [`GlesRenderer`] (winit) and
+//! the multi-GPU [`KmsRenderer`] (DRM). The multi renderer exposes its
+//! underlying GLES renderer/frame through `AsMut`, which is all the override
+//! needs — so both impls below are the same three lines around the same
+//! program.
 
 use smithay::{
     backend::renderer::{
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
         gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram},
+        multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Transform},
 };
 
 use crate::{
+    backend::render::{GbmGlesApi, KmsRenderer},
     rendering::decorate::{Cropped, TileDecorator},
     shaders::rounded_corner::RoundedCornerShader,
 };
@@ -23,8 +31,10 @@ use crate::{
 pub struct Rounded<E> {
     inner: E,
     /// Resolved up front: `GlesFrame` does not expose its renderer, so the
-    /// program cannot be looked up from inside `draw`.
-    program: GlesTexProgram,
+    /// program cannot be looked up from inside `draw`. `None` means the shader
+    /// never compiled — the element then draws square, because square corners
+    /// beat a dropped window.
+    program: Option<GlesTexProgram>,
     /// The window's size in physical pixels; the shader needs it to know where
     /// the corners are.
     size: (f32, f32),
@@ -32,12 +42,26 @@ pub struct Rounded<E> {
 }
 
 impl<E> Rounded<E> {
-    pub fn new(inner: E, program: GlesTexProgram, size: (f32, f32), radius: f32) -> Self {
+    pub fn new(inner: E, program: Option<GlesTexProgram>, size: (f32, f32), radius: f32) -> Self {
         Self {
             inner,
             program,
             size,
             radius,
+        }
+    }
+
+    /// Binds the override on `frame` and returns whether it needs unbinding.
+    fn bind(&self, frame: &mut GlesFrame<'_, '_>) -> bool {
+        match &self.program {
+            Some(program) => {
+                frame.override_default_tex_program(
+                    program.clone(),
+                    RoundedCornerShader::uniform_values(self.size, self.radius).to_vec(),
+                );
+                true
+            }
+            None => false,
         }
     }
 }
@@ -95,18 +119,50 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Rounded<E> 
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        frame.override_default_tex_program(
-            self.program.clone(),
-            RoundedCornerShader::uniform_values(self.size, self.radius).to_vec(),
-        );
+        let bound = self.bind(frame);
         let result = self.inner.draw(frame, src, dst, damage, opaque_regions);
-        frame.clear_tex_program_override();
+        if bound {
+            frame.clear_tex_program_override();
+        }
         result
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         // Withheld on purpose: handing this to a DRM plane would scan the buffer
         // out directly and skip the shader, so the corners would come back.
+        let _ = renderer;
+        None
+    }
+}
+
+impl<'render, E> RenderElement<KmsRenderer<'render>> for Rounded<E>
+where
+    E: RenderElement<KmsRenderer<'render>>,
+{
+    fn draw(
+        &self,
+        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
+        // The override lives on the GLES frame under the multi frame; the
+        // inner element still draws through the multi frame so cross-GPU
+        // copies keep working.
+        let bound = self.bind(frame.as_mut());
+        let result = self.inner.draw(frame, src, dst, damage, opaque_regions);
+        if bound {
+            frame.as_mut().clear_tex_program_override();
+        }
+        result
+    }
+
+    fn underlying_storage(
+        &self,
+        renderer: &mut KmsRenderer<'render>,
+    ) -> Option<UnderlyingStorage<'_>> {
+        // Same as the GLES impl: no direct scanout for shaded windows.
         let _ = renderer;
         None
     }
@@ -129,9 +185,28 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
         size: (f32, f32),
         radius: f32,
     ) -> Option<Self::Element> {
-        // `None` means the shader never compiled. Squaring the corners is the
-        // right degradation; dropping the window is not.
-        let program = RoundedCornerShader::get(renderer)?;
+        // A missing program (shader never compiled) squares the corners; it
+        // must not drop the window.
+        let program = RoundedCornerShader::get(renderer);
+        Some(Rounded::new(element, program, size, radius))
+    }
+}
+
+/// [`GlesDecorator`], but for the multi-GPU renderer the KMS backend uses.
+#[derive(Debug, Default, Clone)]
+pub struct MultiDecorator;
+
+impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
+    type Element = Rounded<Cropped<KmsRenderer<'render>>>;
+
+    fn decorate(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        element: Cropped<KmsRenderer<'render>>,
+        size: (f32, f32),
+        radius: f32,
+    ) -> Option<Self::Element> {
+        let program = RoundedCornerShader::get(renderer.as_mut());
         Some(Rounded::new(element, program, size, radius))
     }
 }

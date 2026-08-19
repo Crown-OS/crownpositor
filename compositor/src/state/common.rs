@@ -8,7 +8,10 @@ use smithay::{
     wayland::socket::ListeningSocketSource,
 };
 
-use crate::state::{State, client::ClientState};
+use crate::{
+    state::{State, client::ClientState},
+    utils::runtime::TaskSender,
+};
 
 pub struct CommonState {
     pub event_loop_handle: LoopHandle<'static, State>,
@@ -16,6 +19,9 @@ pub struct CommonState {
     pub display_handle: DisplayHandle,
     pub socket_name: OsString,
     pub start_time: Instant,
+    /// Spawns async work on the Tokio pool; completions come back through the
+    /// event loop, so the rendering thread never blocks on them.
+    pub tasks: TaskSender,
 
     pub ready: Once,
 }
@@ -27,6 +33,7 @@ impl CommonState {
         let display_handle = display.handle();
 
         let socket_name = Self::init_wayland_display(display, event_loop)?;
+        let tasks = TaskSender::init(&event_loop.handle())?;
 
         Ok(Self {
             event_loop_signal: event_loop.get_signal(),
@@ -34,6 +41,7 @@ impl CommonState {
             display_handle,
             socket_name,
             start_time: Instant::now(),
+            tasks,
             ready: Once::new(),
         })
     }

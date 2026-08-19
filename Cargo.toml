@@ -11,6 +11,11 @@ calloop = "0.14.4"
 parking_lot = "0.12.5"
 regex = "1.13.1"
 serde = { version = "1.0", features = ["derive"] }
+# default-features off: `display-info` links libdisplay-info < 0.3, which is
+# newer on this system than the sys crate allows. We only need `drm_scanner`;
+# EDID make/model naming can come back when the sys crate catches up.
+smithay-drm-extras = { version = "0.1.0", default-features = false }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync"] }
 tracing = "0.1.44"
 tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

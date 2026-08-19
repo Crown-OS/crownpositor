@@ -3,7 +3,7 @@ use smithay::{
     output::Output,
 };
 
-use crate::backend::winit::WinitState;
+use crate::backend::{kms::KmsState, winit::WinitState};
 
 /// Which backend is driving the session.
 ///
@@ -15,6 +15,7 @@ use crate::backend::winit::WinitState;
 pub enum BackendState {
     Unset,
     Winit(Box<WinitState>),
+    Kms(Box<KmsState>),
 }
 
 impl BackendState {
@@ -26,13 +27,14 @@ impl BackendState {
         match self {
             Self::Unset => "none",
             Self::Winit(_) => "winit",
+            Self::Kms(_) => "kms",
         }
     }
 
     /// Schedules a frame for an output.
     ///
-    /// `None` means "whichever output this backend drives", which is all a
-    /// single-output backend can answer.
+    /// `None` means "every output this backend drives", which for a
+    /// single-output backend collapses to its one output.
     pub fn queue_redraw(&mut self, output: Option<&Output>) {
         match self {
             Self::Unset => {}
@@ -41,6 +43,7 @@ impl BackendState {
                     winit.backend.window().request_redraw();
                 }
             }
+            Self::Kms(kms) => kms.queue_redraw(output),
         }
     }
 
@@ -56,6 +59,7 @@ impl BackendState {
                 .renderer()
                 .import_dmabuf(dmabuf, None)
                 .is_ok(),
+            Self::Kms(kms) => kms.can_import_dmabuf(dmabuf),
         }
     }
 
@@ -64,7 +68,15 @@ impl BackendState {
     pub(crate) fn winit(&mut self) -> Option<&mut WinitState> {
         match self {
             Self::Winit(winit) => Some(winit),
-            Self::Unset => None,
+            _ => None,
+        }
+    }
+
+    /// Only `backend/kms/` should call this, for the same reason as `winit`.
+    pub(crate) fn kms(&mut self) -> Option<&mut KmsState> {
+        match self {
+            Self::Kms(kms) => Some(kms),
+            _ => None,
         }
     }
 }

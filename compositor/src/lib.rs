@@ -24,6 +24,7 @@ pub fn run() -> anyhow::Result<()> {
 
     match backend::Preference::detect() {
         backend::Preference::Winit => backend::winit::init(&mut state)?,
+        backend::Preference::Kms => backend::kms::init(&mut state)?,
     }
     tracing::info!(backend = state.backend.name(), "backend started");
 
@@ -37,6 +38,9 @@ pub fn run() -> anyhow::Result<()> {
         .run(None, &mut state, |state| {
             state.shell.refresh();
             state.shell.popups.cleanup();
+            // Frames queued during dispatch render here, after the burst of
+            // events that requested them has been fully drained.
+            backend::kms::redraw_queued_outputs(state);
             let _ = state.common.display_handle.flush_clients();
         })
         .with_context(|| "The event loop stopped unexpectedly")
