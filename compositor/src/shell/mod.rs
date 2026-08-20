@@ -549,7 +549,7 @@ impl Shell {
         }
     }
 
-    /// `travelled` is cumulative horizontal travel in logical pixels, positive
+    /// `travelled` is cumulative horizontal travel in pages, positive
     /// rightward.
     pub fn update_workspace_swipe(&mut self, travelled: f64) {
         if let Some(monitor) = self.focused_monitor_mut() {
@@ -557,8 +557,8 @@ impl Shell {
         }
     }
 
-    /// Releases the swipe into its spring. `velocity` is in logical pixels per
-    /// second, positive rightward; returns whether the active workspace moved.
+    /// Releases the swipe into its spring. `velocity` is in pages per second,
+    /// positive rightward; returns whether the active workspace moved.
     pub fn end_workspace_swipe(&mut self, velocity: f64) -> bool {
         let global = self.global_layout;
         self.focused_monitor_mut()

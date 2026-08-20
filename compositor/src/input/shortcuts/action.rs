@@ -43,7 +43,11 @@ impl FromStr for WorkspaceRef {
             let magnitude: i32 = rest
                 .parse()
                 .map_err(|_| ParseActionError::bad_argument("workspace", s))?;
-            let signed = if s.starts_with('-') { -magnitude } else { magnitude };
+            let signed = if s.starts_with('-') {
+                -magnitude
+            } else {
+                magnitude
+            };
             return Ok(Self::Relative(signed));
         }
         s.parse::<usize>()
@@ -75,17 +79,12 @@ impl FromStr for LayoutSelection {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
-    /// The swallowed release of an intercepted chord. Dispatch does nothing for
-    /// it; it exists so the release never reaches the client unpaired.
     None,
 
     Quit,
     ReloadConfig,
-    /// argv, never a shell string.
     Spawn(Vec<String>),
 
-    /// Hand the seat to another virtual terminal. Only the KMS backend can do
-    /// this; nested backends log and ignore it.
     SwitchVt(i32),
 
     CloseWindow,
@@ -158,8 +157,6 @@ impl std::error::Error for ParseActionError {}
 impl FromStr for Action {
     type Err = ParseActionError;
 
-    /// Parses the on-disk form: `"quit"`, `"spawn foot -e nvim"`,
-    /// `"focus left"`, `"workspace +1"`, `"move-to-workspace 0 follow"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut parts = s.split_whitespace();
         let name = parts.next().ok_or(ParseActionError::Empty)?;
@@ -178,8 +175,6 @@ impl FromStr for Action {
             "quit" | "exit" => Ok(Self::Quit),
             "reload-config" => Ok(Self::ReloadConfig),
 
-            // Everything after `spawn` is argv. Arguments containing spaces are
-            // not expressible; that is the trade for never invoking a shell.
             "spawn" => {
                 let argv: Vec<String> = parts.map(str::to_owned).collect();
                 if argv.is_empty() {
@@ -207,9 +202,9 @@ impl FromStr for Action {
             "move" | "move-window" => Ok(Self::MoveWindow(arg("direction", parts)?.parse()?)),
             "focus-output" => Ok(Self::FocusOutput(arg("direction", parts)?.parse()?)),
             "move-to-output" => Ok(Self::MoveWindowToOutput(arg("direction", parts)?.parse()?)),
-            "move-workspace-to-output" => {
-                Ok(Self::MoveWorkspaceToOutput(arg("direction", parts)?.parse()?))
-            }
+            "move-workspace-to-output" => Ok(Self::MoveWorkspaceToOutput(
+                arg("direction", parts)?.parse()?,
+            )),
 
             "workspace" => Ok(Self::Workspace(arg("workspace", parts)?.parse()?)),
             "move-to-workspace" => {
@@ -251,7 +246,8 @@ mod tests {
     use super::*;
 
     fn parse(s: &str) -> Action {
-        s.parse().unwrap_or_else(|err| panic!("`{s}` failed to parse: {err}"))
+        s.parse()
+            .unwrap_or_else(|err| panic!("`{s}` failed to parse: {err}"))
     }
 
     #[test]
@@ -283,10 +279,22 @@ mod tests {
 
     #[test]
     fn absolute_and_relative_workspaces_differ() {
-        assert_eq!(parse("workspace 3"), Action::Workspace(WorkspaceRef::Index(3)));
-        assert_eq!(parse("workspace +1"), Action::Workspace(WorkspaceRef::Relative(1)));
-        assert_eq!(parse("workspace -2"), Action::Workspace(WorkspaceRef::Relative(-2)));
-        assert_eq!(parse("workspace prev"), Action::Workspace(WorkspaceRef::Previous));
+        assert_eq!(
+            parse("workspace 3"),
+            Action::Workspace(WorkspaceRef::Index(3))
+        );
+        assert_eq!(
+            parse("workspace +1"),
+            Action::Workspace(WorkspaceRef::Relative(1))
+        );
+        assert_eq!(
+            parse("workspace -2"),
+            Action::Workspace(WorkspaceRef::Relative(-2))
+        );
+        assert_eq!(
+            parse("workspace prev"),
+            Action::Workspace(WorkspaceRef::Previous)
+        );
     }
 
     #[test]

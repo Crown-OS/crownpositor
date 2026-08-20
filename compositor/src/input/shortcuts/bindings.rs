@@ -6,9 +6,9 @@ use smithay::input::keyboard::{keysyms, Keysym, KeysymHandle, ModifiersState};
 
 use config::{Binding, Compositor};
 
-use crate::input::shortcuts::action::{Action, WorkspaceRef};
 #[cfg(test)]
 use crate::input::shortcuts::action::Direction;
+use crate::input::shortcuts::action::{Action, WorkspaceRef};
 
 /// The four modifiers a shortcut may name.
 ///
@@ -95,9 +95,10 @@ impl FromStr for Chord {
                     if key.is_some() {
                         return Err(ParseChordError::MultipleKeys);
                     }
-                    key = Some(keysym_from_name(&lower).ok_or_else(|| {
-                        ParseChordError::UnknownToken(token.to_owned())
-                    })?);
+                    key = Some(
+                        keysym_from_name(&lower)
+                            .ok_or_else(|| ParseChordError::UnknownToken(token.to_owned()))?,
+                    );
                 }
             }
         }
@@ -159,8 +160,6 @@ pub struct Bindings {
 }
 
 impl Bindings {
-    /// Used when the config names no bindings; without these a fresh install has
-    /// no way to quit.
     pub fn defaults() -> Self {
         const DEFAULTS: &[(&str, &str)] = &[
             ("Super+Shift+E", "quit"),
@@ -312,7 +311,10 @@ impl GestureBindings {
         Self { map }
     }
 
-    pub fn lookup(&self, gesture: crate::input::trackpad::gestures::SwipeGesture) -> Option<Action> {
+    pub fn lookup(
+        &self,
+        gesture: crate::input::trackpad::gestures::SwipeGesture,
+    ) -> Option<Action> {
         self.map.get(&gesture).cloned()
     }
 }
@@ -346,8 +348,14 @@ mod tests {
 
     #[test]
     fn named_keys_resolve() {
-        assert_eq!(chord("Super+Return").key, Some(Keysym::new(keysyms::KEY_Return)));
-        assert_eq!(chord("Super+Space").key, Some(Keysym::new(keysyms::KEY_space)));
+        assert_eq!(
+            chord("Super+Return").key,
+            Some(Keysym::new(keysyms::KEY_Return))
+        );
+        assert_eq!(
+            chord("Super+Space").key,
+            Some(Keysym::new(keysyms::KEY_space))
+        );
         assert_eq!(chord("F11").key, Some(Keysym::new(keysyms::KEY_F11)));
     }
 
@@ -399,10 +407,7 @@ mod tests {
             Direction::Down,
         ] {
             assert!(
-                bindings
-                    .keys
-                    .values()
-                    .any(|a| *a == Action::Focus(dir)),
+                bindings.keys.values().any(|a| *a == Action::Focus(dir)),
                 "{dir:?} is not bound"
             );
         }

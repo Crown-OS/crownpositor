@@ -275,20 +275,19 @@ impl Monitor {
         self.switch.begin();
     }
 
-    /// `travelled` is the fingers' cumulative horizontal travel in logical
-    /// pixels, positive rightward.
+    /// `travelled` is the fingers' cumulative horizontal travel in pages,
+    /// positive rightward.
     pub fn update_switch_gesture(&mut self, travelled: f64) {
         let last = self.workspaces.len().saturating_sub(1);
-        let pages = travelled / self.page_stride();
-        self.switch.drag_to(pages, last);
+        self.switch.drag_to(travelled, last);
     }
 
     /// Ends the swipe and makes whichever workspace it landed on active, while
-    /// the spring — started at the fingers' own speed — covers the rest of the
-    /// distance. `velocity` is in logical pixels per second, positive rightward.
+    /// the spring — carrying the speed already on screen — covers the rest of
+    /// the distance. `velocity` is in pages per second, positive rightward.
     pub fn end_switch_gesture(&mut self, velocity: f64, global: LayoutKind) -> bool {
         let last = self.workspaces.len().saturating_sub(1);
-        let target = self.switch.release(velocity / self.page_stride(), last);
+        let target = self.switch.release(velocity, last);
         self.commit(target, global)
     }
 
@@ -760,14 +759,13 @@ mod tests {
     #[test]
     fn a_swipe_commits_the_workspace_it_lands_on() {
         let mut monitor = monitor(4);
-        let stride = monitor.page_stride();
 
         monitor.begin_switch_gesture();
         assert!(monitor.is_swiping());
         // Two thirds of the way to the next workspace, then let go still moving
         // at about a page a second.
-        monitor.update_switch_gesture(-stride * 0.66);
-        let changed = monitor.end_switch_gesture(-stride, LayoutKind::MasterStack);
+        monitor.update_switch_gesture(-0.66);
+        let changed = monitor.end_switch_gesture(-1.0, LayoutKind::MasterStack);
 
         assert!(changed);
         assert_eq!(monitor.active_index(), 1);
@@ -782,9 +780,12 @@ mod tests {
         monitor.activate(2, LayoutKind::MasterStack);
         settle(&mut monitor);
 
-        let stride = monitor.page_stride();
         monitor.begin_switch_gesture();
-        monitor.update_switch_gesture(-stride * 0.2);
+        monitor.update_switch_gesture(-0.2);
+        // A frame or two of following, as the render loop would deliver.
+        for _ in 0..3 {
+            monitor.switch_mut().step(1.0 / 60.0);
+        }
         assert!(!monitor.end_switch_gesture(0.0, LayoutKind::MasterStack));
         assert_eq!(monitor.active_index(), 2);
     }
@@ -792,10 +793,9 @@ mod tests {
     #[test]
     fn a_cancelled_swipe_returns_to_where_it_started() {
         let mut monitor = monitor(4);
-        let stride = monitor.page_stride();
 
         monitor.begin_switch_gesture();
-        monitor.update_switch_gesture(-stride * 0.9);
+        monitor.update_switch_gesture(-0.9);
         monitor.cancel_switch_gesture();
 
         settle(&mut monitor);
@@ -808,9 +808,13 @@ mod tests {
         let mut monitor = monitor(4);
         assert_eq!(monitor.visible_workspaces().count(), 1);
 
-        let stride = monitor.page_stride();
         monitor.begin_switch_gesture();
-        monitor.update_switch_gesture(-stride * 0.5);
+        monitor.update_switch_gesture(-0.5);
+        // The tracking spring eases after the fingers; give it time to get
+        // between the two pages.
+        for _ in 0..30 {
+            monitor.switch_mut().step(1.0 / 60.0);
+        }
 
         let visible: Vec<_> = monitor
             .visible_workspaces()

@@ -1,10 +1,12 @@
 pub mod rules;
+pub mod startup;
 pub mod system;
 
 pub use crownos_config::schema::{
     AnimationProfile, Binding, Compositor, LayoutMode, OutputSetting, OutputTransform, WindowRule,
 };
 pub use rules::{ResolvedRule, WindowRules};
+pub use startup::split_argv;
 pub use system::System;
 
 #[derive(Debug)]

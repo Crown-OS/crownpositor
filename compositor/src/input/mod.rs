@@ -5,10 +5,13 @@ pub mod trackpad;
 
 use smithay::backend::input::{InputBackend, InputEvent};
 
-use crate::state::State;
+use crate::{input::trackpad::LinearSwipe, state::State};
 
 impl State {
-    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>)
+    where
+        I::GestureSwipeUpdateEvent: LinearSwipe<I>,
+    {
         match event {
             InputEvent::Keyboard { event, .. } => self.on_keyboard_key::<I>(event),
             // Relative motion is what libinput produces; without this arm a DRM

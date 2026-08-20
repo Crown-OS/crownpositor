@@ -34,6 +34,10 @@ pub fn run() -> anyhow::Result<()> {
     unsafe { std::env::set_var("WAYLAND_DISPLAY", &state.common.socket_name) };
     tracing::info!(socket = ?state.common.socket_name, "crownpositor is running");
 
+    // Outputs exist and the socket is live, so a bar or wallpaper that connects
+    // immediately has something to anchor to.
+    state.run_startup();
+
     event_loop
         .run(None, &mut state, |state| {
             state.shell.refresh();

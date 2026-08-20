@@ -12,11 +12,12 @@
 //! when a value slides across a distance and needs to look unhurried;
 //! [`SpringProfile::GESTURE`] catches a value the user was dragging.
 //!
-//! That last case is what [`Spring::hold`] and
-//! [`Spring::set_target_with_velocity`] exist for: while a gesture owns the
-//! value the spring is pinned to it, and on release the gesture's measured
-//! velocity becomes the spring's, so the motion out of the fingers has no seam
-//! in it.
+//! A live gesture runs the spring under [`SpringProfile::TRACK`] with the
+//! fingers driving the target, so the value is spring-smoothed while it is
+//! held. Release is then just a retarget: [`Spring::set_target`] leaves the
+//! velocity alone, so whatever speed was on screen carries straight into the
+//! settle. [`Spring::set_target_with_velocity`] remains for callers that need
+//! to inject a measured speed instead.
 
 use std::time::Instant;
 
@@ -60,6 +61,15 @@ impl SpringProfile {
     pub const GESTURE: Self = Self {
         stiffness: 200.0,
         damping: 28.284,
+    };
+    /// Follows a live gesture. Stiff enough to sit a few dozen milliseconds
+    /// behind the fingers, soft enough to filter sensor jitter out — a
+    /// second-order low-pass, cutting off around 6 Hz. Because the value is
+    /// always moving through this spring, letting go is only a retarget: the
+    /// velocity on screen carries into the settle with no seam at all.
+    pub const TRACK: Self = Self {
+        stiffness: 1500.0,
+        damping: 77.46,
     };
 
     /// The user-facing animation setting, resolved to a feel. `None` means
@@ -120,6 +130,7 @@ impl Spring {
     /// of ramping up from rest. Critically-damped springs otherwise cover
     /// only a few percent of the remaining distance in the first frame,
     /// which reads as "stuck" for close/dismiss animations.
+    #[allow(dead_code)]
     pub fn set_target_with_velocity(&mut self, target: f32, velocity: f32) {
         self.target = target;
         self.velocity = velocity;
@@ -392,6 +403,7 @@ mod tests {
             SpringProfile::SNAPPY,
             SpringProfile::SMOOTH,
             SpringProfile::GESTURE,
+            SpringProfile::TRACK,
         ] {
             let critical = 2.0 * profile.stiffness.sqrt();
             assert!(

@@ -1,10 +1,12 @@
 //! Where the viewport sits between workspaces, as a fractional index.
 //!
-//! One spring owns the value. A swipe pins it to the fingers; letting go hands
-//! the fingers' last velocity to the spring, which both carries the remaining
-//! distance and — projected forward — decides which workspace to land on. So a
-//! long slow drag and a short hard flick can end on the same workspace, and the
-//! motion out of the fingers is continuous either way.
+//! One spring owns the value, and it never stops running. While the fingers
+//! are down they drive the spring's *target* through the stiff
+//! [`SpringProfile::TRACK`], so the viewport is a lightly smoothed copy of the
+//! hand rather than a raw one. Letting go is only a retarget onto a whole
+//! page: the spring keeps whatever velocity was on screen, so there is no seam
+//! between following the fingers and settling. The fingers' own release speed
+//! is used once — projected forward to decide *which* page to settle on.
 //!
 //! Nothing here knows about outputs, tiles or pixels: the caller converts its
 //! own geometry to *pages* and back. That is what makes the same object usable
@@ -14,9 +16,7 @@ use crate::animations::spring::{Spring, SpringProfile};
 
 /// Seconds of coasting the release velocity is projected over to guess where
 /// the fingers were heading, and so how far a flick is worth. Roughly the time
-/// constant of a thrown object slowing to a stop; a touchpad's fastest flick is
-/// only about one page a second, so anything much shorter than this makes a
-/// decisive throw count for almost nothing.
+/// constant of a thrown object slowing to a stop.
 const PROJECTION: f64 = 0.5;
 /// How far past the first or last workspace the fingers may pull, in pages.
 const RUBBER_BAND_LIMIT: f64 = 0.35;
@@ -56,7 +56,10 @@ impl WorkspaceSwitch {
     pub fn set_profile(&mut self, profile: Option<SpringProfile>) {
         self.profile = profile;
         match profile {
-            Some(profile) => self.position.set_profile(profile),
+            // Mid-drag the spring is on TRACK; the new profile takes over on
+            // release.
+            Some(profile) if self.drag.is_none() => self.position.set_profile(profile),
+            Some(_) => {}
             // Turning animations off mid-flight lands the switch now rather
             // than leaving it stranded between two workspaces.
             None => self.position.snap_to_target(),
@@ -84,9 +87,7 @@ impl WorkspaceSwitch {
         pair.sort_by(|a, b| a.1.abs().total_cmp(&b.1.abs()));
 
         pair.into_iter()
-            .filter(move |(index, offset)| {
-                *index >= 0.0 && *index <= last && offset.abs() < 1.0
-            })
+            .filter(move |(index, offset)| *index >= 0.0 && *index <= last && offset.abs() < 1.0)
             .map(|(index, offset)| (index as usize, offset))
     }
 
@@ -101,24 +102,39 @@ impl WorkspaceSwitch {
     }
 
     pub fn begin(&mut self) {
+        if self.profile.is_some() {
+            self.position.set_profile(SpringProfile::TRACK);
+            // Whatever the spring was flying towards, the fingers own it now.
+            self.position.set_target(self.position.position);
+        }
         self.drag = Some(Drag {
             origin: self.position(),
         });
     }
 
-    /// Pins the viewport to the fingers. `travelled` is cumulative, in pages,
+    /// Points the viewport at the fingers. `travelled` is cumulative, in pages,
     /// positive when the fingers moved right — which pulls the *previous*
     /// workspace in, so the content follows the hand instead of opposing it.
+    /// The spring does the following, so the motion on screen is a smoothed
+    /// copy of the hand.
     pub fn drag_to(&mut self, travelled: f64, last: usize) {
         let Some(drag) = self.drag else {
             return;
         };
-        self.position.hold(resist(drag.origin - travelled, last) as f32);
+        let pinned = resist(drag.origin - travelled, last) as f32;
+        match self.profile {
+            Some(_) => self.position.set_target(pinned),
+            None => self.position.hold(pinned),
+        }
     }
 
     /// Lets go. `velocity` is the fingers' speed in pages per second, positive
     /// rightward; the returned index is the workspace the spring is now headed
     /// for, which the caller should make active immediately.
+    ///
+    /// The velocity only picks the page. The spring is retargeted, not
+    /// restarted, so it carries the speed it already had on screen — which is
+    /// what makes the release seamless.
     pub fn release(&mut self, velocity: f64, last: usize) -> usize {
         // The viewport moves against the fingers.
         let velocity = -velocity;
@@ -126,8 +142,10 @@ impl WorkspaceSwitch {
             return self.nearest(last);
         };
 
-        // Where the viewport would coast to if nothing stopped it.
-        let projected = self.position() + velocity * PROJECTION;
+        // Project from where the fingers pinned the viewport, not from the
+        // smoothed position still catching up to it.
+        let pinned = self.position.target as f64;
+        let projected = pinned + velocity * PROJECTION;
         let page = drag.origin.round();
         // One workspace per swipe: a hard flick turns a page, it does not scrub
         // through the whole list.
@@ -136,7 +154,7 @@ impl WorkspaceSwitch {
             .clamp(page - 1.0, page + 1.0)
             .clamp(0.0, last as f64) as usize;
 
-        self.fling_to(target, velocity);
+        self.animate_to(target);
         target
     }
 
@@ -148,13 +166,15 @@ impl WorkspaceSwitch {
     }
 
     /// Retargets without disturbing whatever velocity the spring already has,
-    /// so a second keystroke mid-flight redirects rather than restarts.
+    /// so a second keystroke mid-flight redirects rather than restarts — and a
+    /// released swipe coasts out of the fingers' own speed.
     pub fn animate_to(&mut self, index: usize) {
         self.drag = None;
-        if self.profile.is_none() {
+        let Some(profile) = self.profile else {
             self.snap_to(index);
             return;
-        }
+        };
+        self.position.set_profile(profile);
         self.position.set_target(index as f32);
     }
 
@@ -165,25 +185,13 @@ impl WorkspaceSwitch {
     }
 
     pub fn step(&mut self, dt: f32) {
-        // While the fingers own the value, integrating would fight them.
-        if self.drag.is_none() {
-            self.position.step(dt);
-        }
+        self.position.step(dt);
     }
 
     pub fn settle(&mut self) {
         if self.drag.is_none() {
             self.position.snap_to_target();
         }
-    }
-
-    fn fling_to(&mut self, index: usize, velocity: f64) {
-        if self.profile.is_none() {
-            self.snap_to(index);
-            return;
-        }
-        self.position
-            .set_target_with_velocity(index as f32, velocity as f32);
     }
 
     fn nearest(&self, last: usize) -> usize {
@@ -227,6 +235,14 @@ mod tests {
         panic!("the switch never came to rest");
     }
 
+    /// Steps at 60 Hz while the fingers hold still, so the tracking spring
+    /// catches up to wherever they pinned the viewport.
+    fn follow(switch: &mut WorkspaceSwitch, frames: usize) {
+        for _ in 0..frames {
+            switch.step(1.0 / 60.0);
+        }
+    }
+
     #[test]
     fn a_fresh_switch_needs_no_frames() {
         assert!(!WorkspaceSwitch::new(0).is_active());
@@ -239,11 +255,26 @@ mod tests {
 
         // Fingers to the left pull the next workspace in.
         switch.drag_to(-0.4, 3);
-        assert!((switch.position() - 1.4).abs() < 1e-6);
+        follow(&mut switch, 60);
+        assert!((switch.position() - 1.4).abs() < 0.01, "{}", switch.position());
 
         // And to the right, the previous one.
         switch.drag_to(0.4, 3);
-        assert!((switch.position() - 0.6).abs() < 1e-6);
+        follow(&mut switch, 60);
+        assert!((switch.position() - 0.6).abs() < 0.01, "{}", switch.position());
+    }
+
+    #[test]
+    fn the_viewport_smooths_the_fingers_rather_than_copying_them() {
+        let mut switch = WorkspaceSwitch::new(1);
+        switch.begin();
+        switch.drag_to(-0.4, 3);
+
+        // The pin moved a full 0.4 pages; the viewport eases after it instead
+        // of teleporting.
+        switch.step(1.0 / 60.0);
+        let position = switch.position();
+        assert!(position > 1.0 && position < 1.4, "{position}");
     }
 
     #[test]
@@ -311,24 +342,32 @@ mod tests {
     }
 
     #[test]
-    fn the_release_velocity_is_the_springs_starting_velocity() {
-        let mut kicked = WorkspaceSwitch::new(0);
-        kicked.begin();
-        kicked.drag_to(-0.5, 3);
-        kicked.release(-1.5, 3);
+    fn the_speed_on_screen_carries_through_the_release() {
+        let mut switch = WorkspaceSwitch::new(0);
+        switch.begin();
 
-        let mut coasted = WorkspaceSwitch::new(0);
-        coasted.begin();
-        coasted.drag_to(-0.5, 3);
-        coasted.release(0.0, 3);
+        // Fingers sweep left at a steady 1.8 pages a second; the tracking
+        // spring settles onto that speed.
+        let dt = 1.0 / 60.0;
+        let mut travelled = 0.0;
+        let mut during = 0.0;
+        for _ in 0..30 {
+            travelled -= 1.8 * dt as f64;
+            switch.drag_to(travelled, 3);
+            let before = switch.position();
+            switch.step(dt);
+            during = (switch.position() - before) / dt as f64;
+        }
 
-        kicked.step(1.0 / 60.0);
-        coasted.step(1.0 / 60.0);
+        let released_at = switch.position();
+        switch.release(-1.8, 3);
+        switch.step(dt);
+        let after = (switch.position() - released_at) / dt as f64;
+
+        assert!(during > 1.0, "the drag never got up to speed: {during}");
         assert!(
-            kicked.position() > coasted.position(),
-            "the flick did not lead: {} vs {}",
-            kicked.position(),
-            coasted.position()
+            after > during * 0.7,
+            "the release jerked: {after} against {during}"
         );
     }
 
@@ -337,6 +376,7 @@ mod tests {
         let mut switch = WorkspaceSwitch::new(0);
         switch.begin();
         switch.drag_to(1.0, 3);
+        follow(&mut switch, 60);
 
         let position = switch.position();
         assert!(position < 0.0, "the edge should still give a little");
@@ -347,6 +387,7 @@ mod tests {
 
         // Pulling ten times as hard barely gets further.
         switch.drag_to(10.0, 3);
+        follow(&mut switch, 60);
         assert!(switch.position() > -RUBBER_BAND_LIMIT);
     }
 
@@ -377,6 +418,7 @@ mod tests {
         let mut switch = WorkspaceSwitch::new(0);
         switch.begin();
         switch.drag_to(-1.5, 4);
+        follow(&mut switch, 60);
 
         let visible: Vec<_> = switch.visible(5).collect();
         assert_eq!(visible.len(), 2);
@@ -398,7 +440,9 @@ mod tests {
         let mut switch = WorkspaceSwitch::new(0);
         switch.begin();
         switch.drag_to(1.0, 3);
+        follow(&mut switch, 30);
         // Position is negative, but there is nothing to the left of zero.
+        assert!(switch.position() < 0.0);
         assert!(switch.visible(4).all(|(index, _)| index < 4));
         assert!(switch.visible(4).any(|(index, _)| index == 0));
     }
@@ -428,7 +472,7 @@ mod tests {
 
         switch.begin();
         switch.drag_to(-0.6, 3);
-        assert_eq!(switch.release(-5.0, 3), 3);
+        assert_eq!(switch.release(-5.0, 3), 3, "one page on from workspace 2");
         assert_eq!(switch.position(), 3.0, "no frames to animate over");
     }
 

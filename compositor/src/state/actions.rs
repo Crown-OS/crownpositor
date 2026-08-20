@@ -159,6 +159,21 @@ impl State {
         // The next refresh turns the dirty bits above into one relayout.
     }
 
+    /// Runs the `compositor.startup` entries — bar, wallpaper, notification
+    /// daemon — in file order.
+    ///
+    /// Called once, from [`crate::run`], after the backend has come up and the
+    /// socket is in the environment: a layer-shell client that connects before
+    /// there is an output to anchor to has nowhere to put itself. Deliberately
+    /// not reached from [`Self::apply_config`], so a reload does not stack up a
+    /// second copy of everything.
+    pub fn run_startup(&self) {
+        for argv in config::startup::commands(&self.config.current.compositor.startup) {
+            tracing::info!(command = %argv.join(" "), "startup");
+            self.spawn(&argv);
+        }
+    }
+
     /// `setsid` reparents the child to init, so the compositor never has to reap.
     fn spawn(&self, argv: &[String]) {
         let Some((program, args)) = argv.split_first() else {
