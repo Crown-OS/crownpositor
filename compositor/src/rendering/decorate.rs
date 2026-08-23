@@ -6,9 +6,14 @@
 //! decorator, and gets whatever effects its renderer supports — [`PassThrough`]
 //! if none.
 
-use smithay::backend::renderer::{
-    element::{surface::WaylandSurfaceRenderElement, utils::CropRenderElement, RenderElement},
-    ImportAll, Renderer,
+use smithay::{
+    backend::renderer::{
+        ImportAll, Renderer,
+        element::{
+            Id, RenderElement, surface::WaylandSurfaceRenderElement, utils::CropRenderElement,
+        },
+    },
+    utils::{Physical, Rectangle},
 };
 
 /// A tile's surfaces, already clipped to the window's animated rect.
@@ -32,6 +37,24 @@ where
         size: (f32, f32),
         radius: f32,
     ) -> Option<Self::Element>;
+
+    /// The blurred glass drawn *behind* a tile whose surface committed a blur
+    /// region. `None` — the default, and the only answer a decorator without
+    /// a blur pipeline has — simply leaves the window without the effect.
+    ///
+    /// `id` must be stable per window across frames, or the damage tracker
+    /// repaints the backdrop every frame.
+    fn backdrop(
+        &mut self,
+        renderer: &mut R,
+        id: Id,
+        geometry: Rectangle<i32, Physical>,
+        radius: f32,
+        alpha: f32,
+    ) -> Option<Self::Element> {
+        let _ = (renderer, id, geometry, radius, alpha);
+        None
+    }
 }
 
 /// Draws windows as they are. What a renderer without custom shaders uses.

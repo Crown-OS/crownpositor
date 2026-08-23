@@ -9,6 +9,7 @@
 //! front of the space, which is right for Overlay and Top and wrong for Bottom
 //! and Background, so a wallpaper would cover the desktop.
 
+pub mod blur;
 pub mod cursor;
 pub mod decorate;
 pub mod element;
@@ -16,11 +17,11 @@ pub mod rounded;
 
 use smithay::{
     backend::renderer::{
-        element::{
-            surface::WaylandSurfaceRenderElement, utils::CropRenderElement, AsRenderElements,
-            RenderElement, Wrap,
-        },
         ImportAll, ImportMem, Renderer,
+        element::{
+            AsRenderElements, RenderElement, Wrap, surface::WaylandSurfaceRenderElement,
+            utils::CropRenderElement,
+        },
     },
     desktop::layer_map_for_output,
     utils::{Logical, Physical, Point, Rectangle, Scale},
@@ -29,7 +30,7 @@ use smithay::{
 
 use crate::{
     rendering::{cursor::Cursor, decorate::TileDecorator, element::CrownElement},
-    shell::{monitor::Monitor, tile::Tile, Shell},
+    shell::{Shell, monitor::Monitor, tile::Tile},
 };
 
 /// One output's scene graph, for a given renderer and decorator.
@@ -88,7 +89,15 @@ where
             }
             None => {
                 for tile in workspace.stacking_order() {
-                    tile_elements(&mut elements, tile, renderer, decorator, scale, offset, radius);
+                    tile_elements(
+                        &mut elements,
+                        tile,
+                        renderer,
+                        decorator,
+                        scale,
+                        offset,
+                        radius,
+                    );
                 }
             }
         }
@@ -147,6 +156,19 @@ fn tile_elements<R, D>(
         if let Some(decorated) = decorator.decorate(renderer, cropped, size, radius) {
             elements.push(CrownElement::Tile(Wrap::from(decorated)));
         }
+    }
+
+    // The blurred glass goes in *after* the window's surfaces — later in the
+    // list is further from the eye, so it sits directly behind them. The
+    // committed region currently only gates the effect; the backdrop covers
+    // the whole tile, because a window asking to blur anything asks to blur
+    // itself in practice, and one rect keeps the corner mask aligned with the
+    // window's own rounding.
+    if blur::window_blur_bounds(tile.window()).is_some()
+        && let Some(id) = blur::backdrop_id(tile.window())
+        && let Some(backdrop) = decorator.backdrop(renderer, id, clip, radius, tile.render_alpha())
+    {
+        elements.push(CrownElement::Tile(Wrap::from(backdrop)));
     }
 }
 

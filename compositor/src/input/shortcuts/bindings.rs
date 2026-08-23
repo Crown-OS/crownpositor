@@ -163,7 +163,7 @@ impl Bindings {
     pub fn defaults() -> Self {
         const DEFAULTS: &[(&str, &str)] = &[
             ("Super+Shift+E", "quit"),
-            ("Super+Return", "spawn foot"),
+            ("Super+Return", "spawn kitty"),
             ("Super+Q", "close-window"),
             ("Super+H", "focus left"),
             ("Super+L", "focus right"),

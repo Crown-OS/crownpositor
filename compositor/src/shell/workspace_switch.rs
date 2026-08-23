@@ -17,7 +17,7 @@ use crate::animations::spring::{Spring, SpringProfile};
 /// Seconds of coasting the release velocity is projected over to guess where
 /// the fingers were heading, and so how far a flick is worth. Roughly the time
 /// constant of a thrown object slowing to a stop.
-const PROJECTION: f64 = 0.5;
+const PROJECTION: f64 = 3.5;
 /// How far past the first or last workspace the fingers may pull, in pages.
 const RUBBER_BAND_LIMIT: f64 = 0.35;
 /// Resistance at the edge. 1.0 would track the fingers exactly at first.
@@ -256,12 +256,20 @@ mod tests {
         // Fingers to the left pull the next workspace in.
         switch.drag_to(-0.4, 3);
         follow(&mut switch, 60);
-        assert!((switch.position() - 1.4).abs() < 0.01, "{}", switch.position());
+        assert!(
+            (switch.position() - 1.4).abs() < 0.01,
+            "{}",
+            switch.position()
+        );
 
         // And to the right, the previous one.
         switch.drag_to(0.4, 3);
         follow(&mut switch, 60);
-        assert!((switch.position() - 0.6).abs() < 0.01, "{}", switch.position());
+        assert!(
+            (switch.position() - 0.6).abs() < 0.01,
+            "{}",
+            switch.position()
+        );
     }
 
     #[test]

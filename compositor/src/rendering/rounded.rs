@@ -23,7 +23,10 @@ use smithay::{
 
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
-    rendering::decorate::{Cropped, TileDecorator},
+    rendering::{
+        blur::{BackdropSource, BlurBackdrop},
+        decorate::{Cropped, TileDecorator},
+    },
     shaders::rounded_corner::RoundedCornerShader,
 };
 
@@ -91,7 +94,11 @@ impl<E: Element> Element for Rounded<E> {
         self.inner.transform()
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         self.inner.damage_since(scale, commit)
     }
 
@@ -168,15 +175,177 @@ where
     }
 }
 
-/// Rounds corners with the GLES texture-program override.
+/// What a decorated tile can be: the window itself (rounded), or the blurred
+/// glass behind it. One enum rather than two `CrownElement` variants because
+/// the `render_elements!` macro derives a `From` per variant, and two wrapped
+/// generics would overlap.
+#[derive(Debug)]
+pub enum Decorated<E> {
+    Window(Rounded<E>),
+    Backdrop(BlurBackdrop),
+}
+
+impl<E: Element> Element for Decorated<E> {
+    fn id(&self) -> &Id {
+        match self {
+            Self::Window(window) => window.id(),
+            Self::Backdrop(backdrop) => backdrop.id(),
+        }
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        match self {
+            Self::Window(window) => window.current_commit(),
+            Self::Backdrop(backdrop) => backdrop.current_commit(),
+        }
+    }
+
+    fn src(&self) -> Rectangle<f64, BufferCoords> {
+        match self {
+            Self::Window(window) => window.src(),
+            Self::Backdrop(backdrop) => backdrop.src(),
+        }
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        match self {
+            Self::Window(window) => window.geometry(scale),
+            Self::Backdrop(backdrop) => backdrop.geometry(scale),
+        }
+    }
+
+    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
+        match self {
+            Self::Window(window) => window.location(scale),
+            Self::Backdrop(backdrop) => backdrop.location(scale),
+        }
+    }
+
+    fn transform(&self) -> Transform {
+        match self {
+            Self::Window(window) => window.transform(),
+            Self::Backdrop(backdrop) => backdrop.transform(),
+        }
+    }
+
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
+        match self {
+            Self::Window(window) => window.damage_since(scale, commit),
+            Self::Backdrop(backdrop) => backdrop.damage_since(scale, commit),
+        }
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        match self {
+            Self::Window(window) => window.opaque_regions(scale),
+            Self::Backdrop(backdrop) => backdrop.opaque_regions(scale),
+        }
+    }
+
+    fn alpha(&self) -> f32 {
+        match self {
+            Self::Window(window) => window.alpha(),
+            Self::Backdrop(backdrop) => backdrop.alpha(),
+        }
+    }
+
+    fn kind(&self) -> Kind {
+        match self {
+            Self::Window(window) => window.kind(),
+            Self::Backdrop(backdrop) => backdrop.kind(),
+        }
+    }
+}
+
+impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E> {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        match self {
+            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions),
+            Self::Backdrop(backdrop) => RenderElement::<GlesRenderer>::draw(
+                backdrop,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+            ),
+        }
+    }
+
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        match self {
+            Self::Window(window) => window.underlying_storage(renderer),
+            Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
+        }
+    }
+}
+
+impl<'render, E> RenderElement<KmsRenderer<'render>> for Decorated<E>
+where
+    E: RenderElement<KmsRenderer<'render>>,
+{
+    fn draw(
+        &self,
+        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
+        match self {
+            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions),
+            Self::Backdrop(backdrop) => RenderElement::<KmsRenderer<'render>>::draw(
+                backdrop,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+            ),
+        }
+    }
+
+    fn underlying_storage(
+        &self,
+        renderer: &mut KmsRenderer<'render>,
+    ) -> Option<UnderlyingStorage<'_>> {
+        match self {
+            Self::Window(window) => window.underlying_storage(renderer),
+            Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
+        }
+    }
+}
+
+/// Rounds corners with the GLES texture-program override, and materialises
+/// blur backdrops when the backend handed it a blurred texture this frame.
 ///
-/// The program is resolved once, at construction, because `GlesFrame` does not
-/// expose its renderer — so it cannot be looked up from inside `draw`.
+/// The programs are resolved at construction/decoration time, because
+/// `GlesFrame` does not expose its renderer — so nothing can be looked up
+/// from inside `draw`.
 #[derive(Debug, Default, Clone)]
-pub struct GlesDecorator;
+pub struct GlesDecorator {
+    backdrop: Option<BackdropSource>,
+}
+
+impl GlesDecorator {
+    pub fn new(backdrop: Option<BackdropSource>) -> Self {
+        Self { backdrop }
+    }
+}
 
 impl TileDecorator<GlesRenderer> for GlesDecorator {
-    type Element = Rounded<Cropped<GlesRenderer>>;
+    type Element = Decorated<Cropped<GlesRenderer>>;
 
     fn decorate(
         &mut self,
@@ -188,16 +357,40 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
         // A missing program (shader never compiled) squares the corners; it
         // must not drop the window.
         let program = RoundedCornerShader::get(renderer);
-        Some(Rounded::new(element, program, size, radius))
+        Some(Decorated::Window(Rounded::new(
+            element, program, size, radius,
+        )))
+    }
+
+    fn backdrop(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        id: Id,
+        geometry: Rectangle<i32, Physical>,
+        radius: f32,
+        alpha: f32,
+    ) -> Option<Self::Element> {
+        let source = self.backdrop.as_ref()?;
+        Some(Decorated::Backdrop(BlurBackdrop::new(
+            renderer, source, id, geometry, radius, alpha,
+        )))
     }
 }
 
 /// [`GlesDecorator`], but for the multi-GPU renderer the KMS backend uses.
 #[derive(Debug, Default, Clone)]
-pub struct MultiDecorator;
+pub struct MultiDecorator {
+    backdrop: Option<BackdropSource>,
+}
+
+impl MultiDecorator {
+    pub fn new(backdrop: Option<BackdropSource>) -> Self {
+        Self { backdrop }
+    }
+}
 
 impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
-    type Element = Rounded<Cropped<KmsRenderer<'render>>>;
+    type Element = Decorated<Cropped<KmsRenderer<'render>>>;
 
     fn decorate(
         &mut self,
@@ -207,6 +400,27 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
         radius: f32,
     ) -> Option<Self::Element> {
         let program = RoundedCornerShader::get(renderer.as_mut());
-        Some(Rounded::new(element, program, size, radius))
+        Some(Decorated::Window(Rounded::new(
+            element, program, size, radius,
+        )))
+    }
+
+    fn backdrop(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        id: Id,
+        geometry: Rectangle<i32, Physical>,
+        radius: f32,
+        alpha: f32,
+    ) -> Option<Self::Element> {
+        let source = self.backdrop.as_ref()?;
+        Some(Decorated::Backdrop(BlurBackdrop::new(
+            renderer.as_mut(),
+            source,
+            id,
+            geometry,
+            radius,
+            alpha,
+        )))
     }
 }

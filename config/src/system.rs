@@ -1,6 +1,4 @@
-use crownos_config::schema::{
-    AccentColor, AnimationProfile, Appearance, Display, DisplayScale,
-};
+use crownos_config::schema::{AccentColor, AnimationProfile, Appearance, Display, DisplayScale};
 
 /// The slice of system settings that changes how the compositor draws or places
 /// things.
@@ -17,6 +15,11 @@ pub struct System {
     pub border_width: u16,
     pub border_radius: u16,
     pub animations: AnimationProfile,
+
+    pub blur: bool,
+    pub blur_passes: u16,
+    pub blur_size: f64,
+    pub blur_noise: f64,
 }
 
 impl Default for System {
@@ -45,6 +48,10 @@ impl System {
             border_width: appearance.border_width,
             border_radius: appearance.border_radius,
             animations: appearance.animations,
+            blur: appearance.blur,
+            blur_passes: appearance.blur_passes,
+            blur_size: appearance.blur_size,
+            blur_noise: appearance.blur_noise,
         }
     }
 

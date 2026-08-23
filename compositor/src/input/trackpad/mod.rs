@@ -39,7 +39,7 @@ const SWITCH_FINGERS: Fingers = Fingers::Four;
 /// Unaccelerated units of finger travel that slide the viewport one workspace:
 /// roughly five centimetres, at libinput's 1000 dpi normalization. Fixed, so a
 /// page costs the same swipe on every monitor.
-const SWIPE_DISTANCE: f64 = 2000.0;
+const SWIPE_DISTANCE: f64 = 500.0;
 
 /// A swipe's motion without the pointer acceleration curve.
 ///

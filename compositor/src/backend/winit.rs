@@ -4,7 +4,7 @@ use anyhow::{Context, anyhow};
 use smithay::{
     backend::{
         egl::EGLDevice,
-        renderer::{damage::OutputDamageTracker, gles::GlesRenderer, ImportDma},
+        renderer::{ImportDma, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
     desktop::layer_map_for_output,
@@ -14,8 +14,12 @@ use smithay::{
 };
 
 use crate::{
-    rendering::{self, rounded::GlesDecorator},
-    shaders::rounded_corner::RoundedCornerShader,
+    backend::render::CrownRenderer as _,
+    rendering::{
+        self,
+        blur::{self, BlurBuffers, BlurConfig},
+        rounded::GlesDecorator,
+    },
     shell::monitor::OutputDescriptor,
     state::{BackendState, State},
 };
@@ -29,6 +33,8 @@ pub struct WinitState {
     pub damage_tracker: OutputDamageTracker,
     pub dmabuf_global: DmabufGlobal,
     pub dmabuf_feedback: Option<DmabufFeedback>,
+    /// The cached blurred-background pipeline for this output.
+    pub blur: BlurBuffers,
 }
 
 pub fn init(state: &mut State) -> anyhow::Result<()> {
@@ -65,9 +71,9 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         },
     );
 
-    if let Err(err) = RoundedCornerShader::init(backend.renderer()) {
-        // Cosmetic, so a compile failure degrades to square corners.
-        tracing::warn!(%err, "failed to compile the rounded-corner shader");
+    if let Err(err) = backend.renderer().compile_shaders() {
+        // Cosmetic, so a compile failure degrades to square corners / no blur.
+        tracing::warn!(%err, "failed to compile the effect shaders");
     }
 
     let (dmabuf_global, dmabuf_feedback) = init_dmabuf(state, &mut backend);
@@ -79,6 +85,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         damage_tracker,
         dmabuf_global,
         dmabuf_feedback,
+        blur: BlurBuffers::default(),
     }));
 
     state
@@ -187,6 +194,43 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         shell.settle_animations();
     }
 
+    // The blur pre-pass renders offscreen, so it has to run before the main
+    // framebuffer is bound. Skipped — a cheap scan — while no visible window
+    // has a blur region committed.
+    let blur_config = BlurConfig {
+        enabled: config.current.blur.enabled,
+        passes: config.current.blur.passes,
+        offset: config.current.blur.size,
+        noise: config.current.blur.noise,
+    };
+    let backdrop = {
+        let Some(monitor) = shell.monitor(&winit.output) else {
+            return Ok(());
+        };
+        let wants_blur = blur_config.enabled
+            && shell
+                .visible_windows(monitor)
+                .any(|tile| blur::window_blur_bounds(tile.window()).is_some());
+        if wants_blur {
+            let size: smithay::utils::Size<i32, smithay::utils::Physical> =
+                monitor.geometry().size.to_physical_precise_round(scale);
+            let renderer = winit.backend.renderer();
+            let sources = blur::source_elements(monitor, renderer, scale);
+            match winit
+                .blur
+                .update(renderer, size, scale, &sources, CLEAR_COLOR, &blur_config)
+            {
+                Ok(()) => winit.blur.source(blur_config.noise),
+                Err(err) => {
+                    tracing::warn!(%err, "blur pre-pass failed; drawing without blur");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
+
     let submitted = {
         let (renderer, mut framebuffer) = winit
             .backend
@@ -200,7 +244,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
             shell,
             monitor,
             renderer,
-            &mut GlesDecorator,
+            &mut GlesDecorator::new(backdrop),
             &mut input.cursor,
             input.pointer_location,
             scale,
@@ -225,9 +269,10 @@ fn render(state: &mut State) -> anyhow::Result<()> {
 
     if let Some(monitor) = shell.monitor(&winit.output) {
         for tile in shell.visible_windows(monitor) {
-            tile.window().send_frame(&winit.output, now, throttle, |_, _| {
-                Some(winit.output.clone())
-            });
+            tile.window()
+                .send_frame(&winit.output, now, throttle, |_, _| {
+                    Some(winit.output.clone())
+                });
         }
     }
 

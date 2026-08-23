@@ -4,6 +4,7 @@ mod handlers;
 mod input;
 mod layout;
 mod logging;
+mod protocols;
 mod rendering;
 mod shaders;
 mod shell;

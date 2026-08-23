@@ -51,7 +51,11 @@ use crate::{
         kms::KmsState,
         render::{CrownAllocator, DmabufExporter},
     },
-    rendering::{self, rounded::MultiDecorator},
+    rendering::{
+        self,
+        blur::{self, BlurBuffers, BlurConfig},
+        rounded::MultiDecorator,
+    },
     shell::{Shell, monitor::OutputDescriptor},
     state::State,
 };
@@ -125,6 +129,9 @@ pub struct Surface {
     pub compositor: SurfaceCompositor,
     pub frame_clock: FrameClock,
     pub redraw_state: RedrawState,
+    /// The cached blurred-background pipeline for this output. Empty until a
+    /// visible window commits a blur region.
+    pub blur: BlurBuffers,
 }
 
 /// Brings up a monitor that appeared on `crtc`.
@@ -248,6 +255,7 @@ pub fn connector_connected(
             frame_clock: FrameClock::new(refresh_interval, false),
             // First frame right away.
             redraw_state: RedrawState::Queued,
+            blur: BlurBuffers::default(),
         },
     );
 
@@ -315,6 +323,12 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         ..
     } = state;
     let radius = config.current.border_radius as f32;
+    let blur_config = BlurConfig {
+        enabled: config.current.blur.enabled,
+        passes: config.current.blur.passes,
+        offset: config.current.blur.size,
+        noise: config.current.blur.noise,
+    };
     let Some(kms) = backend.kms() else {
         return;
     };
@@ -394,11 +408,40 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         return;
     };
     let scale = Scale::from(surface.output.current_scale().fractional_scale());
+
+    // The blur pre-pass runs before the element list is built, so backdrops
+    // constructed below sample this frame's texture and carry its commit.
+    // Skipped entirely — a cheap iterator scan — while no visible window has
+    // a blur region committed.
+    let wants_blur = blur_config.enabled
+        && shell
+            .visible_windows(monitor)
+            .any(|tile| blur::window_blur_bounds(tile.window()).is_some());
+    let backdrop = if wants_blur {
+        let size: smithay::utils::Size<i32, smithay::utils::Physical> =
+            monitor.geometry().size.to_physical_precise_round(scale);
+        let gles: &mut smithay::backend::renderer::gles::GlesRenderer = renderer.as_mut();
+        let sources = blur::source_elements(monitor, gles, scale);
+        match surface
+            .blur
+            .update(gles, size, scale, &sources, CLEAR_COLOR, &blur_config)
+        {
+            Ok(()) => surface.blur.source(blur_config.noise),
+            Err(err) => {
+                // Cosmetic: the frame still renders, just without glass.
+                tracing::warn!(%err, "blur pre-pass failed; drawing without blur");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let elements = rendering::output_elements(
         shell,
         monitor,
         &mut renderer,
-        &mut MultiDecorator,
+        &mut MultiDecorator::new(backdrop),
         &mut input.cursor,
         input.pointer_location,
         scale,
@@ -406,10 +449,12 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     );
 
     let mut submitted = false;
-    match surface
-        .compositor
-        .render_frame(&mut renderer, &elements, CLEAR_COLOR, FrameFlags::DEFAULT)
-    {
+    match surface.compositor.render_frame(
+        &mut renderer,
+        &elements,
+        CLEAR_COLOR,
+        FrameFlags::DEFAULT,
+    ) {
         Ok(result) => {
             if result.needs_sync() {
                 // The swapchain buffer is still being written by the GPU;
@@ -685,7 +730,9 @@ mod tests {
                 redraw_needed: false
             }
             .queue(),
-            RedrawState::WaitingForVBlank { redraw_needed: true }
+            RedrawState::WaitingForVBlank {
+                redraw_needed: true
+            }
         ));
     }
 

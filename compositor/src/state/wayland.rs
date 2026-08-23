@@ -35,9 +35,12 @@ use smithay::{
     },
 };
 
-use crate::state::State;
+use smithay::reexports::wayland_protocols::ext::background_effect::v1::server::ext_background_effect_manager_v1::Capability as BackgroundEffectCapability;
+
+use crate::{protocols::background_effect::BackgroundEffectState, state::State};
 
 pub struct WaylandState {
+    pub background_effect_state: BackgroundEffectState,
     pub compositor_state: CompositorState,
     // pub corner_radius_state: CornerRadiusState,
     pub data_device_state: DataDeviceState,
@@ -92,11 +95,20 @@ impl WaylandState {
         // TODO: track seats and their devices as they are hot-plugged.
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(display, "seat-0");
-        seat.add_keyboard(Default::default(), 200, 25)
+        seat.add_keyboard(Default::default(), 200, 65)
             .with_context(|| "Failed to add a keyboard to the seat")?;
         seat.add_pointer();
 
         Ok(Self {
+            // Blur is advertised unconditionally: capability describes what
+            // the compositor *supports*, and a renderer whose blur shaders
+            // fail to compile degrades to drawing windows without the effect,
+            // which the protocol explicitly allows ("subject to compositor
+            // policies").
+            background_effect_state: BackgroundEffectState::new::<State>(
+                display,
+                BackgroundEffectCapability::Blur,
+            ),
             compositor_state: CompositorState::new::<State>(display),
             data_device_state: DataDeviceState::new::<State>(display),
             // TODO: `create_global` once the render node's formats are known.

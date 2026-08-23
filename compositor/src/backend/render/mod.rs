@@ -40,10 +40,11 @@ use smithay::backend::{
 
 use crate::{
     rendering::{
+        blur::BackdropSource,
         decorate::TileDecorator,
         rounded::{GlesDecorator, MultiDecorator},
     },
-    shaders::rounded_corner::RoundedCornerShader,
+    shaders::{blur::BlurShaders, rounded_corner::RoundedCornerShader},
 };
 
 /// The GLES-over-GBM graphics stack every GPU gets on the KMS backend.
@@ -129,22 +130,24 @@ where
     type Decorator: TileDecorator<Self>;
 
     /// Compiles this renderer's shader programs. Failure is *reported*, not
-    /// fatal: effects degrade (square corners), windows still draw.
+    /// fatal: effects degrade (square corners, no blur), windows still draw.
     fn compile_shaders(&mut self) -> Result<(), RenderInitError>;
 
-    /// A fresh decorator for one output's render pass.
-    fn decorator(&mut self) -> Self::Decorator;
+    /// A fresh decorator for one output's render pass. `backdrop` is the
+    /// output's blurred scene for this frame, if the backend produced one.
+    fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator;
 }
 
 impl CrownRenderer for GlesRenderer {
     type Decorator = GlesDecorator;
 
     fn compile_shaders(&mut self) -> Result<(), RenderInitError> {
-        RoundedCornerShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
+        RoundedCornerShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        BlurShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 
-    fn decorator(&mut self) -> Self::Decorator {
-        GlesDecorator
+    fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator {
+        GlesDecorator::new(backdrop)
     }
 }
 
@@ -152,14 +155,15 @@ impl<'render> CrownRenderer for KmsRenderer<'render> {
     type Decorator = MultiDecorator;
 
     fn compile_shaders(&mut self) -> Result<(), RenderInitError> {
-        // The program lands in the GLES renderer's EGL user data, so it
-        // persists per GPU, not per `MultiRenderer` instance.
+        // The programs land in the GLES renderer's EGL user data, so they
+        // persist per GPU, not per `MultiRenderer` instance.
         RoundedCornerShader::init(self.as_mut())
-            .map_err(|err| RenderInitError::Shader(err.to_string()))
+            .map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        BlurShaders::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 
-    fn decorator(&mut self) -> Self::Decorator {
-        MultiDecorator
+    fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator {
+        MultiDecorator::new(backdrop)
     }
 }
 

@@ -1,6 +1,6 @@
 use smithay::{
-    backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent},
-    input::keyboard::{keysyms, FilterResult, KeysymHandle},
+    backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent, Keycode},
+    input::keyboard::{keysyms, FilterResult, KeysymHandle, XkbConfig},
     utils::SERIAL_COUNTER,
 };
 
@@ -9,11 +9,6 @@ use crate::{
     state::State,
 };
 
-/// The VT a key press asks for, if any.
-///
-/// The stock keymap puts `XF86Switch_VT_1..12` on F1-F12 at the Ctrl+Alt level
-/// (`srvr_ctrl(fkey2vt)`), so this reads the *modified* symbol — the raw one is
-/// still plain `F2`. A keymap without that level simply never yields a match.
 fn vt_switch_target(handle: &KeysymHandle<'_>) -> Option<i32> {
     handle.modified_syms().iter().find_map(|sym| {
         let raw = sym.raw();
@@ -29,9 +24,23 @@ impl State {
             return;
         };
 
+        let config = XkbConfig {
+            ..Default::default()
+        };
+        keyboard.set_xkb_config(self, config);
+
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time_msec(&event);
-        let code = event.key_code();
+        let mut code = event.key_code();
+
+        if code.raw() == 9 {
+            code = Keycode::new(66);
+        }
+
+        if code.raw() == 66 {
+            code = Keycode::new(9);
+        }
+
         let key_state = event.state();
 
         // TODO: also bypass while the session is locked, once the shell tracks

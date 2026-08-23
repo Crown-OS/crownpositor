@@ -9,6 +9,30 @@ pub use rules::{ResolvedRule, WindowRules};
 pub use startup::split_argv;
 pub use system::System;
 
+/// Background-blur settings, in the units the renderer wants them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Blur {
+    pub enabled: bool,
+    /// Downsample depth of the blur pyramid, clamped to a sane range by the
+    /// renderer.
+    pub passes: u8,
+    /// Kawase tap spread in (level-local) pixels.
+    pub size: f32,
+    /// Dither strength hiding gradient banding, 0 to 1.
+    pub noise: f32,
+}
+
+impl Blur {
+    fn from_system(system: &System) -> Self {
+        Self {
+            enabled: system.blur,
+            passes: system.blur_passes.min(u16::from(u8::MAX)) as u8,
+            size: system.blur_size.max(0.0) as f32,
+            noise: system.blur_noise.clamp(0.0, 1.0) as f32,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Config {
     pub compositor: Compositor,
@@ -19,6 +43,7 @@ pub struct Config {
     pub gaps_outer: i32,
     pub border_width: i32,
     pub border_radius: i32,
+    pub blur: Blur,
     pub focus_follows_mouse: bool,
     pub default_layout: LayoutMode,
     pub animation: AnimationProfile,
@@ -56,6 +81,7 @@ impl Config {
             gaps_outer: system.gaps_outer as i32,
             border_width: system.border_width as i32,
             border_radius: system.border_radius as i32,
+            blur: Blur::from_system(&system),
             animation: system.animations,
             focus_follows_mouse: compositor.focus_follows_mouse,
             default_layout: compositor.layout,
