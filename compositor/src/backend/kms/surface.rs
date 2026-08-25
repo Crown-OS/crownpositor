@@ -322,13 +322,8 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         input,
         ..
     } = state;
-    let radius = config.current.border_radius as f32;
-    let blur_config = BlurConfig {
-        enabled: config.current.blur.enabled,
-        passes: config.current.blur.passes,
-        offset: config.current.blur.size,
-        noise: config.current.blur.noise,
-    };
+    let radius = config.current.appearance.border_radius as f32;
+    let blur_config = BlurConfig::from(&config.current.appearance);
     let Some(kms) = backend.kms() else {
         return;
     };

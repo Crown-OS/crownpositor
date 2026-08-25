@@ -7,7 +7,7 @@ use std::{os::unix::process::CommandExt, process::Stdio};
 
 use smithay::utils::Serial;
 
-use config::Config;
+use config::{Config, Update};
 
 use crate::{
     animations::spring::SpringProfile,
@@ -31,10 +31,11 @@ impl State {
 
             Action::ReloadConfig => {
                 self.apply_config(Config::load());
-                return;
             }
 
-            Action::Spawn(argv) => self.spawn(&argv),
+            Action::Spawn(argv) => {
+                self.spawn(&argv);
+            }
 
             Action::SwitchVt(vt) => {
                 // Nothing local changes: the session notifier will pause us and
@@ -144,29 +145,61 @@ impl State {
     /// Window rules are deliberately not retro-applied: a window floated by hand
     /// must not be re-tiled because an unrelated rule was edited.
     pub fn apply_config(&mut self, new: Config) {
-        self.input.bindings = Bindings::from_config(&new.compositor);
+        self.input.bindings = Bindings::from_config(&new.keybinds);
 
-        self.shell.set_global_layout(new.default_layout.into());
+        self.shell.set_global_layout(new.compositor.layout.into());
         self.shell.set_gaps(Gaps {
-            inner: new.gaps_inner,
-            outer: new.gaps_outer,
+            inner: new.appearance.gaps_inner.into(),
+            outer: new.appearance.gaps_outer.into(),
         });
         self.shell
-            .set_workspace_animation(SpringProfile::from_config(new.animation));
+            .set_workspace_animation(SpringProfile::from_config(new.appearance.animations));
 
         self.config.current = new;
         self.shell.apply_output_settings(&self.config.current);
         // The next refresh turns the dirty bits above into one relayout.
     }
 
-    /// Runs the `compositor.startup` entries — bar, wallpaper, notification
-    /// daemon — in file order.
-    ///
-    /// Called once, from [`crate::run`], after the backend has come up and the
-    /// socket is in the environment: a layer-shell client that connects before
-    /// there is an output to anchor to has nowhere to put itself. Deliberately
-    /// not reached from [`Self::apply_config`], so a reload does not stack up a
-    /// second copy of everything.
+    /// One watched key changed, so only the component that owns it re-runs.
+    pub fn apply_update(&mut self, update: Update) {
+        tracing::info!(?update, "config changed");
+        let config = &mut self.config.current;
+
+        match update {
+            Update::Layout(layout) => {
+                config.compositor.layout = layout;
+                self.shell.set_global_layout(layout.into());
+            }
+            Update::FocusFollowsMouse(follows) => config.compositor.focus_follows_mouse = follows,
+            Update::WindowRules(rules) => config.window_rules = rules,
+
+            Update::Outputs(outputs) => {
+                config.compositor.outputs = outputs;
+                self.shell.apply_output_settings(&self.config.current);
+            }
+            Update::Scale(scale) => {
+                config.display.scale = scale;
+                self.shell.apply_output_settings(&self.config.current);
+            }
+
+            Update::Keybinds(keybinds) => {
+                self.input.bindings = Bindings::from_config(&keybinds);
+                config.keybinds = keybinds;
+            }
+            Update::Appearance(appearance) => {
+                self.shell.set_gaps(Gaps {
+                    inner: appearance.gaps_inner.into(),
+                    outer: appearance.gaps_outer.into(),
+                });
+                self.shell
+                    .set_workspace_animation(SpringProfile::from_config(appearance.animations));
+                config.appearance = appearance;
+            }
+        }
+
+        self.queue_redraw();
+    }
+
     pub fn run_startup(&self) {
         for argv in config::startup::commands(&self.config.current.compositor.startup) {
             tracing::info!(command = %argv.join(" "), "startup");

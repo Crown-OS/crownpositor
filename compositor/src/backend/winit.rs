@@ -175,7 +175,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         ..
     } = state;
     // Physical pixels, because that is the space the shader works in.
-    let radius = config.current.border_radius as f32;
+    let radius = config.current.appearance.border_radius as f32;
 
     let Some(winit) = backend.winit() else {
         return Ok(());
@@ -197,12 +197,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
     // The blur pre-pass renders offscreen, so it has to run before the main
     // framebuffer is bound. Skipped — a cheap scan — while no visible window
     // has a blur region committed.
-    let blur_config = BlurConfig {
-        enabled: config.current.blur.enabled,
-        passes: config.current.blur.passes,
-        offset: config.current.blur.size,
-        noise: config.current.blur.noise,
-    };
+    let blur_config = BlurConfig::from(&config.current.appearance);
     let backdrop = {
         let Some(monitor) = shell.monitor(&winit.output) else {
             return Ok(());

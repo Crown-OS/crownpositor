@@ -1,6 +1,6 @@
 use smithay::{
     backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent, Keycode},
-    input::keyboard::{keysyms, FilterResult, KeysymHandle, XkbConfig},
+    input::keyboard::{keysyms, FilterResult, KeysymHandle},
     utils::SERIAL_COUNTER,
 };
 
@@ -23,11 +23,6 @@ impl State {
         let Some(keyboard) = self.wayland.seat.get_keyboard() else {
             return;
         };
-
-        let config = XkbConfig {
-            ..Default::default()
-        };
-        keyboard.set_xkb_config(self, config);
 
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time_msec(&event);

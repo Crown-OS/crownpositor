@@ -45,6 +45,8 @@ use smithay::{
     wayland::{compositor::with_states, shell::wlr_layer::Layer},
 };
 
+use config::Appearance;
+
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     protocols::background_effect::BlurRegionCachedState,
@@ -65,6 +67,19 @@ pub struct BlurConfig {
     pub offset: f32,
     /// Dither strength applied when compositing, to hide gradient banding.
     pub noise: f32,
+}
+
+impl From<&Appearance> for BlurConfig {
+    /// The file speaks in user units; the pipeline wants what the shader can
+    /// hold, so this is where the narrowing and the sanity clamps happen.
+    fn from(appearance: &Appearance) -> Self {
+        Self {
+            enabled: appearance.blur,
+            passes: appearance.blur_passes.min(u8::MAX.into()) as u8,
+            offset: appearance.blur_size.max(0.0) as f32,
+            noise: appearance.blur_noise.clamp(0.0, 1.0) as f32,
+        }
+    }
 }
 
 impl Default for BlurConfig {

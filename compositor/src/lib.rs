@@ -30,7 +30,6 @@ pub fn run() -> anyhow::Result<()> {
     tracing::info!(backend = state.backend.name(), "backend started");
 
     // Point child processes at our socket rather than the host compositor.
-    //
     // Safety: no other thread is reading the environment yet.
     unsafe { std::env::set_var("WAYLAND_DISPLAY", &state.common.socket_name) };
     tracing::info!(socket = ?state.common.socket_name, "crownpositor is running");

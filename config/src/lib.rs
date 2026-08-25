@@ -1,97 +1,40 @@
 pub mod rules;
 pub mod startup;
-pub mod system;
+pub mod watch;
 
 pub use crownos_config::schema::{
     AnimationProfile, Binding, Compositor, LayoutMode, OutputSetting, OutputTransform, WindowRule,
 };
+pub use crownos_config::{Appearance, Display, DisplayScale, Keybinds};
 pub use rules::{ResolvedRule, WindowRules};
 pub use startup::split_argv;
-pub use system::System;
+pub use watch::{Update, Watch};
 
-/// Background-blur settings, in the units the renderer wants them.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Blur {
-    pub enabled: bool,
-    /// Downsample depth of the blur pyramid, clamped to a sane range by the
-    /// renderer.
-    pub passes: u8,
-    /// Kawase tap spread in (level-local) pixels.
-    pub size: f32,
-    /// Dither strength hiding gradient banding, 0 to 1.
-    pub noise: f32,
-}
+use crownos_config::load;
 
-impl Blur {
-    fn from_system(system: &System) -> Self {
-        Self {
-            enabled: system.blur,
-            passes: system.blur_passes.min(u16::from(u8::MAX)) as u8,
-            size: system.blur_size.max(0.0) as f32,
-            noise: system.blur_noise.clamp(0.0, 1.0) as f32,
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Config {
     pub compositor: Compositor,
-    pub system: System,
-    pub rules: WindowRules,
-
-    pub gaps_inner: i32,
-    pub gaps_outer: i32,
-    pub border_width: i32,
-    pub border_radius: i32,
-    pub blur: Blur,
-    pub focus_follows_mouse: bool,
-    pub default_layout: LayoutMode,
-    pub animation: AnimationProfile,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self::compile(Compositor::default(), System::default())
-    }
+    pub keybinds: Keybinds,
+    pub appearance: Appearance,
+    pub display: Display,
+    pub window_rules: WindowRules,
 }
 
 impl Config {
     /// Reads every section the compositor cares about.
     pub fn load() -> Self {
-        Self::compile(crownos_config::load(Compositor::SECTION), System::load())
-    }
+        let compositor: Compositor = load(Compositor::SECTION);
 
-    /// Re-reads only the shared settings, keeping the compositor section.
-    pub fn reload_system(&self) -> Self {
-        Self::compile(self.compositor.clone(), System::load())
-    }
-
-    /// Re-reads only the compositor section, keeping the shared settings.
-    pub fn reload_compositor(&self) -> Self {
-        Self::compile(
-            crownos_config::load(Compositor::SECTION),
-            self.system.clone(),
-        )
-    }
-
-    pub fn compile(compositor: Compositor, system: System) -> Self {
-        let rules = WindowRules::compile(&compositor.window_rules);
         Self {
-            gaps_inner: system.gaps_inner as i32,
-            gaps_outer: system.gaps_outer as i32,
-            border_width: system.border_width as i32,
-            border_radius: system.border_radius as i32,
-            blur: Blur::from_system(&system),
-            animation: system.animations,
-            focus_follows_mouse: compositor.focus_follows_mouse,
-            default_layout: compositor.layout,
-            rules,
+            window_rules: WindowRules::compile(&compositor.window_rules),
             compositor,
-            system,
+            keybinds: load(Keybinds::SECTION),
+            appearance: load(Appearance::SECTION),
+            display: load(Display::SECTION),
         }
     }
 
-    /// Matched on connector name first, `"MAKE MODEL SERIAL"` identity second.
     pub fn output_setting(&self, connector: &str, identity: &str) -> Option<&OutputSetting> {
         self.compositor
             .outputs
@@ -100,30 +43,18 @@ impl Config {
             .or_else(|| self.compositor.outputs.iter().find(|s| s.name == identity))
     }
 
-    /// The scale for an output: its own override, else the system default.
-    pub fn scale_for(&self, connector: &str, identity: &str) -> f64 {
-        self.output_setting(connector, identity)
-            .and_then(|setting| setting.scale)
-            .unwrap_or_else(|| self.system.scale_factor())
-    }
-
-    /// Default window opacity, unless a rule says otherwise.
+    /// Default window opacity, unless a rule says otherwise. `transparency` is
+    /// how see-through the user wants windows, so opacity is its complement.
     pub fn opacity_for(&self, rule: &ResolvedRule) -> f32 {
-        rule.opacity.unwrap_or_else(|| self.system.opacity())
+        rule.opacity
+            .unwrap_or_else(|| 1.0 - self.appearance.transparency.clamp(0.0, 1.0) as f32)
     }
 
     /// Corner radius for a window, unless a rule says otherwise.
     pub fn corner_radius_for(&self, rule: &ResolvedRule) -> i32 {
         rule.corner_radius
-            .map(i32::from)
-            .unwrap_or(self.border_radius)
-    }
-
-    /// Every section a live-reload watcher should subscribe to.
-    pub fn sections() -> Vec<&'static str> {
-        let mut sections = vec![Compositor::SECTION];
-        sections.extend(System::sections());
-        sections
+            .unwrap_or(self.appearance.border_radius)
+            .into()
     }
 }
 
@@ -131,73 +62,83 @@ impl Config {
 mod tests {
     use super::*;
 
-    #[test]
-    fn per_output_scale_overrides_the_system_default() {
-        let config = Config::compile(
-            Compositor {
-                outputs: vec![OutputSetting {
-                    name: "eDP-1".into(),
-                    scale: Some(2.0),
-                    ..Default::default()
-                }],
+    fn config() -> Config {
+        Config {
+            compositor: Compositor {
+                outputs: vec![
+                    OutputSetting {
+                        name: "eDP-1".into(),
+                        scale: Some(2.0),
+                        ..Default::default()
+                    },
+                    OutputSetting {
+                        name: "Dell U2720Q ABC123".into(),
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             },
-            System::default(),
-        );
-
-        assert_eq!(config.scale_for("eDP-1", "Some Panel"), 2.0);
-        assert_eq!(
-            config.scale_for("HDMI-1", "Other"),
-            config.system.scale_factor(),
-            "an output with no override follows the system setting"
-        );
+            ..Config::default()
+        }
     }
 
     #[test]
     fn an_output_matches_on_its_edid_identity_too() {
-        let config = Config::compile(
-            Compositor {
-                outputs: vec![OutputSetting {
-                    name: "DELL U2720Q ABC123".into(),
-                    scale: Some(1.5),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            System::default(),
+        let config = config();
+
+        assert_eq!(
+            config
+                .output_setting("eDP-1", "Some Panel XYZ")
+                .unwrap()
+                .scale,
+            Some(2.0)
         );
-        // Connector names are reassigned across a dock replug; the identity is not.
-        assert_eq!(config.scale_for("DP-3", "DELL U2720Q ABC123"), 1.5);
+        assert_eq!(
+            config
+                .output_setting("DP-3", "Dell U2720Q ABC123")
+                .unwrap()
+                .name,
+            "Dell U2720Q ABC123"
+        );
+        assert!(config.output_setting("DP-3", "Unknown").is_none());
     }
 
     #[test]
-    fn a_rule_overrides_system_opacity() {
-        let config = Config::compile(Compositor::default(), System::default());
+    fn opacity_is_the_complement_of_transparency() {
+        let config = Config {
+            appearance: Appearance {
+                transparency: 0.25,
+                ..Default::default()
+            },
+            ..Config::default()
+        };
 
-        let default = ResolvedRule::default();
-        assert_eq!(config.opacity_for(&default), config.system.opacity());
+        assert!((config.opacity_for(&ResolvedRule::default()) - 0.75).abs() < f32::EPSILON);
+    }
 
-        let ruled = ResolvedRule {
+    #[test]
+    fn a_rule_overrides_the_global_defaults() {
+        let config = config();
+        let rule = ResolvedRule {
             opacity: Some(0.5),
+            corner_radius: Some(16),
             ..Default::default()
         };
-        assert_eq!(config.opacity_for(&ruled), 0.5);
+
+        assert_eq!(config.opacity_for(&rule), 0.5);
+        assert_eq!(config.corner_radius_for(&rule), 16);
     }
 
     #[test]
     fn corner_radius_falls_back_to_the_global_border_radius() {
-        let config = Config::compile(Compositor::default(), System::default());
-        assert_eq!(
-            config.corner_radius_for(&ResolvedRule::default()),
-            config.border_radius
-        );
-    }
+        let config = Config {
+            appearance: Appearance {
+                border_radius: 12,
+                ..Default::default()
+            },
+            ..Config::default()
+        };
 
-    #[test]
-    fn the_watch_list_covers_both_layers() {
-        let sections = Config::sections();
-        assert!(sections.contains(&Compositor::SECTION));
-        assert!(sections.contains(&"appearance"));
-        assert!(sections.contains(&"display"));
+        assert_eq!(config.corner_radius_for(&ResolvedRule::default()), 12);
     }
 }

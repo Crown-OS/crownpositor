@@ -8,7 +8,7 @@ use crate::animations::velocity::VelocityTracker;
 /// Travel before a swipe commits to an axis (~2 mm).
 const AXIS_LOCK_THRESHOLD: f64 = 10.0;
 /// Travel needed for a swipe to fire rather than snap back (~25 mm).
-const COMMIT_DISTANCE: f64 = 1000.0;
+const COMMIT_DISTANCE: f64 = 200.0;
 /// Release speed that fires a swipe on its own (~10 cm/s).
 const COMMIT_VELOCITY: f64 = 4000.0;
 

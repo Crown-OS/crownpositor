@@ -42,7 +42,7 @@ pub struct InputState {
 impl InputState {
     pub fn new(config: &Config) -> Self {
         Self {
-            bindings: Bindings::from_config(&config.compositor),
+            bindings: Bindings::from_config(&config.keybinds),
             gesture_bindings: GestureBindings::defaults(),
             gesture: GestureState::new(),
             intercepted: HashSet::new(),

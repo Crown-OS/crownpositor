@@ -11,9 +11,7 @@ pub mod workspace_switch;
 use std::{collections::HashMap, time::Instant};
 
 use smithay::{
-    desktop::{
-        layer_map_for_output, space::SpaceElement, PopupManager, Window, WindowSurfaceType,
-    },
+    desktop::{layer_map_for_output, space::SpaceElement, PopupManager, Window, WindowSurfaceType},
     output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
@@ -32,7 +30,9 @@ use crate::{
     animations::spring::SpringProfile,
     layout::{Direction, Gaps, LayoutKind, LayoutOp},
     shell::{
-        monitor::{output_from_descriptor, output_id, ConnectorId, Monitor, OutputConfig, OutputDescriptor},
+        monitor::{
+            output_from_descriptor, output_id, ConnectorId, Monitor, OutputConfig, OutputDescriptor,
+        },
         tile::{Tile, WindowState},
         transaction::Transaction,
         workspace::{Workspace, WorkspaceRef},
@@ -129,7 +129,6 @@ pub struct Shell {
     pub layer_shell: WlrLayerShellState,
     pub popups: PopupManager,
 
-    /// The window currently carrying `xdg_toplevel.state.activated`.
     pub activated: Option<Window>,
 
     global_layout: LayoutKind,
@@ -158,12 +157,12 @@ impl Shell {
             layer_shell: WlrLayerShellState::new::<State>(display),
             popups: PopupManager::default(),
             activated: None,
-            global_layout: config.default_layout.into(),
+            global_layout: config.compositor.layout.into(),
             gaps: Gaps {
-                inner: config.gaps_inner,
-                outer: config.gaps_outer,
+                inner: config.appearance.gaps_inner.into(),
+                outer: config.appearance.gaps_outer.into(),
             },
-            animation: SpringProfile::from_config(config.animation),
+            animation: SpringProfile::from_config(config.appearance.animations),
             unmapped: Vec::new(),
             transactions: Vec::new(),
             cascade: 0,
@@ -433,7 +432,6 @@ impl Shell {
 
         self.monitors
             .sort_by_key(|monitor| monitor.config().position.x);
-
     }
 
     /// Re-derives one output's usable area from its layer map.
@@ -449,7 +447,7 @@ impl Shell {
 
     /// Pushes the per-output half of the config onto every monitor.
     pub fn apply_output_settings(&mut self, config: &Config) {
-        let fallback = config.system.scale_factor();
+        let fallback = config.display.scale.factor();
         let mut changed = false;
 
         for index in 0..self.monitors.len() {
@@ -492,7 +490,8 @@ impl Shell {
 
     pub fn untrack_layer(&mut self, surface: &WlSurface) -> Option<Output> {
         let id = self.layer_to_output.remove(surface)?;
-        self.monitor_by_id(id).map(|monitor| monitor.output().clone())
+        self.monitor_by_id(id)
+            .map(|monitor| monitor.output().clone())
     }
 
     pub fn output_for_layer(&self, surface: &WlSurface) -> Option<&Output> {
@@ -696,8 +695,13 @@ impl Shell {
         })
     }
 
-    pub fn resolve_rules(&self, app_id: Option<&str>, title: Option<&str>, config: &Config) -> ResolvedRule {
-        config.rules.resolve(app_id, title)
+    pub fn resolve_rules(
+        &self,
+        app_id: Option<&str>,
+        title: Option<&str>,
+        config: &Config,
+    ) -> ResolvedRule {
+        config.window_rules.resolve(app_id, title)
     }
 
     /// The topmost window at a global logical point, and where it sits.
@@ -713,25 +717,32 @@ impl Shell {
         let origin = monitor.geometry().loc;
         let output_local = location - origin.to_f64();
 
-        monitor.visible_workspaces().find_map(|(workspace, offset)| {
-            let local = output_local - offset;
-            let at = |tile: &Tile| (tile.id(), origin + (tile.target().loc.to_f64() + offset).to_i32_round());
+        monitor
+            .visible_workspaces()
+            .find_map(|(workspace, offset)| {
+                let local = output_local - offset;
+                let at = |tile: &Tile| {
+                    (
+                        tile.id(),
+                        origin + (tile.target().loc.to_f64() + offset).to_i32_round(),
+                    )
+                };
 
-            // A fullscreen window swallows every click on its workspace.
-            if let Some(tile) = workspace.fullscreen().and_then(|id| workspace.tile(id)) {
-                return Some(at(tile));
-            }
+                // A fullscreen window swallows every click on its workspace.
+                if let Some(tile) = workspace.fullscreen().and_then(|id| workspace.tile(id)) {
+                    return Some(at(tile));
+                }
 
-            workspace
-                .stacking_order()
-                .find(|tile| {
-                    tile.target().to_f64().contains(local)
-                        && tile
-                            .window()
-                            .is_in_input_region(&(local - tile.target().loc.to_f64()))
-                })
-                .map(at)
-        })
+                workspace
+                    .stacking_order()
+                    .find(|tile| {
+                        tile.target().to_f64().contains(local)
+                            && tile
+                                .window()
+                                .is_in_input_region(&(local - tile.target().loc.to_f64()))
+                    })
+                    .map(at)
+            })
     }
 
     pub fn surface_under(
@@ -873,7 +884,10 @@ impl Shell {
         let Some(id) = self.focused_window_id() else {
             return false;
         };
-        let area = self.location(id).and_then(|at| self.workspace(at)).map(Workspace::area);
+        let area = self
+            .location(id)
+            .and_then(|at| self.workspace(at))
+            .map(Workspace::area);
         let cascade = self.next_cascade();
 
         let Some(area) = area else { return false };
@@ -1222,7 +1236,11 @@ impl Shell {
             let tile = workspace
                 .tile(*id)
                 .unwrap_or_else(|| panic!("{id} indexed but not in its workspace"));
-            assert_eq!(tile.surface(), surface, "{id} indexed under the wrong surface");
+            assert_eq!(
+                tile.surface(),
+                surface,
+                "{id} indexed under the wrong surface"
+            );
         }
 
         let stored: usize = self

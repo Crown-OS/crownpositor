@@ -2,9 +2,10 @@
 
 use std::{collections::HashMap, fmt, str::FromStr};
 
+use crownos_config::Keybinds;
 use smithay::input::keyboard::{keysyms, Keysym, KeysymHandle, ModifiersState};
 
-use config::{Binding, Compositor};
+use config::Binding;
 
 #[cfg(test)]
 use crate::input::shortcuts::action::Direction;
@@ -205,13 +206,13 @@ impl Bindings {
         bindings
     }
 
-    pub fn from_config(config: &Compositor) -> Self {
-        if config.keybinds.is_empty() {
+    pub fn from_config(config: &Keybinds) -> Self {
+        if config.custom_keybinds.is_empty() {
             return Self::defaults();
         }
 
         let mut bindings = Self::default();
-        for Binding { keys, action } in &config.keybinds {
+        for Binding { keys, action } in &config.custom_keybinds {
             let chord = match keys.parse::<Chord>() {
                 Ok(chord) => chord,
                 Err(err) => {
@@ -436,7 +437,7 @@ mod tests {
 
     #[test]
     fn empty_config_falls_back_to_defaults() {
-        let config = Compositor::default();
+        let config = Keybinds::default();
         assert!(
             !Bindings::from_config(&config).is_empty(),
             "an empty keybinds list means defaults, not an empty table"
@@ -445,8 +446,8 @@ mod tests {
 
     #[test]
     fn explicit_none_binds_nothing() {
-        let config = Compositor {
-            keybinds: vec![Binding {
+        let config = Keybinds {
+            custom_keybinds: vec![Binding {
                 keys: "None".into(),
                 action: "quit".into(),
             }],
@@ -460,8 +461,8 @@ mod tests {
 
     #[test]
     fn one_bad_row_does_not_discard_the_others() {
-        let config = Compositor {
-            keybinds: vec![
+        let config = Keybinds {
+            custom_keybinds: vec![
                 Binding {
                     keys: "Supper+Q".into(),
                     action: "quit".into(),
