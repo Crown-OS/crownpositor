@@ -1,9 +1,3 @@
-//! Placement policy for windows the layout does not position.
-//!
-//! [`NoTiling`] is the algorithm a `Floating` workspace uses: every window keeps
-//! whatever rect it already has. [`place`] is the separate question of where a
-//! window that has never been placed should go.
-
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::{
@@ -29,8 +23,7 @@ impl LayoutAlgorithm for NoTiling {
     /// these with each window's own `floating_rect`.
     fn layout(&mut self, input: &LayoutInput<'_>, out: &mut LayoutOutput) {
         out.clear();
-        out.rects
-            .extend(input.tiles.iter().map(|_| input.area));
+        out.rects.extend(input.tiles.iter().map(|_| input.area));
     }
 
     fn apply(&mut self, _op: LayoutOp, _input: &LayoutInput<'_>) -> bool {

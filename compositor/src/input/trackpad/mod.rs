@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// The finger count that drives the workspace viewport directly.
-const SWITCH_FINGERS: Fingers = Fingers::Four;
+const SWITCH_FINGERS: Fingers = Fingers::Three;
 
 /// Unaccelerated units of finger travel that slide the viewport one workspace:
 /// roughly five centimetres, at libinput's 1000 dpi normalization. Fixed, so a

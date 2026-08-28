@@ -5,7 +5,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
         wayland_server::protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
     },
-    utils::{Logical, Serial, Size, SERIAL_COUNTER},
+    utils::{Logical, Serial, Size},
     wayland::{
         compositor::with_states,
         shell::xdg::{
@@ -16,7 +16,6 @@ use smithay::{
 };
 
 use crate::{
-    handlers::seat::KeyboardFocusTarget,
     layout::floating,
     shell::tile::{Tile, WindowState},
     state::State,
@@ -34,7 +33,6 @@ impl XdgShellHandler for State {
     /// `parent()` and the size hints are all unset — and every auto-float
     /// decision depends on exactly those.
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let wl_surface = surface.wl_surface().clone();
         let window = Window::new_wayland_window(surface.clone());
 
         // Let the client propose its own size; the layout overrides it on the
@@ -48,7 +46,8 @@ impl XdgShellHandler for State {
         });
         surface.send_configure();
 
-        self.shell.push_unmapped(window, wl_surface);
+        self.shell
+            .push_unmapped(window, surface.wl_surface().clone());
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {

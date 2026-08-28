@@ -19,7 +19,7 @@ use smithay::{
     },
     utils::{Logical, Point, Rectangle, Size},
     wayland::shell::{
-        wlr_layer::WlrLayerShellState,
+        wlr_layer::{Layer, WlrLayerShellState},
         xdg::{ToplevelStateSet, XdgShellState},
     },
 };
@@ -28,6 +28,7 @@ use config::{Config, ResolvedRule};
 
 use crate::{
     animations::spring::SpringProfile,
+    handlers::seat::PointerFocusTarget,
     layout::{Direction, Gaps, LayoutKind, LayoutOp},
     shell::{
         monitor::{
@@ -94,6 +95,48 @@ fn toggle(states: &mut ToplevelStateSet, state: XdgState, on: bool) {
     } else {
         states.unset(state);
     }
+}
+
+/// The topmost surface on any of `layers` at an output-local point, and the
+/// global origin of that surface.
+///
+/// `layers` is searched in the order given, and each layer topmost-first — the
+/// same order `rendering::layer_elements` stacks them in, which is what makes
+/// the surface that answers a click the one drawn under it.
+fn layer_under(
+    output: &Output,
+    origin: Point<i32, Logical>,
+    location: Point<f64, Logical>,
+    layers: &[Layer],
+) -> Option<(PointerFocusTarget, Point<f64, Logical>)> {
+    // A second guard for the same output deadlocks, so keep the scope tight.
+    let map = layer_map_for_output(output);
+
+    for kind in layers {
+        for layer in map.layers_on(*kind).rev() {
+            // The renderer draws the tree at `layer_geometry`, so that is the
+            // origin the hit test has to measure from for the two to agree.
+            let Some(geometry) = map.layer_geometry(layer) else {
+                continue;
+            };
+            let Some((surface, offset)) = layer.surface_under(
+                location - geometry.loc.to_f64(),
+                WindowSurfaceType::ALL,
+            ) else {
+                continue;
+            };
+
+            return Some((
+                PointerFocusTarget::LayerShell {
+                    layer: layer.clone(),
+                    surface,
+                },
+                (origin + geometry.loc + offset).to_f64(),
+            ));
+        }
+    }
+
+    None
 }
 
 /// Which workspace on which output a window lives on.
@@ -745,15 +788,44 @@ impl Shell {
             })
     }
 
-    pub fn surface_under(
+    /// What the pointer is over at a global logical point, and where that
+    /// surface's origin sits in the same space.
+    ///
+    /// Walks the scene in the order `rendering::output_elements` builds it —
+    /// Overlay and Top layers, then the workspaces, then Bottom and Background
+    /// — so what answers a click is what is drawn under it. A miss at one level
+    /// falls through to the next rather than swallowing the event: a layer
+    /// surface anchored across the whole output is usually transparent, and
+    /// input-region-less, over most of it.
+    pub fn pointer_focus_under(
         &self,
         location: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+    ) -> Option<(PointerFocusTarget, Point<f64, Logical>)> {
+        let monitor = self.monitor_at(location)?;
+        let output = monitor.output();
+        let origin = monitor.geometry().loc;
+        let local = location - origin.to_f64();
+
+        layer_under(output, origin, local, &[Layer::Overlay, Layer::Top])
+            .or_else(|| self.window_under_pointer(location))
+            .or_else(|| layer_under(output, origin, local, &[Layer::Bottom, Layer::Background]))
+    }
+
+    /// The window half of [`Self::pointer_focus_under`]: which toplevel the
+    /// point lands in, and which surface of its tree — a subsurface or a popup
+    /// just as readily as the toplevel itself.
+    fn window_under_pointer(
+        &self,
+        location: Point<f64, Logical>,
+    ) -> Option<(PointerFocusTarget, Point<f64, Logical>)> {
         let (id, window_location) = self.window_under(location)?;
-        let window = self.tile(id)?.window();
-        window
-            .surface_under(location - window_location.to_f64(), WindowSurfaceType::ALL)
-            .map(|(surface, offset)| (surface, (offset + window_location).to_f64()))
+        let window = self.tile(id)?.window().clone();
+        let (surface, offset) =
+            window.surface_under(location - window_location.to_f64(), WindowSurfaceType::ALL)?;
+        Some((
+            PointerFocusTarget::Window { window, surface },
+            (offset + window_location).to_f64(),
+        ))
     }
 
     // ---- actions ----

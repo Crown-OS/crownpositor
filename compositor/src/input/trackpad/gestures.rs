@@ -6,7 +6,7 @@ use crate::animations::velocity::VelocityTracker;
 // ~39 units are one millimetre of finger travel.
 
 /// Travel before a swipe commits to an axis (~2 mm).
-const AXIS_LOCK_THRESHOLD: f64 = 10.0;
+const AXIS_LOCK_THRESHOLD: f64 = 0.0;
 /// Travel needed for a swipe to fire rather than snap back (~25 mm).
 const COMMIT_DISTANCE: f64 = 200.0;
 /// Release speed that fires a swipe on its own (~10 cm/s).

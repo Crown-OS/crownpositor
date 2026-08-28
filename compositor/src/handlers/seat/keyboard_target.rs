@@ -2,19 +2,18 @@ use std::borrow::Cow;
 
 use smithay::{
     backend::input::KeyState,
-    delegate_cursor_shape, delegate_seat,
     desktop::{LayerSurface, PopupKind, Window},
     input::{
-        keyboard::{KeyboardTarget, KeysymHandle, LedState, ModifiersState},
-        pointer::CursorImageStatus,
-        Seat, SeatHandler, SeatState,
+        keyboard::{KeyboardTarget, KeysymHandle, ModifiersState},
+        Seat,
     },
     reexports::wayland_server::{backend::ObjectId, protocol::wl_surface::WlSurface, Resource},
     utils::{IsAlive, Serial},
-    wayland::{seat::WaylandFocus, session_lock::LockSurface, tablet_manager::TabletSeatHandler},
+    wayland::{seat::WaylandFocus, session_lock::LockSurface},
 };
 
 use crate::state::State;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyboardFocusTarget {
     Window(Window),

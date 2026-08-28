@@ -1,29 +1,23 @@
 mod keyboard_target;
-// mod pointer_target;
-
-use std::borrow::Cow;
+mod pointer_target;
 
 use smithay::{
-    backend::input::KeyState,
     delegate_cursor_shape, delegate_seat,
-    desktop::{LayerSurface, PopupKind, Window},
-    input::{
-        keyboard::{KeyboardTarget, KeysymHandle, LedState, ModifiersState},
-        pointer::CursorImageStatus,
-        Seat, SeatHandler, SeatState,
-    },
-    reexports::wayland_server::{backend::ObjectId, protocol::wl_surface::WlSurface, Resource},
-    utils::{IsAlive, Serial},
-    wayland::{seat::WaylandFocus, session_lock::LockSurface, tablet_manager::TabletSeatHandler},
+    input::{keyboard::LedState, pointer::CursorImageStatus, Seat, SeatHandler, SeatState},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    wayland::tablet_manager::TabletSeatHandler,
 };
 
 use crate::state::State;
 pub use keyboard_target::KeyboardFocusTarget;
+pub use pointer_target::PointerFocusTarget;
 
 impl SeatHandler for State {
     type KeyboardFocus = KeyboardFocusTarget;
-    // TODO: needs its own target enum before pointer grabs and X11 surfaces land.
-    type PointerFocus = WlSurface;
+    type PointerFocus = PointerFocusTarget;
+    // TODO: nothing feeds touch yet. When it does it wants the pointer's target,
+    // not a bare surface: a tap has the same "which window did that land in?"
+    // question to answer as a click.
     type TouchFocus = WlSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {

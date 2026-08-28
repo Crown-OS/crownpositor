@@ -216,8 +216,6 @@ impl State {
         let mut command = std::process::Command::new(program);
         command
             .args(args)
-            .env("WAYLAND_DISPLAY", &self.common.socket_name)
-            .env_remove("DISPLAY")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
