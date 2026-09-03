@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use anyhow::Context;
 use calloop::LoopHandle;
 use smithay::{
-    input::{Seat, SeatState},
+    input::{Seat, SeatState, keyboard::XkbConfig},
     reexports::{
         wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDefaultMode,
         wayland_server::{
@@ -100,7 +100,18 @@ impl WaylandState {
         // TODO: track seats and their devices as they are hot-plugged.
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(display, "seat-0");
-        seat.add_keyboard(Default::default(), 200, 65)
+        // The swap lives in the keymap rather than in a keycode rewrite on the
+        // way in, so the map handed to clients says the same thing the events
+        // do: xkb resolves the keysyms, the Caps LED follows the key that now
+        // locks it, and nothing in the input path has to lie about which key
+        // was pressed.
+        // TODO: layout, variant and these options belong in the config, next to
+        // the repeat rate that is just as hardcoded.
+        let xkb = XkbConfig {
+            options: Some("caps:swapescape".to_owned()),
+            ..Default::default()
+        };
+        seat.add_keyboard(xkb, 200, 65)
             .with_context(|| "Failed to add a keyboard to the seat")?;
         seat.add_pointer();
 

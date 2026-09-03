@@ -244,6 +244,15 @@ impl State {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
+        // Set per child rather than process-wide, because an inherited
+        // `DISPLAY` from a host X session has to be *removed* when we have no
+        // X11 support of our own — otherwise every child quietly talks to
+        // somebody else's X server.
+        match self.xwayland.display_name() {
+            Some(display) => command.env("DISPLAY", display),
+            None => command.env_remove("DISPLAY"),
+        };
+
         // Safety: `setsid` is async-signal-safe and the only call between fork
         // and exec.
         unsafe {

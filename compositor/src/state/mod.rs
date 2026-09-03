@@ -13,7 +13,7 @@ pub use crate::state::{
     backend::BackendState, client::ClientState, common::CommonState, config::ConfigState,
     input::InputState, wayland::WaylandState,
 };
-use crate::{animations::spring::Clock, shell::Shell};
+use crate::{animations::spring::Clock, shell::Shell, xwayland::Xwayland};
 
 pub struct State {
     pub common: CommonState,
@@ -22,6 +22,7 @@ pub struct State {
     pub shell: Shell,
     pub input: InputState,
     pub config: ConfigState,
+    pub xwayland: Xwayland,
     /// Drives the springs. Owned here because it is per-compositor, not
     /// per-output — every output steps by the same wall-clock delta.
     pub clock: Clock,
@@ -64,6 +65,7 @@ impl State {
         let wayland =
             WaylandState::try_new(&common.display_handle, common.event_loop_handle.clone())?;
         let shell = Shell::try_new(&common.display_handle, &config.current)?;
+        let xwayland = Xwayland::start(&common.event_loop_handle);
 
         let mut state = Self {
             common,
@@ -72,6 +74,7 @@ impl State {
             shell,
             input,
             config,
+            xwayland,
             clock: Clock::new(),
         };
         // The global was created advertising everything the renderer can do;

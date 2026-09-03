@@ -9,6 +9,7 @@ mod shaders;
 mod shell;
 mod state;
 mod utils;
+mod xwayland;
 
 use anyhow::Context;
 use calloop::EventLoop;

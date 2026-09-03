@@ -1,5 +1,5 @@
 use smithay::{
-    backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent, Keycode},
+    backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent},
     input::keyboard::{FilterResult, KeysymHandle, keysyms},
     utils::SERIAL_COUNTER,
 };
@@ -26,16 +26,7 @@ impl State {
 
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time_msec(&event);
-        let mut code = event.key_code();
-
-        if code.raw() == 9 {
-            code = Keycode::new(66);
-        }
-
-        if code.raw() == 66 {
-            code = Keycode::new(9);
-        }
-
+        let code = event.key_code();
         let key_state = event.state();
 
         // TODO: also bypass while the session is locked, once the shell tracks
