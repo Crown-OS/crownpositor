@@ -1,0 +1,14 @@
+[package]
+name = "protocols"
+version = "0.1.0"
+edition = "2024"
+
+# Only the Wayland frontend: these modules validate requests and leave cached
+# state on surfaces, so nothing here touches a renderer or a backend.
+[dependencies.smithay]
+workspace = true
+features = ["wayland_frontend"]
+
+[dependencies]
+tracing = { workspace = true }
+wayland-server = { workspace = true }

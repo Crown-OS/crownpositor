@@ -1,4 +1,5 @@
 mod keyboard;
+pub mod libinput;
 pub mod mouse;
 pub mod shortcuts;
 pub mod trackpad;
@@ -25,7 +26,13 @@ impl State {
             InputEvent::GestureSwipeBegin { event, .. } => self.on_swipe_begin::<I>(event),
             InputEvent::GestureSwipeUpdate { event, .. } => self.on_swipe_update::<I>(event),
             InputEvent::GestureSwipeEnd { event, .. } => self.on_swipe_end::<I>(event),
-            // TODO: pinch, hold, touch, tablet and device hotplug.
+            // Pinch belongs to the client: it is what a browser turns into page
+            // zoom, and the compositor has no gesture of its own to spend it on.
+            // These three arms hand it straight to `wp_pointer_gestures`.
+            InputEvent::GesturePinchBegin { event, .. } => self.on_pinch_begin::<I>(event),
+            InputEvent::GesturePinchUpdate { event, .. } => self.on_pinch_update::<I>(event),
+            InputEvent::GesturePinchEnd { event, .. } => self.on_pinch_end::<I>(event),
+            // TODO: hold, touch, tablet and device hotplug.
             _ => {}
         }
     }

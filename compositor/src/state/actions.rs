@@ -5,13 +5,13 @@
 
 use std::{os::unix::process::CommandExt, process::Stdio};
 
-use smithay::utils::Serial;
+use smithay::utils::SERIAL_COUNTER;
 
 use config::{Config, Update};
+use protocols::background_effect::Capability as BackgroundEffectCapability;
 
 use crate::{
     animations::spring::SpringProfile,
-    handlers::seat::KeyboardFocusTarget,
     input::shortcuts::{Action, Bindings},
     layout::{Gaps, LayoutOp},
     shell::tile::WindowState,
@@ -19,7 +19,7 @@ use crate::{
 };
 
 impl State {
-    pub fn handle_action(&mut self, action: Action, serial: Serial) {
+    pub fn handle_action(&mut self, action: Action) {
         match action {
             Action::None => return,
 
@@ -121,25 +121,29 @@ impl State {
 
         // One place recomputes geometry, one place moves keyboard focus.
         self.shell.refresh();
-        self.update_keyboard_focus(serial);
+        self.update_keyboard_focus();
         self.queue_redraw();
     }
 
-    /// The only caller of `set_focus` outside a pointer click.
-    pub fn update_keyboard_focus(&mut self, serial: Serial) {
+    /// Brings the seat's keyboard focus in line with the model. The only caller
+    /// of `set_focus`.
+    ///
+    /// Cheap to call on any change and safe to call twice: it compares against
+    /// the focus the seat already has and sends nothing when it matches, so the
+    /// event loop can run it once per dispatch rather than every mutation
+    /// having to remember to.
+    pub fn update_keyboard_focus(&mut self) {
         let Some(keyboard) = self.wayland.seat.get_keyboard() else {
             return;
         };
-        let target = self
-            .shell
-            .focused_window_id()
-            .and_then(|id| self.shell.tile(id))
-            .map(|tile| KeyboardFocusTarget::from(tile.window().clone()));
+        let target = self.shell.keyboard_focus();
 
         if keyboard.current_focus() == target {
             return;
         }
-        keyboard.set_focus(self, target, serial);
+
+        tracing::debug!(?target, "keyboard focus moved");
+        keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
     }
 
     /// Window rules are deliberately not retro-applied: a window floated by hand
@@ -157,7 +161,26 @@ impl State {
 
         self.config.current = new;
         self.shell.apply_output_settings(&self.config.current);
+        self.sync_background_effect_capabilities();
         // The next refresh turns the dirty bits above into one relayout.
+    }
+
+    /// Keeps the `ext-background-effect-v1` capabilities in step with what the
+    /// compositor will actually draw.
+    ///
+    /// The protocol is explicit that a withdrawn capability stops being applied
+    /// "even if it was set before", which is precisely what turning blur off in
+    /// the config does — so clients are told, and a panel that was relying on
+    /// glass can go back to painting its own background.
+    pub fn sync_background_effect_capabilities(&mut self) {
+        let capabilities = if self.config.current.appearance.blur {
+            BackgroundEffectCapability::Blur
+        } else {
+            BackgroundEffectCapability::empty()
+        };
+        self.wayland
+            .background_effect_state
+            .set_capabilities(capabilities);
     }
 
     /// One watched key changed, so only the component that owns it re-runs.
@@ -194,6 +217,7 @@ impl State {
                 self.shell
                     .set_workspace_animation(SpringProfile::from_config(appearance.animations));
                 config.appearance = appearance;
+                self.sync_background_effect_capabilities();
             }
         }
 

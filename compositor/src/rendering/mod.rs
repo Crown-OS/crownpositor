@@ -12,6 +12,7 @@
 pub mod blur;
 pub mod cursor;
 pub mod decorate;
+pub mod decoration;
 pub mod element;
 pub mod rounded;
 
@@ -19,17 +20,21 @@ use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
         element::{
-            AsRenderElements, RenderElement, Wrap, surface::WaylandSurfaceRenderElement,
-            utils::CropRenderElement,
+            AsRenderElements, Wrap, surface::WaylandSurfaceRenderElement, utils::CropRenderElement,
         },
     },
     desktop::layer_map_for_output,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Physical, Point, Rectangle, Scale},
     wayland::shell::wlr_layer::Layer,
 };
 
 use crate::{
-    rendering::{cursor::Cursor, decorate::TileDecorator, element::CrownElement},
+    rendering::{
+        cursor::Cursor,
+        decorate::{Backdrop, TileDecorator},
+        element::CrownElement,
+    },
     shell::{Shell, monitor::Monitor, tile::Tile},
 };
 
@@ -68,6 +73,7 @@ where
         &mut elements,
         monitor,
         renderer,
+        decorator,
         scale,
         &[Layer::Overlay, Layer::Top],
     );
@@ -108,6 +114,7 @@ where
             &mut elements,
             monitor,
             renderer,
+            decorator,
             scale,
             &[Layer::Bottom, Layer::Background],
         );
@@ -159,29 +166,88 @@ fn tile_elements<R, D>(
     }
 
     // The blurred glass goes in *after* the window's surfaces — later in the
-    // list is further from the eye, so it sits directly behind them. The
-    // committed region currently only gates the effect; the backdrop covers
-    // the whole tile, because a window asking to blur anything asks to blur
-    // itself in practice, and one rect keeps the corner mask aligned with the
-    // window's own rounding.
-    if blur::window_blur_bounds(tile.window()).is_some()
-        && let Some(id) = blur::backdrop_id(tile.window())
-        && let Some(backdrop) = decorator.backdrop(renderer, id, clip, radius, tile.render_alpha())
-    {
-        elements.push(CrownElement::Tile(Wrap::from(backdrop)));
+    // list is further from the eye, so it sits directly behind them. `location`
+    // is where the surface's own origin lands, which is the space the client
+    // expressed its blur region in; `clip` is both the mask the corners are cut
+    // from and the bound the region is clipped to.
+    if let Some(surface) = blur::window_surface(tile.window()) {
+        backdrop_elements(
+            elements,
+            renderer,
+            decorator,
+            &surface,
+            location,
+            scale,
+            clip,
+            radius,
+            tile.render_alpha(),
+        );
     }
 }
 
-fn layer_elements<R, E>(
-    elements: &mut Vec<CrownElement<R, E>>,
+/// Pushes the blurred glass a surface asked for through
+/// `ext-background-effect-v1`: one element per rectangle of its committed
+/// region, all masked by the same rounded rectangle.
+///
+/// `origin` is where the surface's own `(0, 0)` lands, and `mask` is the
+/// rectangle the region is clipped to and the corners are cut from — a
+/// window's animated rect, or a layer surface's geometry.
+#[allow(clippy::too_many_arguments)]
+fn backdrop_elements<R, D>(
+    elements: &mut Elements<R, D>,
+    renderer: &mut R,
+    decorator: &mut D,
+    surface: &WlSurface,
+    origin: Point<i32, Physical>,
+    scale: Scale<f64>,
+    mask: Rectangle<i32, Physical>,
+    radius: f32,
+    alpha: f32,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Clone + 'static,
+    D: TileDecorator<R>,
+{
+    // Nothing to sample from means nothing to work out: this is the path every
+    // frame takes on a backend without a blur pipeline, or with blur off.
+    let Some(serial) = decorator.backdrop_source() else {
+        return;
+    };
+
+    let mut rects = Vec::new();
+    let Some(generation) = blur::place_blur_region(surface, origin, scale, mask, &mut rects) else {
+        return;
+    };
+
+    let (ids, commit) = blur::backdrop_slots(surface, rects.len(), serial, generation);
+    for (id, geometry) in std::iter::zip(ids, rects) {
+        if let Some(backdrop) = decorator.backdrop(
+            renderer,
+            Backdrop {
+                id,
+                commit,
+                geometry,
+                mask,
+                radius,
+                alpha,
+            },
+        ) {
+            elements.push(CrownElement::Tile(Wrap::from(backdrop)));
+        }
+    }
+}
+
+fn layer_elements<R, D>(
+    elements: &mut Elements<R, D>,
     monitor: &Monitor,
     renderer: &mut R,
+    decorator: &mut D,
     scale: Scale<f64>,
     layers: &[Layer],
 ) where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Clone + 'static,
-    E: RenderElement<R>,
+    D: TileDecorator<R>,
 {
     // A second guard for the same output deadlocks, so keep the scope tight.
     let map = layer_map_for_output(monitor.output());
@@ -195,6 +261,27 @@ fn layer_elements<R, E>(
             let layers: Vec<WaylandSurfaceRenderElement<R>> =
                 surface.render_elements(renderer, location, scale, 1.0);
             elements.extend(layers.into_iter().map(CrownElement::Surface));
+
+            // Panels and notifications are what actually wants glass, so layer
+            // surfaces get the same treatment windows do — but only above the
+            // scene the blur is computed from, or a surface would sample a
+            // texture it is itself inside. Square corners: nothing rounds a
+            // layer surface here, and the backdrop has to match what is drawn
+            // over it.
+            if blur::BLURRABLE_LAYERS.contains(layer) {
+                let clip = Rectangle::new(location, geometry.size.to_physical_precise_round(scale));
+                backdrop_elements(
+                    elements,
+                    renderer,
+                    decorator,
+                    surface.wl_surface(),
+                    location,
+                    scale,
+                    clip,
+                    0.0,
+                    1.0,
+                );
+            }
         }
     }
 }

@@ -5,7 +5,7 @@
 //! `&mut State`.
 
 use anyhow::anyhow;
-use calloop::{channel, LoopHandle};
+use calloop::{LoopHandle, channel};
 use config::{Config, Update, Watch};
 
 use crate::state::State;

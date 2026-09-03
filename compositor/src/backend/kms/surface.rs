@@ -408,10 +408,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     // constructed below sample this frame's texture and carry its commit.
     // Skipped entirely — a cheap iterator scan — while no visible window has
     // a blur region committed.
-    let wants_blur = blur_config.enabled
-        && shell
-            .visible_windows(monitor)
-            .any(|tile| blur::window_blur_bounds(tile.window()).is_some());
+    let wants_blur = blur_config.enabled && blur::output_wants_blur(shell, monitor);
     let backdrop = if wants_blur {
         let size: smithay::utils::Size<i32, smithay::utils::Physical> =
             monitor.geometry().size.to_physical_precise_round(scale);

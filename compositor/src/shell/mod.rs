@@ -11,15 +11,18 @@ pub mod workspace_switch;
 use std::{collections::HashMap, time::Instant};
 
 use smithay::{
-    desktop::{layer_map_for_output, space::SpaceElement, PopupManager, Window, WindowSurfaceType},
+    desktop::{
+        LayerSurface, PopupManager, Window, WindowSurfaceType, layer_map_for_output,
+        space::SpaceElement,
+    },
     output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
-        wayland_server::{protocol::wl_surface::WlSurface, DisplayHandle},
+        wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
     },
-    utils::{Logical, Point, Rectangle, Size},
+    utils::{IsAlive, Logical, Point, Rectangle, Size},
     wayland::shell::{
-        wlr_layer::{Layer, WlrLayerShellState},
+        wlr_layer::{KeyboardInteractivity, Layer, WlrLayerShellState},
         xdg::{ToplevelStateSet, XdgShellState},
     },
 };
@@ -28,11 +31,11 @@ use config::{Config, ResolvedRule};
 
 use crate::{
     animations::spring::SpringProfile,
-    handlers::seat::PointerFocusTarget,
+    handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
     layout::{Direction, Gaps, LayoutKind, LayoutOp},
     shell::{
         monitor::{
-            output_from_descriptor, output_id, ConnectorId, Monitor, OutputConfig, OutputDescriptor,
+            ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
         tile::{Tile, WindowState},
         transaction::Transaction,
@@ -97,6 +100,27 @@ fn toggle(states: &mut ToplevelStateSet, state: XdgState, on: bool) {
     }
 }
 
+/// The layer surface on one output that the protocol says must hold the
+/// keyboard, if there is one.
+///
+/// Only Overlay and Top are searched: those two are where `exclusive` is a
+/// grant, and Bottom and Background are left to "normal focus semantics" so a
+/// wallpaper cannot take the keyboard away from every window on the screen.
+/// Topmost-first within each layer, the same order a click is resolved in.
+fn exclusive_layer_on(output: &Output) -> Option<LayerSurface> {
+    // A second guard for the same output deadlocks, so keep the scope tight.
+    let map = layer_map_for_output(output);
+
+    [Layer::Overlay, Layer::Top].iter().find_map(|kind| {
+        map.layers_on(*kind)
+            .rev()
+            .find(|layer| {
+                layer.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
+            })
+            .cloned()
+    })
+}
+
 /// The topmost surface on any of `layers` at an output-local point, and the
 /// global origin of that surface.
 ///
@@ -119,10 +143,9 @@ fn layer_under(
             let Some(geometry) = map.layer_geometry(layer) else {
                 continue;
             };
-            let Some((surface, offset)) = layer.surface_under(
-                location - geometry.loc.to_f64(),
-                WindowSurfaceType::ALL,
-            ) else {
+            let Some((surface, offset)) =
+                layer.surface_under(location - geometry.loc.to_f64(), WindowSurfaceType::ALL)
+            else {
                 continue;
             };
 
@@ -167,6 +190,10 @@ pub struct Shell {
     surface_to_window: HashMap<WlSurface, WindowId>,
     window_to_location: HashMap<WindowId, Location>,
     layer_to_output: HashMap<WlSurface, OutputId>,
+    /// The layer surface that was handed the keyboard on demand — by a click,
+    /// never by asking. An `exclusive` surface does not need it: it is found by
+    /// searching the layer maps, so it cannot go stale.
+    layer_focus: Option<LayerSurface>,
 
     pub xdg_shell_state: XdgShellState,
     pub layer_shell: WlrLayerShellState,
@@ -196,6 +223,7 @@ impl Shell {
             surface_to_window: HashMap::new(),
             window_to_location: HashMap::new(),
             layer_to_output: HashMap::new(),
+            layer_focus: None,
             xdg_shell_state: XdgShellState::new::<State>(display),
             layer_shell: WlrLayerShellState::new::<State>(display),
             popups: PopupManager::default(),
@@ -532,9 +560,62 @@ impl Shell {
     }
 
     pub fn untrack_layer(&mut self, surface: &WlSurface) -> Option<Output> {
+        if self
+            .layer_focus
+            .as_ref()
+            .is_some_and(|layer| layer.wl_surface() == surface)
+        {
+            self.layer_focus = None;
+        }
         let id = self.layer_to_output.remove(surface)?;
         self.monitor_by_id(id)
             .map(|monitor| monitor.output().clone())
+    }
+
+    /// Hands the keyboard to a layer surface the user interacted with, or takes
+    /// it back. Only `on_demand` surfaces belong here; the caller filters.
+    pub fn focus_layer(&mut self, layer: Option<LayerSurface>) {
+        self.layer_focus = layer;
+    }
+
+    /// Who the keyboard belongs to, as the model sees it.
+    ///
+    /// An `exclusive` layer surface outranks everything: that is the whole point
+    /// of the request, and it is what makes a launcher or a password prompt
+    /// typeable. Below it sits a layer surface the user clicked into, and below
+    /// that the focused window.
+    // TODO: a lock surface has to outrank all three once `session_lock` tracks
+    // them — a locked session must not be typeable into anything else.
+    pub fn keyboard_focus(&self) -> Option<KeyboardFocusTarget> {
+        let focused = self.focused_output();
+        let exclusive = focused
+            .into_iter()
+            .chain(
+                self.monitors
+                    .iter()
+                    .map(Monitor::output)
+                    .filter(|output| Some(*output) != focused),
+            )
+            .find_map(exclusive_layer_on);
+
+        if let Some(layer) = exclusive {
+            return Some(layer.into());
+        }
+
+        // `can_receive_keyboard_focus` is re-read rather than remembered: a
+        // surface may drop to `none` while it holds the keyboard, and then it
+        // has to give it back.
+        if let Some(layer) = self
+            .layer_focus
+            .clone()
+            .filter(|layer| layer.alive() && layer.can_receive_keyboard_focus())
+        {
+            return Some(layer.into());
+        }
+
+        self.focused_window_id()
+            .and_then(|id| self.tile(id))
+            .map(|tile| tile.window().clone().into())
     }
 
     pub fn output_for_layer(&self, surface: &WlSurface) -> Option<&Output> {
@@ -641,7 +722,6 @@ impl Shell {
             .workspace_mut(location.workspace)
     }
 
-    /// O(1), replacing the linear scan over every window on every commit.
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<&Window> {
         self.tile(self.window_id(surface)?).map(Tile::window)
     }

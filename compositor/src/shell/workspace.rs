@@ -2,8 +2,8 @@ use smithay::utils::{Logical, Rectangle};
 
 use crate::{
     layout::{
-        floating, Direction, Gaps, LayoutInput, LayoutKind, LayoutOp, LayoutOutput, LayoutSet,
-        TileInfo,
+        Direction, Gaps, LayoutInput, LayoutKind, LayoutOp, LayoutOutput, LayoutSet, TileInfo,
+        floating,
     },
     shell::tile::{Tile, WindowState},
     utils::id::{OutputId, WindowId, WorkspaceId},
@@ -184,7 +184,11 @@ impl Workspace {
         }
     }
 
-    pub fn set_area(&mut self, area: Rectangle<i32, Logical>, output_area: Rectangle<i32, Logical>) {
+    pub fn set_area(
+        &mut self,
+        area: Rectangle<i32, Logical>,
+        output_area: Rectangle<i32, Logical>,
+    ) {
         if self.area == area && self.output_area == output_area {
             return;
         }
@@ -351,8 +355,12 @@ impl Workspace {
     pub fn apply_layout_op(&mut self, op: LayoutOp, global: LayoutKind) -> bool {
         self.sync_layout(global);
         self.scratch_in.clear();
-        self.scratch_in
-            .extend(self.tiles.iter().filter(|t| t.state().is_tiled()).map(Tile::info));
+        self.scratch_in.extend(
+            self.tiles
+                .iter()
+                .filter(|t| t.state().is_tiled())
+                .map(Tile::info),
+        );
 
         let input = LayoutInput {
             area: self.area,

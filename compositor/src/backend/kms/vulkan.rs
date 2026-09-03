@@ -12,7 +12,7 @@
 use smithay::backend::{
     allocator::vulkan::{ImageUsageFlags, VulkanAllocator},
     drm::DrmNode,
-    vulkan::{version::Version, Instance, PhysicalDevice},
+    vulkan::{Instance, PhysicalDevice, version::Version},
 };
 
 use crate::backend::render::RenderInitError;

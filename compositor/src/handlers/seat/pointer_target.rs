@@ -13,15 +13,15 @@ use std::borrow::Cow;
 use smithay::{
     desktop::{LayerSurface, Window},
     input::{
+        Seat,
         pointer::{
             AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
             GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
             GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, MotionEvent,
             PointerTarget, RelativeMotionEvent,
         },
-        Seat,
     },
-    reexports::wayland_server::{backend::ObjectId, protocol::wl_surface::WlSurface, Resource},
+    reexports::wayland_server::{Resource, backend::ObjectId, protocol::wl_surface::WlSurface},
     utils::{IsAlive, Serial},
     wayland::seat::WaylandFocus,
 };

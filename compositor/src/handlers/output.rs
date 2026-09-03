@@ -1,7 +1,7 @@
 use smithay::{
     delegate_output,
     output::Output,
-    reexports::wayland_server::{protocol::wl_output::WlOutput, Resource},
+    reexports::wayland_server::{Resource, protocol::wl_output::WlOutput},
     wayland::{output::OutputHandler, seat::WaylandFocus},
 };
 

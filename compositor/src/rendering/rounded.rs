@@ -25,7 +25,7 @@ use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
         blur::{BackdropSource, BlurBackdrop},
-        decorate::{Cropped, TileDecorator},
+        decorate::{Backdrop, Cropped, TileDecorator},
     },
     shaders::rounded_corner::RoundedCornerShader,
 };
@@ -362,17 +362,18 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
         )))
     }
 
+    fn backdrop_source(&self) -> Option<u64> {
+        self.backdrop.as_ref().map(BackdropSource::serial)
+    }
+
     fn backdrop(
         &mut self,
         renderer: &mut GlesRenderer,
-        id: Id,
-        geometry: Rectangle<i32, Physical>,
-        radius: f32,
-        alpha: f32,
+        backdrop: Backdrop,
     ) -> Option<Self::Element> {
         let source = self.backdrop.as_ref()?;
         Some(Decorated::Backdrop(BlurBackdrop::new(
-            renderer, source, id, geometry, radius, alpha,
+            renderer, source, backdrop,
         )))
     }
 }
@@ -405,22 +406,20 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
         )))
     }
 
+    fn backdrop_source(&self) -> Option<u64> {
+        self.backdrop.as_ref().map(BackdropSource::serial)
+    }
+
     fn backdrop(
         &mut self,
         renderer: &mut KmsRenderer<'render>,
-        id: Id,
-        geometry: Rectangle<i32, Physical>,
-        radius: f32,
-        alpha: f32,
+        backdrop: Backdrop,
     ) -> Option<Self::Element> {
         let source = self.backdrop.as_ref()?;
         Some(Decorated::Backdrop(BlurBackdrop::new(
             renderer.as_mut(),
             source,
-            id,
-            geometry,
-            radius,
-            alpha,
+            backdrop,
         )))
     }
 }

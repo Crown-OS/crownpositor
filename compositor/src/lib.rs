@@ -4,7 +4,6 @@ mod handlers;
 mod input;
 mod layout;
 mod logging;
-mod protocols;
 mod rendering;
 mod shaders;
 mod shell;
@@ -41,6 +40,10 @@ pub fn run() -> anyhow::Result<()> {
     event_loop
         .run(None, &mut state, |state| {
             state.shell.refresh();
+            // A layer surface that maps, changes its keyboard interactivity or
+            // goes away moves focus with no input event to hang the decision
+            // off, so the reconcile belongs here rather than at every mutation.
+            state.update_keyboard_focus();
             state.shell.popups.cleanup();
             // Frames queued during dispatch render here, after the burst of
             // events that requested them has been fully drained.

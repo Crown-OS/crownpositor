@@ -65,7 +65,7 @@ impl State {
             WaylandState::try_new(&common.display_handle, common.event_loop_handle.clone())?;
         let shell = Shell::try_new(&common.display_handle, &config.current)?;
 
-        Ok(Self {
+        let mut state = Self {
             common,
             backend,
             wayland,
@@ -73,6 +73,11 @@ impl State {
             input,
             config,
             clock: Clock::new(),
-        })
+        };
+        // The global was created advertising everything the renderer can do;
+        // the config gets the first word on what it will actually do.
+        state.sync_background_effect_capabilities();
+
+        Ok(state)
     }
 }

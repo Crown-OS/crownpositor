@@ -1,4 +1,4 @@
-//! Touchpad swipes, routed to whatever they drive.
+//! Touchpad gestures, routed to whatever they drive.
 //!
 //! A four-finger horizontal swipe is *interactive*: it steers the workspace
 //! viewport while the fingers move, and letting go retargets the viewport's
@@ -9,6 +9,12 @@
 //! Every other swipe waits for the release and resolves to an
 //! [`Action`](crate::input::shortcuts::action::Action), down the same dispatch
 //! path as a keyboard chord.
+//!
+//! Pinch is the exception: the compositor keeps none of it. It goes straight to
+//! the surface under the pointer over `wp_pointer_gestures`, which is what lets
+//! a browser zoom its page and a map application its map — the same division of
+//! labour as scrolling, where the compositor routes and the client decides what
+//! the motion means.
 
 pub mod gestures;
 
@@ -17,10 +23,14 @@ use std::time::Duration;
 use smithay::{
     backend::{
         input::{
-            Event, GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputBackend,
-            UnusedEvent,
+            Event, GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent,
+            GestureSwipeUpdateEvent, InputBackend, UnusedEvent,
         },
         libinput::LibinputInputBackend,
+    },
+    input::pointer::{
+        GesturePinchBeginEvent as PinchBegin, GesturePinchEndEvent as PinchEnd,
+        GesturePinchUpdateEvent as PinchUpdate,
     },
     reexports::input::event::gesture::{
         GestureEventCoordinates, GestureSwipeUpdateEvent as LibinputSwipeUpdate,
@@ -113,7 +123,7 @@ impl State {
             // The switch commits now and animates afterwards, so focus and
             // configures have to be brought along with it.
             self.shell.refresh();
-            self.update_keyboard_focus(SERIAL_COUNTER.next_serial());
+            self.update_keyboard_focus();
             self.queue_redraw();
             return;
         }
@@ -122,8 +132,68 @@ impl State {
             .gesture
             .and_then(|gesture| self.input.gesture_bindings.lookup(gesture))
         {
-            self.handle_action(action, SERIAL_COUNTER.next_serial());
+            self.handle_action(action);
         }
+    }
+
+    /// Pinch goes to the client, unchanged and unexamined.
+    ///
+    /// The three arms below are the whole of it: libinput's gesture becomes the
+    /// matching `wp_pointer_gestures` event on the surface under the pointer,
+    /// and the compositor forms no opinion about what a spread of the fingers
+    /// ought to mean. It is the client that knows whether it has a page to zoom.
+    ///
+    /// The pointer handle routes to the current focus or to whatever holds the
+    /// grab, so a pinch that begins over a window stays with that window even if
+    /// the fingers drift — which is what the protocol requires of a gesture, and
+    /// what stops a zoom from being cut in half by a moving pointer.
+    pub(super) fn on_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+
+        pointer.gesture_pinch_begin(
+            self,
+            &PinchBegin {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: event.time_msec(),
+                fingers: event.fingers(),
+            },
+        );
+    }
+
+    pub(super) fn on_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+
+        // Every field is passed through, rotation included: a client that only
+        // wants the scale ignores the rest, and one that can turn a photo has no
+        // other way to hear about it.
+        pointer.gesture_pinch_update(
+            self,
+            &PinchUpdate {
+                time: event.time_msec(),
+                delta: event.delta(),
+                scale: event.scale(),
+                rotation: event.rotation(),
+            },
+        );
+    }
+
+    pub(super) fn on_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+
+        pointer.gesture_pinch_end(
+            self,
+            &PinchEnd {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: event.time_msec(),
+                cancelled: event.cancelled(),
+            },
+        );
     }
 }
 

@@ -202,10 +202,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         let Some(monitor) = shell.monitor(&winit.output) else {
             return Ok(());
         };
-        let wants_blur = blur_config.enabled
-            && shell
-                .visible_windows(monitor)
-                .any(|tile| blur::window_blur_bounds(tile.window()).is_some());
+        let wants_blur = blur_config.enabled && blur::output_wants_blur(shell, monitor);
         if wants_blur {
             let size: smithay::utils::Size<i32, smithay::utils::Physical> =
                 monitor.geometry().size.to_physical_precise_round(scale);

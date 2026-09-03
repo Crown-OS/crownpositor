@@ -1,6 +1,8 @@
 use smithay::backend::renderer::{
     ImportAll, ImportMem,
-    element::{memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement, Wrap},
+    element::{
+        Wrap, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
+    },
 };
 
 smithay::backend::renderer::element::render_elements! {
@@ -16,7 +18,8 @@ smithay::backend::renderer::element::render_elements! {
     /// Layer-shell surfaces and popups, drawn whole — and a client's own cursor
     /// surface, which is a surface tree like any other.
     Surface = WaylandSurfaceRenderElement<R>,
-    /// A toplevel, however the backend's decorator rendered it.
+    /// Anything the backend's decorator produced: a toplevel it drew, or a
+    /// rectangle of blurred glass to go behind one.
     Tile = Wrap<E>,
     /// A themed cursor, rasterised into main memory rather than owned by a
     /// client. `ImportMem` above is what this variant costs.

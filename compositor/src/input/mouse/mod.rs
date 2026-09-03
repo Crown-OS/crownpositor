@@ -4,15 +4,11 @@ use smithay::{
         PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
-    utils::{Logical, Point, Serial, SERIAL_COUNTER},
-    wayland::seat::WaylandFocus,
+    utils::{Logical, Point, SERIAL_COUNTER, Serial},
+    wayland::{seat::WaylandFocus, shell::wlr_layer::KeyboardInteractivity},
 };
 
-use crate::{
-    handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
-    shell::monitor::Monitor,
-    state::State,
-};
+use crate::{handlers::seat::PointerFocusTarget, shell::monitor::Monitor, state::State};
 
 impl State {
     /// Absolute motion, from winit and touchscreens. Transforms against the
@@ -103,7 +99,7 @@ impl State {
         let state = event.state();
 
         if state == ButtonState::Pressed && !pointer.is_grabbed() {
-            self.focus_under_pointer(serial);
+            self.focus_under_pointer();
         }
 
         pointer.button(
@@ -145,12 +141,13 @@ impl State {
         pointer.frame(self);
     }
 
-    /// Raises and focuses the window under the pointer, dropping focus entirely
-    /// on a press against the bare desktop.
-    fn focus_under_pointer(&mut self, serial: Serial) {
-        let Some(keyboard) = self.wayland.seat.get_keyboard() else {
-            return;
-        };
+    /// Hands focus to whatever the pointer pressed on: a window, or a layer
+    /// surface that asked for the keyboard `on_demand`.
+    ///
+    /// Only the *model* is moved here. `update_keyboard_focus` turns that into
+    /// the seat's focus and `Shell::refresh` into the activation state, so a
+    /// click and a keybinding cannot disagree about who is focused.
+    fn focus_under_pointer(&mut self) {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
@@ -160,33 +157,39 @@ impl State {
             .pointer_focus_under(pointer.current_location())
             .map(|(target, _)| target);
 
-        // A press on a layer surface leaves keyboard focus alone. Nothing here
-        // can hand it to a bar or a wallpaper yet, and clearing it instead would
-        // unfocus the terminal the user is typing into every time they reach for
-        // the panel.
-        // TODO: hand focus to layer surfaces that ask for it — the shell has to
-        // learn to hold a non-window focus first, or `update_keyboard_focus`
-        // takes it straight back on the next keybinding.
-        if matches!(under, Some(PointerFocusTarget::LayerShell { .. })) {
-            return;
+        match under {
+            Some(PointerFocusTarget::Window { window, .. }) => {
+                if let Some(id) = window
+                    .wl_surface()
+                    .and_then(|surface| self.shell.window_id(&surface))
+                {
+                    self.shell.focus_window(id);
+                }
+                self.shell.focus_layer(None);
+            }
+
+            // A press on a layer surface only moves the keyboard if the surface
+            // asked for it: `on_demand` means "when the user interacts with me",
+            // and `none` means never. An `exclusive` surface already holds the
+            // keyboard without being clicked, so it needs nothing here either.
+            //
+            // Window focus is deliberately left where it was. Clearing it would
+            // unfocus the terminal the user is typing into every time they
+            // reach for the panel or click the wallpaper.
+            Some(PointerFocusTarget::LayerShell { layer, .. }) => {
+                let on_demand =
+                    layer.cached_state().keyboard_interactivity == KeyboardInteractivity::OnDemand;
+                if on_demand {
+                    self.shell.focus_layer(Some(layer));
+                }
+            }
+
+            // Nothing under the pointer at all — no wallpaper, no window. There
+            // is nothing to move focus to, and nothing to take it from.
+            None => {}
         }
 
-        // Focus moves in the model first; `Shell::refresh` turns that into the
-        // activation state and the two configures it implies.
-        let target = under
-            .as_ref()
-            .and_then(PointerFocusTarget::window)
-            .and_then(|window| {
-                let surface = window.wl_surface()?;
-                let id = self.shell.window_id(&surface)?;
-                self.shell.focus_window(id);
-                Some(KeyboardFocusTarget::from(window.clone()))
-            });
-
-        if keyboard.current_focus() == target {
-            return;
-        }
-        keyboard.set_focus(self, target, serial);
+        self.update_keyboard_focus();
     }
 }
 

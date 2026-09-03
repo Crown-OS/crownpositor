@@ -1,6 +1,6 @@
 use smithay::{
     backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent, Keycode},
-    input::keyboard::{keysyms, FilterResult, KeysymHandle},
+    input::keyboard::{FilterResult, KeysymHandle, keysyms},
     utils::SERIAL_COUNTER,
 };
 
@@ -96,13 +96,13 @@ impl State {
         if !bypass {
             self.update_mod_chord();
             if let Some(action) = self.take_mod_chord_action() {
-                self.handle_action(action, serial);
+                self.handle_action(action);
                 return;
             }
         }
 
         if let Some(action) = action {
-            self.handle_action(action, serial);
+            self.handle_action(action);
         }
     }
 

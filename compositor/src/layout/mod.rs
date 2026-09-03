@@ -327,7 +327,9 @@ pub(crate) mod testing {
     }
 
     pub fn tiles(count: usize) -> Vec<TileInfo> {
-        (0..count).map(|_| TileInfo::new(WindowId::next())).collect()
+        (0..count)
+            .map(|_| TileInfo::new(WindowId::next()))
+            .collect()
     }
 
     pub fn input<'a>(
@@ -436,6 +438,9 @@ mod tests {
         let mut fresh = ScrollingColumns::default();
         let mut expected = LayoutOutput::default();
         fresh.layout(&input, &mut expected);
-        assert_eq!(out.rects, expected.rects, "per-window state must be dropped");
+        assert_eq!(
+            out.rects, expected.rects,
+            "per-window state must be dropped"
+        );
     }
 }

@@ -23,9 +23,10 @@ use smithay::{
         allocator::gbm::GbmDevice,
         drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType},
         egl::context::ContextPriority,
+        input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
-        renderer::{multigpu::gbm::GbmGlesBackend, ImportDma},
-        session::{libseat::LibSeatSession, Event as SessionEvent, Session},
+        renderer::{ImportDma, multigpu::gbm::GbmGlesBackend},
+        session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{self, UdevBackend, UdevEvent},
     },
     output::Output,
@@ -34,8 +35,8 @@ use smithay::{
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
 };
 
-pub use crate::backend::kms::{device::Device, vulkan::VulkanContext};
 pub use crate::backend::kms::surface::redraw_queued_outputs;
+pub use crate::backend::kms::{device::Device, vulkan::VulkanContext};
 use crate::{
     backend::render::{CrownRenderer, GraphicsApi, KmsGpuManager, KmsRenderer},
     state::{BackendState, State},
@@ -64,7 +65,10 @@ pub enum KmsError {
         source: smithay::backend::drm::DrmError,
     },
     #[error("failed to initialize GBM on {path}: {source}")]
-    Gbm { path: String, source: std::io::Error },
+    Gbm {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("failed to add GPU {node} to the renderer: {0}", node = .1)]
     AddNode(smithay::backend::egl::Error, DrmNode),
     #[error("the GPU manager failed: {0}")]
@@ -114,8 +118,7 @@ impl KmsState {
         for device in self.devices.values_mut() {
             for surface in device.surfaces.values_mut() {
                 if output.is_none_or(|output| *output == surface.output) {
-                    surface.redraw_state =
-                        std::mem::take(&mut surface.redraw_state).queue();
+                    surface.redraw_state = std::mem::take(&mut surface.redraw_state).queue();
                 }
             }
         }
@@ -123,15 +126,13 @@ impl KmsState {
 }
 
 pub fn init(state: &mut State) -> anyhow::Result<()> {
-    let (session, session_notifier) =
-        LibSeatSession::new().map_err(KmsError::Session)?;
+    let (session, session_notifier) = LibSeatSession::new().map_err(KmsError::Session)?;
     let seat_name = session.seat();
     tracing::info!(seat = seat_name, "libseat session created");
 
     // Input: libinput drives every seat device, suspended/resumed with the VT.
-    let mut libinput = Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
-        session.clone().into(),
-    );
+    let mut libinput =
+        Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(session.clone().into());
     libinput
         .udev_assign_seat(&seat_name)
         .map_err(|()| KmsError::SeatAssignment {
@@ -143,10 +144,9 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
     // High-priority EGL contexts so a heavyweight client cannot starve the
     // compositor's own GPU work — the difference between a stutter in a game
     // and a stutter in the whole desktop.
-    let gpu_manager = KmsGpuManager::new(GbmGlesBackend::with_context_priority(
-        ContextPriority::High,
-    ))
-    .map_err(|err| KmsError::GpuManager(err.to_string()))?;
+    let gpu_manager =
+        KmsGpuManager::new(GbmGlesBackend::with_context_priority(ContextPriority::High))
+            .map_err(|err| KmsError::GpuManager(err.to_string()))?;
 
     let api = GraphicsApi::detect();
     let vulkan = match api {
@@ -205,9 +205,18 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
 
     let handle = state.common.event_loop_handle.clone();
     handle
-        .insert_source(LibinputInputBackend::new(libinput), |event, _, state| {
-            state.process_input_event(event);
-        })
+        .insert_source(
+            LibinputInputBackend::new(libinput),
+            |mut event, _, state| {
+                // Device defaults are applied here rather than inside
+                // `process_input_event`: that is generic over the backend, and only
+                // libinput has a device with settings on it to configure.
+                if let InputEvent::DeviceAdded { device } = &mut event {
+                    crate::input::libinput::apply_defaults(device);
+                }
+                state.process_input_event(event);
+            },
+        )
         .map_err(|err| anyhow::anyhow!("failed to insert the libinput source: {err}"))?;
 
     handle
@@ -302,11 +311,10 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
 
     // `disable_connectors: true`: we own the full output configuration and
     // want a clean slate rather than whatever the boot splash left mapped.
-    let (drm, drm_notifier) =
-        DrmDevice::new(fd.clone(), true).map_err(|source| KmsError::Drm {
-            path: path.display().to_string(),
-            source,
-        })?;
+    let (drm, drm_notifier) = DrmDevice::new(fd.clone(), true).map_err(|source| KmsError::Drm {
+        path: path.display().to_string(),
+        source,
+    })?;
     let gbm = GbmDevice::new(fd).map_err(|source| KmsError::Gbm {
         path: path.display().to_string(),
         source,

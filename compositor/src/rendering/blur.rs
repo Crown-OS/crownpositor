@@ -3,10 +3,11 @@
 //! The model is Hyprland's cached pre-blur (its `new_optimizations` path):
 //! once per output, everything that lives *under* the window stack — the
 //! wallpaper and the Background/Bottom layer-shell surfaces — is rendered into
-//! an offscreen texture and pushed through a dual-kawase pyramid. Each window
-//! with a committed blur region then gets a [`BlurBackdrop`] element drawn
-//! behind its surfaces, sampling the blurred texture at the window's on-screen
-//! rectangle with the same rounded-corner mask the window is clipped with.
+//! an offscreen texture and pushed through a dual-kawase pyramid. A surface
+//! that committed a blur region then gets a [`BlurBackdrop`] element per
+//! rectangle of that region, drawn behind its own contents and sampling the
+//! blurred texture where it sits on screen, all masked by the same rounded
+//! rectangle the surface itself is clipped with.
 //!
 //! Why this shape:
 //!
@@ -20,10 +21,19 @@
 //! * **It degrades.** No shaders, no texture, an allocation failure — the
 //!   backdrop element simply isn't emitted and windows draw as before.
 //!
+//! What it buys with that: a backdrop always shows the blurred *wallpaper*,
+//! never the windows in between. Behind a bar or a panel — which reserves its
+//! space, so nothing else is ever under it — that is exactly right. A floating
+//! window stacked over another one blurs the desktop rather than its
+//! neighbour, which is the price of blurring once per output instead of once
+//! per surface.
+//!
 //! Everything here talks to a plain [`GlesRenderer`]; on the KMS backend that
 //! is the render node's GLES context under the multi-GPU wrapper (the same
 //! one the rounded-corner shader binds through), so the blurred texture lives
 //! exactly where the output's composition happens.
+
+use std::sync::Mutex;
 
 use smithay::{
     backend::{
@@ -37,22 +47,33 @@ use smithay::{
             },
             gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
             multigpu::{Error as MultiError, MultiFrame},
-            utils::{CommitCounter, DamageSet, OpaqueRegions},
+            utils::{CommitCounter, DamageSet, OpaqueRegions, with_renderer_surface_state},
         },
     },
-    desktop::layer_map_for_output,
+    desktop::{Window, WindowSurface, layer_map_for_output},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
     wayland::{compositor::with_states, shell::wlr_layer::Layer},
 };
 
 use config::Appearance;
+use protocols::background_effect;
 
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
-    protocols::background_effect::BlurRegionCachedState,
+    rendering::decorate::Backdrop,
     shaders::blur::BlurShaders,
-    shell::monitor::Monitor,
+    shell::{Shell, monitor::Monitor},
 };
+
+/// The layers whose surfaces may blur.
+///
+/// Bottom and Background are missing on purpose: they are the scene the blur
+/// is computed *from*, so letting them blur would have them sample a texture
+/// they are themselves inside — a feedback loop that smears more with every
+/// frame. Panels and notifications, which is what actually wants glass, live
+/// on Top and Overlay.
+pub(crate) const BLURRABLE_LAYERS: [Layer; 2] = [Layer::Overlay, Layer::Top];
 
 /// Runtime knobs for the blur pipeline.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,9 +146,9 @@ pub enum BlurError {
 #[derive(Debug, Default)]
 pub struct BlurBuffers {
     inner: Option<Buffers>,
-    /// Bumped whenever `blurred` gets new content; backdrop elements report
-    /// damage by comparing against it.
-    commit: CommitCounter,
+    /// Bumped whenever `blurred` gets new content, so surfaces sampling it can
+    /// tell "the same glass as last frame" from "re-blurred, repaint".
+    serial: u64,
     fingerprint: Option<(usize, u32)>,
 }
 
@@ -259,7 +280,7 @@ impl BlurBuffers {
 
         buffers.primed = true;
         self.fingerprint = Some(config.fingerprint());
-        self.commit.increment();
+        self.serial = self.serial.wrapping_add(1);
         // Debug rather than trace: this firing every frame is the blur
         // cache failing, and that is exactly what one greps for.
         tracing::debug!(?size, passes, "re-blurred the background scene");
@@ -272,7 +293,7 @@ impl BlurBuffers {
         let buffers = self.inner.as_ref().filter(|buffers| buffers.primed)?;
         Some(BackdropSource {
             texture: buffers.blurred.clone(),
-            commit: self.commit,
+            serial: self.serial,
             noise,
         })
     }
@@ -376,15 +397,23 @@ fn kawase_pass(
 #[derive(Debug, Clone)]
 pub struct BackdropSource {
     texture: GlesTexture,
-    commit: CommitCounter,
+    serial: u64,
     noise: f32,
 }
 
-/// The blurred glass behind one window.
+impl BackdropSource {
+    /// Identifies this frame's blurred texture. Surfaces pair it with their
+    /// region's generation to decide whether their backdrops changed.
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+}
+
+/// One rectangle of the blurred glass behind a surface.
 ///
-/// Samples [`BackdropSource`]'s screen-space texture at the window's
-/// rectangle, so it holds physical coordinates directly — they were computed
-/// against the same scale the texture was rendered at.
+/// Samples [`BackdropSource`]'s screen-space texture at that rectangle, so it
+/// holds physical coordinates directly — they were computed against the same
+/// scale the texture was rendered at.
 #[derive(Debug)]
 pub struct BlurBackdrop {
     id: Id,
@@ -394,30 +423,25 @@ pub struct BlurBackdrop {
     /// finish shader failing to compile must not drop the backdrop.
     program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     geometry: Rectangle<i32, Physical>,
+    mask: Rectangle<i32, Physical>,
     radius: f32,
     noise: f32,
     alpha: f32,
 }
 
 impl BlurBackdrop {
-    pub fn new(
-        renderer: &GlesRenderer,
-        source: &BackdropSource,
-        id: Id,
-        geometry: Rectangle<i32, Physical>,
-        radius: f32,
-        alpha: f32,
-    ) -> Self {
+    pub fn new(renderer: &GlesRenderer, source: &BackdropSource, params: Backdrop) -> Self {
         let program = BlurShaders::get(renderer).map(|shaders| shaders.finish);
         Self {
-            id,
-            commit: source.commit,
+            id: params.id,
+            commit: params.commit,
             texture: source.texture.clone(),
             program,
-            geometry,
-            radius,
+            geometry: params.geometry,
+            mask: params.mask,
+            radius: params.radius,
             noise: source.noise,
-            alpha,
+            alpha: params.alpha,
         }
     }
 
@@ -437,8 +461,11 @@ impl BlurBackdrop {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        let tex_size = self.texture.size();
         let uniforms = BlurShaders::finish_values(
-            (self.geometry.size.w as f32, self.geometry.size.h as f32),
+            (tex_size.w as f32, tex_size.h as f32),
+            (self.mask.loc.x as f32, self.mask.loc.y as f32),
+            (self.mask.size.w as f32, self.mask.size.h as f32),
             self.radius,
             self.noise,
         );
@@ -573,51 +600,155 @@ pub fn source_elements(
     elements
 }
 
-/// The committed blur bounds of a window's surface, if any: the protocol's
-/// region clipped to the surface, in surface-local logical coordinates.
-pub fn window_blur_bounds(window: &smithay::desktop::Window) -> Option<Rectangle<i32, Logical>> {
-    use smithay::desktop::WindowSurface;
-
-    let surface = match window.underlying_surface() {
-        WindowSurface::Wayland(toplevel) => toplevel.wl_surface().clone(),
+/// The `wl_surface` a window draws through, if it is a Wayland one.
+///
+/// X11 windows have no `wl_surface` of their own to hang a blur region on, so
+/// they simply never blur.
+pub fn window_surface(window: &Window) -> Option<WlSurface> {
+    match window.underlying_surface() {
+        WindowSurface::Wayland(toplevel) => Some(toplevel.wl_surface().clone()),
         #[allow(unreachable_patterns)]
-        _ => return None,
-    };
-    let surface_size = window.geometry().size;
-    with_states(&surface, |states| {
-        states
-            .cached_state
-            .get::<BlurRegionCachedState>()
-            .current()
-            .blur_bounds(surface_size)
+        _ => None,
+    }
+}
+
+/// Whether a surface has a blur region committed at all.
+pub fn has_blur_region(surface: &WlSurface) -> bool {
+    with_states(surface, |states| {
+        background_effect::blur_region(states).is_some()
     })
 }
 
-/// A stable render-element [`Id`] for a surface's backdrop, so the damage
-/// tracker recognises it across frames instead of treating every frame's
-/// backdrop as a brand-new element (which would repaint the window's area
-/// every frame).
-pub fn backdrop_id(window: &smithay::desktop::Window) -> Option<Id> {
-    use smithay::desktop::WindowSurface;
+/// Whether anything visible on this output asked for blur.
+///
+/// The pre-pass is skipped entirely when nothing did, which is the common
+/// case — so this scan runs every frame and is deliberately cheap.
+pub fn output_wants_blur(shell: &Shell, monitor: &Monitor) -> bool {
+    let windows = shell
+        .visible_windows(monitor)
+        .filter_map(|tile| window_surface(tile.window()))
+        .any(|surface| has_blur_region(&surface));
+    if windows {
+        return true;
+    }
 
-    let surface = match window.underlying_surface() {
-        WindowSurface::Wayland(toplevel) => toplevel.wl_surface().clone(),
-        #[allow(unreachable_patterns)]
-        _ => return None,
-    };
-    Some(with_states(&surface, |states| {
-        states
-            .data_map
-            .insert_if_missing_threadsafe(|| BackdropId(Id::new()));
-        states
-            .data_map
-            .get::<BackdropId>()
-            .map(|id| id.0.clone())
-            .unwrap_or_else(Id::new)
-    }))
+    let map = layer_map_for_output(monitor.output());
+    BLURRABLE_LAYERS.iter().any(|layer| {
+        map.layers_on(*layer)
+            .any(|layer_surface| has_blur_region(layer_surface.wl_surface()))
+    })
 }
 
-struct BackdropId(Id);
+/// Places a surface's committed blur region on the output, in `out`.
+///
+/// `origin` is where the surface's own `(0, 0)` lands in output-local physical
+/// coordinates, and `clip` bounds the result. Returns the region's generation,
+/// or `None` when the surface committed no region at all — which is not the
+/// same as `out` coming back empty, since a client may legitimately set a
+/// region that covers nothing.
+pub fn place_blur_region(
+    surface: &WlSurface,
+    origin: Point<i32, Physical>,
+    scale: Scale<f64>,
+    clip: Rectangle<i32, Physical>,
+    out: &mut Vec<Rectangle<i32, Physical>>,
+) -> Option<u32> {
+    out.clear();
+
+    let region = with_states(surface, background_effect::blur_region)?;
+
+    // "The blur region is specified in the surface-local coordinates, and
+    // clipped by the compositor to the surface size." The size is only known
+    // once a buffer is attached; before that there is nothing to draw behind
+    // anyway, so an absent size means an empty placement rather than an
+    // unclipped one.
+    let surface_size = with_renderer_surface_state(surface, |state| state.surface_size()).flatten();
+    let Some(surface_size) = surface_size else {
+        return Some(region.generation);
+    };
+    let surface_rect = Rectangle::from_size(surface_size);
+
+    out.extend(
+        region
+            .rects
+            .iter()
+            .filter_map(|rect| place_rect(*rect, origin, scale, surface_rect, clip)),
+    );
+
+    Some(region.generation)
+}
+
+/// Places one surface-local rectangle on the output, or drops it if nothing of
+/// it survives the surface and the clip.
+fn place_rect(
+    rect: Rectangle<i32, Logical>,
+    origin: Point<i32, Physical>,
+    scale: Scale<f64>,
+    surface: Rectangle<i32, Logical>,
+    clip: Rectangle<i32, Physical>,
+) -> Option<Rectangle<i32, Physical>> {
+    let rect = rect.intersection(surface)?;
+
+    // Rounded as extremities rather than as location-plus-size: at a
+    // fractional scale the latter lets two rectangles that shared an edge in
+    // logical space end up a pixel apart, and a seam through a translucent
+    // backdrop is plainly visible.
+    let placed = Rectangle::from_extremities(
+        origin + rect.loc.to_physical_precise_round(scale),
+        origin + (rect.loc + rect.size.to_point()).to_physical_precise_round(scale),
+    );
+
+    let placed = placed.intersection(clip)?;
+    (!placed.is_empty()).then_some(placed)
+}
+
+/// Element identities and a commit counter for one surface's backdrops.
+///
+/// The ids have to be stable across frames or the damage tracker repaints the
+/// surface's area every frame; the counter has to advance exactly when the
+/// pixels change, which is when the texture underneath was re-blurred
+/// (`serial`) or the client committed a different region (`generation`).
+///
+/// Both live on the surface, so a surface visited by two outputs in one frame
+/// would make the counter oscillate. Nothing does that here: a window belongs
+/// to one workspace on one monitor, and a layer surface to one output.
+pub fn backdrop_slots(
+    surface: &WlSurface,
+    count: usize,
+    serial: u64,
+    generation: u32,
+) -> (Vec<Id>, CommitCounter) {
+    with_states(surface, |states| {
+        let slots = states
+            .data_map
+            .get_or_insert_threadsafe(BackdropSlots::default);
+        let mut slots = slots.0.lock().unwrap();
+
+        if slots.seen != Some((serial, generation)) {
+            slots.seen = Some((serial, generation));
+            slots.commit.increment();
+        }
+
+        // Grown, never shrunk, so a region that gains and loses a rectangle
+        // does not hand the same piece a new identity each time. The cap on
+        // rectangles caps this too.
+        while slots.ids.len() < count {
+            slots.ids.push(Id::new());
+        }
+
+        (slots.ids[..count].to_vec(), slots.commit)
+    })
+}
+
+#[derive(Debug, Default)]
+struct BackdropSlots(Mutex<BackdropSlotsInner>);
+
+#[derive(Debug, Default)]
+struct BackdropSlotsInner {
+    ids: Vec<Id>,
+    commit: CommitCounter,
+    seen: Option<(u64, u32)>,
+}
 
 #[cfg(test)]
 mod tests {
@@ -635,6 +766,94 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.passes(), 8);
+    }
+
+    fn logical(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    fn physical(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn a_region_covering_the_surface_covers_the_whole_backdrop() {
+        let placed = place_rect(
+            logical(0, 0, 100, 50),
+            (10, 20).into(),
+            Scale::from(1.0),
+            logical(0, 0, 100, 50),
+            physical(10, 20, 100, 50),
+        );
+        assert_eq!(placed, Some(physical(10, 20, 100, 50)));
+    }
+
+    #[test]
+    fn a_region_larger_than_the_surface_is_clipped_to_it() {
+        // "The blur region is ... clipped by the compositor to the surface
+        // size" — a client asking for more must not get more.
+        let placed = place_rect(
+            logical(-50, -50, 400, 400),
+            (0, 0).into(),
+            Scale::from(1.0),
+            logical(0, 0, 100, 50),
+            physical(0, 0, 1000, 1000),
+        );
+        assert_eq!(placed, Some(physical(0, 0, 100, 50)));
+    }
+
+    #[test]
+    fn a_region_outside_the_surface_is_dropped() {
+        let placed = place_rect(
+            logical(200, 200, 10, 10),
+            (0, 0).into(),
+            Scale::from(1.0),
+            logical(0, 0, 100, 50),
+            physical(0, 0, 1000, 1000),
+        );
+        assert_eq!(placed, None);
+    }
+
+    #[test]
+    fn a_region_outside_the_clip_is_dropped() {
+        // A window mid-shrink still holds its old buffer; its blur must not
+        // spill over the neighbour it is uncovering.
+        let placed = place_rect(
+            logical(0, 0, 100, 50),
+            (0, 0).into(),
+            Scale::from(1.0),
+            logical(0, 0, 100, 50),
+            physical(500, 500, 100, 50),
+        );
+        assert_eq!(placed, None);
+    }
+
+    #[test]
+    fn adjacent_rectangles_stay_adjacent_at_a_fractional_scale() {
+        // Rounding location and size separately would put a one-pixel seam
+        // between these two, and a seam through translucent glass shows.
+        let surface = logical(0, 0, 100, 100);
+        let clip = physical(0, 0, 1000, 1000);
+        let scale = Scale::from(1.25);
+
+        for edge in 1..100 {
+            let left = place_rect(logical(0, 0, edge, 10), (0, 0).into(), scale, surface, clip)
+                .expect("left half is on screen");
+            let right = place_rect(
+                logical(edge, 0, 100 - edge, 10),
+                (0, 0).into(),
+                scale,
+                surface,
+                clip,
+            )
+            .expect("right half is on screen");
+
+            assert_eq!(
+                left.loc.x + left.size.w,
+                right.loc.x,
+                "seam at logical x={edge}"
+            );
+        }
     }
 
     #[test]

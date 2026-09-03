@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies.smithay]
-version = "0.7.0"
-default-features = false
+workspace = true
 features = [
   "backend_drm",
   "backend_gbm",
@@ -26,6 +25,7 @@ features = [
 
 [dependencies]
 config = { path = "../config" }
+protocols = { path = "../protocols" }
 crownos-config = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

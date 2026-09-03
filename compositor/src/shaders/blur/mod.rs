@@ -39,9 +39,11 @@ impl BlurShaders {
         ]
     }
 
-    fn finish_uniforms() -> [UniformName<'static>; 3] {
+    fn finish_uniforms() -> [UniformName<'static>; 5] {
         [
-            UniformName::new("geo_size", UniformType::_2f),
+            UniformName::new("tex_size", UniformType::_2f),
+            UniformName::new("mask_offset", UniformType::_2f),
+            UniformName::new("mask_size", UniformType::_2f),
             UniformName::new("corner_radius", UniformType::_1f),
             UniformName::new("noise", UniformType::_1f),
         ]
@@ -81,13 +83,24 @@ impl BlurShaders {
         ]
     }
 
+    /// Uniforms for one backdrop rectangle.
+    ///
+    /// `tex_size` is the blurred scene texture, which is the output at 1:1 —
+    /// the shader needs it because `v_coords` is a texture coordinate.
+    /// `mask_offset`/`mask_size` are the rectangle the corner rounding is
+    /// measured against, in output-local physical pixels: the whole window,
+    /// even when this is one piece of a multi-rectangle blur region.
     pub fn finish_values(
-        geo_size: (f32, f32),
+        tex_size: (f32, f32),
+        mask_offset: (f32, f32),
+        mask_size: (f32, f32),
         corner_radius: f32,
         noise: f32,
-    ) -> [Uniform<'static>; 3] {
+    ) -> [Uniform<'static>; 5] {
         [
-            Uniform::new("geo_size", geo_size),
+            Uniform::new("tex_size", tex_size),
+            Uniform::new("mask_offset", mask_offset),
+            Uniform::new("mask_size", mask_size),
             Uniform::new("corner_radius", corner_radius),
             Uniform::new("noise", noise),
         ]

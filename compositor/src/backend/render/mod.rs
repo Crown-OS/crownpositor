@@ -44,7 +44,7 @@ use crate::{
         decorate::TileDecorator,
         rounded::{GlesDecorator, MultiDecorator},
     },
-    shaders::{blur::BlurShaders, rounded_corner::RoundedCornerShader},
+    shaders::{blur::BlurShaders, border::BorderShader, rounded_corner::RoundedCornerShader},
 };
 
 /// The GLES-over-GBM graphics stack every GPU gets on the KMS backend.
@@ -143,7 +143,8 @@ impl CrownRenderer for GlesRenderer {
 
     fn compile_shaders(&mut self) -> Result<(), RenderInitError> {
         RoundedCornerShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
-        BlurShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
+        BlurShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        BorderShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 
     fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator {
@@ -159,7 +160,8 @@ impl<'render> CrownRenderer for KmsRenderer<'render> {
         // persist per GPU, not per `MultiRenderer` instance.
         RoundedCornerShader::init(self.as_mut())
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
-        BlurShaders::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))
+        BlurShaders::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        BorderShader::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 
     fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator {

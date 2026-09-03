@@ -14,6 +14,7 @@ const COMMIT_VELOCITY: f64 = 4000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Fingers {
+    One,
     Two,
     Three,
     Four,
@@ -23,6 +24,7 @@ pub enum Fingers {
 impl Fingers {
     pub fn from_count(count: u32) -> Option<Self> {
         match count {
+            1 => Some(Self::One),
             2 => Some(Self::Two),
             3 => Some(Self::Three),
             4 => Some(Self::Four),

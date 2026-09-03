@@ -7,8 +7,8 @@ use smithay::{
     reexports::{
         wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDefaultMode,
         wayland_server::{
-            protocol::{wl_shm, wl_surface::WlSurface},
             Client, DisplayHandle,
+            protocol::{wl_shm, wl_surface::WlSurface},
         },
     },
     utils::{Clock, Monotonic},
@@ -21,6 +21,7 @@ use smithay::{
         idle_notify::IdleNotifierState,
         keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
+        pointer_gestures::PointerGesturesState,
         presentation::PresentationState,
         selection::{
             data_device::DataDeviceState,
@@ -35,9 +36,11 @@ use smithay::{
     },
 };
 
-use smithay::reexports::wayland_protocols::ext::background_effect::v1::server::ext_background_effect_manager_v1::Capability as BackgroundEffectCapability;
+use protocols::background_effect::{
+    BackgroundEffectState, Capability as BackgroundEffectCapability,
+};
 
-use crate::{protocols::background_effect::BackgroundEffectState, state::State};
+use crate::state::State;
 
 pub struct WaylandState {
     pub background_effect_state: BackgroundEffectState,
@@ -50,6 +53,9 @@ pub struct WaylandState {
     pub output_state: OutputManagerState,
     // pub output_configuration_state: OutputConfigurationState<State>,
     // pub output_power_state: OutputPowerState,
+    /// `zwp_pointer_gestures_v1`. Held only to keep the global alive — the
+    /// events themselves go out through the seat's pointer.
+    pub pointer_gestures_state: PointerGesturesState,
     pub presentation_state: PresentationState,
     pub primary_selection_state: PrimarySelectionState,
     pub ext_data_control_state: ExtDataControlState,
@@ -76,7 +82,6 @@ pub struct WaylandState {
     // pub a11y_state: A11yState,
     // pub dbus_state: DBusState,
     // pub keyboard_layout_state: KeyboardLayoutState,
-    // pub background_effect_state: BackgroundEffectState,
     pub clock: Clock<Monotonic>,
 }
 
@@ -100,11 +105,12 @@ impl WaylandState {
         seat.add_pointer();
 
         Ok(Self {
-            // Blur is advertised unconditionally: capability describes what
-            // the compositor *supports*, and a renderer whose blur shaders
-            // fail to compile degrades to drawing windows without the effect,
-            // which the protocol explicitly allows ("subject to compositor
-            // policies").
+            // Everything the renderer can do, which the config then narrows
+            // to what it will do — see
+            // `State::sync_background_effect_capabilities`. A renderer whose
+            // blur shaders fail to compile degrades to drawing windows without
+            // the effect rather than withdrawing the capability, which the
+            // protocol explicitly allows ("subject to compositor policies").
             background_effect_state: BackgroundEffectState::new::<State>(
                 display,
                 BackgroundEffectCapability::Blur,
@@ -116,6 +122,7 @@ impl WaylandState {
             fractional_scale_state: FractionalScaleManagerState::new::<State>(display),
             keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState::new::<State>(display),
             output_state: OutputManagerState::new_with_xdg_output::<State>(display),
+            pointer_gestures_state: PointerGesturesState::new::<State>(display),
             presentation_state: PresentationState::new::<State>(display, clock.id() as u32),
             ext_data_control_state: ExtDataControlState::new::<State, _>(
                 display,

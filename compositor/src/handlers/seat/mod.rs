@@ -2,8 +2,8 @@ mod keyboard_target;
 mod pointer_target;
 
 use smithay::{
-    delegate_cursor_shape, delegate_seat,
-    input::{keyboard::LedState, pointer::CursorImageStatus, Seat, SeatHandler, SeatState},
+    delegate_cursor_shape, delegate_pointer_gestures, delegate_seat,
+    input::{Seat, SeatHandler, SeatState, keyboard::LedState, pointer::CursorImageStatus},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::tablet_manager::TabletSeatHandler,
 };
@@ -54,3 +54,7 @@ impl TabletSeatHandler for State {}
 
 delegate_seat!(State);
 delegate_cursor_shape!(State);
+// Swipe and hold are advertised along with pinch — one global covers all three
+// — but only pinch is ever sent: swipes are spent on workspace switching before
+// a client could see them.
+delegate_pointer_gestures!(State);

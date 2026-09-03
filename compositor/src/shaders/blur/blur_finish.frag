@@ -31,8 +31,18 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-// The backdrop rectangle's size in physical pixels (same space as v_coords).
-uniform vec2 geo_size;
+// The blurred scene texture's size in pixels. `v_coords` is a *texture*
+// coordinate, not an element-local one, so this is what turns it back into a
+// position — and because the texture is the output at 1:1, that position is
+// output-local physical pixels.
+uniform vec2 tex_size;
+// The rectangle the corners are cut from, in those same output-local pixels:
+// the whole window, not the piece being drawn. A committed blur region is not
+// always the whole surface, so one window's backdrop can be several
+// rectangles, and each has to be cut by the window's corners rather than its
+// own.
+uniform vec2 mask_offset;
+uniform vec2 mask_size;
 // Corner radius in pixels — must match the window drawn on top.
 uniform float corner_radius;
 // Dither strength; hides the banding a strong blur produces on gradients.
@@ -58,14 +68,18 @@ void main() {
     // offscreen chain can never punch holes in the backdrop.
     color = vec4(color.rgb, 1.0);
 
+    // Everything below is measured in the masked rectangle's own space, so
+    // that a backdrop split into pieces dithers and rounds as one surface.
+    vec2 p = v_coords * tex_size - mask_offset;
+
     if (noise > 0.0) {
-        float dither = (hash(v_coords * geo_size) - 0.5) * noise;
+        float dither = (hash(p) - 0.5) * noise;
         color.rgb += vec3(dither);
     }
 
-    vec2 half_size = geo_size * 0.5;
+    vec2 half_size = mask_size * 0.5;
     float r = min(corner_radius, min(half_size.x, half_size.y));
-    float distance = rounded_box(v_coords * geo_size - half_size, half_size, r);
+    float distance = rounded_box(p - half_size, half_size, r);
 
 #if defined(GL_OES_standard_derivatives)
     float aa = max(fwidth(distance), 0.0001);

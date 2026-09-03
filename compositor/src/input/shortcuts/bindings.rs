@@ -3,7 +3,7 @@
 use std::{collections::HashMap, fmt, str::FromStr};
 
 use crownos_config::Keybinds;
-use smithay::input::keyboard::{keysyms, Keysym, KeysymHandle, ModifiersState};
+use smithay::input::keyboard::{Keysym, KeysymHandle, ModifiersState, keysyms};
 
 use config::Binding;
 
@@ -180,15 +180,17 @@ impl Bindings {
             ("Super+2", "workspace 1"),
             ("Super+3", "workspace 2"),
             ("Super+4", "workspace 3"),
+            ("Super+5", "workspace 4"),
             ("Super+Shift+1", "move-to-workspace 0 follow"),
             ("Super+Shift+2", "move-to-workspace 1 follow"),
             ("Super+Shift+3", "move-to-workspace 2 follow"),
             ("Super+Shift+4", "move-to-workspace 3 follow"),
+            ("Super+Shift+5", "move-to-workspace 4 follow"),
             ("Super+V", "toggle-float"),
             ("Super+F", "toggle-fullscreen"),
             ("Super+M", "toggle-maximize"),
-            ("Super+Space", "cycle-layout"),
-            ("Super+Shift+Space", "toggle-layout-mode"),
+            // ("Super+Space", "cycle-layout"),
+            // ("Super+Shift+Space", "toggle-layout-mode"),
             ("Super+Shift+C", "reload-config"),
             ("Super+Ctrl+L", "resize-split 0.05"),
             ("Super+Ctrl+H", "resize-split -0.05"),

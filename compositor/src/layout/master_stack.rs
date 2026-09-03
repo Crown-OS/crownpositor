@@ -4,8 +4,8 @@ use smithay::utils::{Logical, Rectangle};
 
 use crate::{
     layout::{
-        split_rows, Direction, LayoutAlgorithm, LayoutInput, LayoutKind, LayoutOp, LayoutOutput,
-        ResizeEdge,
+        Direction, LayoutAlgorithm, LayoutInput, LayoutKind, LayoutOp, LayoutOutput, ResizeEdge,
+        split_rows,
     },
     utils::id::WindowId,
 };
@@ -155,7 +155,7 @@ fn split_columns_by_ratio(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{testing::*, Gaps};
+    use crate::layout::{Gaps, testing::*};
 
     const NO_GAPS: Gaps = Gaps { inner: 0, outer: 0 };
 
@@ -169,14 +169,20 @@ mod tests {
     #[test]
     fn a_lone_window_fills_the_area() {
         let tiles = tiles(1);
-        let rects = run(&mut MasterStack::default(), &input(area(800, 600), &tiles, NO_GAPS));
+        let rects = run(
+            &mut MasterStack::default(),
+            &input(area(800, 600), &tiles, NO_GAPS),
+        );
         assert_eq!(rects[0], area(800, 600));
     }
 
     #[test]
     fn the_master_column_gets_its_ratio() {
         let tiles = tiles(2);
-        let rects = run(&mut MasterStack::new(0.5), &input(area(800, 600), &tiles, NO_GAPS));
+        let rects = run(
+            &mut MasterStack::new(0.5),
+            &input(area(800, 600), &tiles, NO_GAPS),
+        );
         assert_eq!(rects[0], Rectangle::new((0, 0).into(), (400, 600).into()));
         assert_eq!(rects[1], Rectangle::new((400, 0).into(), (400, 600).into()));
     }
@@ -184,15 +190,24 @@ mod tests {
     #[test]
     fn the_stack_splits_evenly_and_fills_the_column() {
         let tiles = tiles(4);
-        let rects = run(&mut MasterStack::new(0.5), &input(area(800, 601), &tiles, NO_GAPS));
+        let rects = run(
+            &mut MasterStack::new(0.5),
+            &input(area(800, 601), &tiles, NO_GAPS),
+        );
         assert_covers_vertically(&rects[1..], area(800, 601), 0);
     }
 
     #[test]
     fn gaps_sit_between_tiles_not_around_them() {
         let tiles = tiles(3);
-        let gaps = Gaps { inner: 10, outer: 0 };
-        let rects = run(&mut MasterStack::new(0.5), &input(area(800, 600), &tiles, gaps));
+        let gaps = Gaps {
+            inner: 10,
+            outer: 0,
+        };
+        let rects = run(
+            &mut MasterStack::new(0.5),
+            &input(area(800, 600), &tiles, gaps),
+        );
 
         assert_eq!(rects[0].loc.x, 0, "no gap at the outer edge");
         assert_eq!(rects[1].loc.x - (rects[0].loc.x + rects[0].size.w), 10);

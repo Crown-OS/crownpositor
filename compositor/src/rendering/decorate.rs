@@ -12,12 +12,37 @@ use smithay::{
         element::{
             Id, RenderElement, surface::WaylandSurfaceRenderElement, utils::CropRenderElement,
         },
+        utils::CommitCounter,
     },
     utils::{Physical, Rectangle},
 };
 
 /// A tile's surfaces, already clipped to the window's animated rect.
 pub type Cropped<R> = CropRenderElement<WaylandSurfaceRenderElement<R>>;
+
+/// One rectangle of blurred glass to draw behind a surface.
+///
+/// A rectangle rather than a whole window because `ext-background-effect-v1`
+/// lets a client blur *part* of itself; a surface that asks for a region with
+/// a hole in it produces several of these, all sharing one mask.
+#[derive(Debug, Clone)]
+pub struct Backdrop {
+    /// Stable across frames for the same piece of the same surface, or the
+    /// damage tracker treats every frame's backdrop as a brand new element and
+    /// repaints the window's area continuously.
+    pub id: Id,
+    /// Changes exactly when this backdrop's pixels do — a re-blur underneath
+    /// it, or the client committing a different region.
+    pub commit: CommitCounter,
+    /// The rectangle to fill, in output-local physical coordinates.
+    pub geometry: Rectangle<i32, Physical>,
+    /// The rectangle the corner rounding is measured against: the whole
+    /// window, so that pieces of one region round as one shape instead of each
+    /// growing its own four corners.
+    pub mask: Rectangle<i32, Physical>,
+    pub radius: f32,
+    pub alpha: f32,
+}
 
 /// Applies a backend's per-window effects to a tile.
 pub trait TileDecorator<R>
@@ -38,21 +63,21 @@ where
         radius: f32,
     ) -> Option<Self::Element>;
 
-    /// The blurred glass drawn *behind* a tile whose surface committed a blur
-    /// region. `None` — the default, and the only answer a decorator without
-    /// a blur pipeline has — simply leaves the window without the effect.
+    /// One rectangle of the blurred glass drawn *behind* a surface that
+    /// committed a blur region. `None` — the default, and the only answer a
+    /// decorator without a blur pipeline has — simply leaves the surface
+    /// without the effect.
+    fn backdrop(&mut self, renderer: &mut R, backdrop: Backdrop) -> Option<Self::Element> {
+        let _ = (renderer, backdrop);
+        None
+    }
+
+    /// Identifies the blurred texture this decorator would draw backdrops
+    /// from, changing whenever that texture is re-blurred.
     ///
-    /// `id` must be stable per window across frames, or the damage tracker
-    /// repaints the backdrop every frame.
-    fn backdrop(
-        &mut self,
-        renderer: &mut R,
-        id: Id,
-        geometry: Rectangle<i32, Physical>,
-        radius: f32,
-        alpha: f32,
-    ) -> Option<Self::Element> {
-        let _ = (renderer, id, geometry, radius, alpha);
+    /// `None` — the default — means there is none this frame, and the caller
+    /// can skip working out where backdrops would go at all.
+    fn backdrop_source(&self) -> Option<u64> {
         None
     }
 }
