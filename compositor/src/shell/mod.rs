@@ -3,6 +3,7 @@
 
 pub mod grab;
 pub mod monitor;
+pub mod scale;
 pub mod tile;
 pub mod transaction;
 pub mod workspace;
@@ -344,6 +345,7 @@ impl Shell {
         self.apply_output_settings(config);
         self.arrange_outputs();
         self.refresh_usable(&output);
+        self.advertise_output_scale(&output);
 
         output
     }
@@ -429,6 +431,7 @@ impl Shell {
             tile.window().output_enter(&output, Rectangle::default());
         }
         monitor.push_workspace(workspace);
+        self.advertise_output_scale(&output);
 
         for id in ids {
             self.window_to_location.insert(
@@ -542,6 +545,7 @@ impl Shell {
                 .collect();
             for output in outputs {
                 self.refresh_usable(&output);
+                self.advertise_output_scale(&output);
             }
         }
     }
@@ -1027,6 +1031,7 @@ impl Shell {
             tile.window()
                 .output_enter(&target_output, Rectangle::default());
         }
+        self.advertise_output_scale(&target_output);
         self.focus_window(id);
         self.normalize_all();
         true

@@ -6,8 +6,10 @@ use smithay::{
 use crate::state::State;
 
 impl FractionalScaleHandler for State {
-    fn new_fractional_scale(&mut self, _surface: WlSurface) {
-        // TODO: send the scale of the output the surface is currently on.
+    /// A client may create the object before it ever commits, so the scale it
+    /// would otherwise learn on commit has to be sent here too.
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        self.shell.advertise_scale(&surface);
     }
 }
 

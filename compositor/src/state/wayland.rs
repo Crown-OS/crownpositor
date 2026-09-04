@@ -126,7 +126,7 @@ impl WaylandState {
                 display,
                 BackgroundEffectCapability::Blur,
             ),
-            compositor_state: CompositorState::new::<State>(display),
+            compositor_state: CompositorState::new_v6::<State>(display),
             data_device_state: DataDeviceState::new::<State>(display),
             // TODO: `create_global` once the render node's formats are known.
             dmabuf_state: DmabufState::new(),
