@@ -1,157 +1,18 @@
-//! Chord parsing and the binding table.
+//! The binding table: the defaults, whatever the config lays over them, and
+//! lookup from a key event.
 
-use std::{collections::HashMap, fmt, str::FromStr};
+use std::collections::HashMap;
 
-use crownos_config::Keybinds;
-use smithay::input::keyboard::{Keysym, KeysymHandle, ModifiersState, keysyms};
+use smithay::input::keyboard::{KeysymHandle, ModifiersState};
 
 use config::Binding;
 
-#[cfg(test)]
-use crate::input::shortcuts::action::Direction;
-use crate::input::shortcuts::action::{Action, WorkspaceRef};
-
-/// The four modifiers a shortcut may name.
-///
-/// `caps_lock`, `num_lock` and `iso_level3/5_shift` are excluded: including them
-/// breaks Super+Q with CapsLock on, and every Alt binding on an AltGr layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct ModMask {
-    pub logo: bool,
-    pub ctrl: bool,
-    pub alt: bool,
-    pub shift: bool,
-}
-
-impl ModMask {
-    pub fn from_smithay(modifiers: &ModifiersState) -> Self {
-        Self {
-            logo: modifiers.logo,
-            ctrl: modifiers.ctrl,
-            alt: modifiers.alt,
-            shift: modifiers.shift,
-        }
-    }
-
-    pub fn is_empty(self) -> bool {
-        self == Self::default()
-    }
-}
-
-/// A parsed chord: some modifiers plus at most one ordinary key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Chord {
-    pub mods: ModMask,
-    /// `None` for a modifier-only chord such as `"Super"`, which fires on
-    /// release rather than press.
-    pub key: Option<Keysym>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParseChordError {
-    Empty,
-    UnknownToken(String),
-    MultipleKeys,
-}
-
-impl fmt::Display for ParseChordError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(f, "empty chord"),
-            Self::UnknownToken(token) => write!(f, "unknown key or modifier `{token}`"),
-            Self::MultipleKeys => write!(f, "a chord may name at most one non-modifier key"),
-        }
-    }
-}
-
-impl std::error::Error for ParseChordError {}
-
-impl FromStr for Chord {
-    type Err = ParseChordError;
-
-    /// Parses `"Super+Shift+Q"`. Case- and order-insensitive, so `"shift+super+q"`
-    /// is the same chord. `"None"` parses to an empty chord that matches nothing.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.trim().is_empty() {
-            return Err(ParseChordError::Empty);
-        }
-        if s.eq_ignore_ascii_case("none") {
-            return Ok(Self {
-                mods: ModMask::default(),
-                key: None,
-            });
-        }
-
-        let mut mods = ModMask::default();
-        let mut key = None;
-
-        for token in s.split('+').map(str::trim).filter(|t| !t.is_empty()) {
-            let lower = token.to_ascii_lowercase();
-            match lower.as_str() {
-                "super" | "logo" | "meta" | "mod4" | "cmd" => mods.logo = true,
-                "ctrl" | "control" => mods.ctrl = true,
-                "alt" | "mod1" | "option" => mods.alt = true,
-                "shift" => mods.shift = true,
-                _ => {
-                    if key.is_some() {
-                        return Err(ParseChordError::MultipleKeys);
-                    }
-                    key = Some(
-                        keysym_from_name(&lower)
-                            .ok_or_else(|| ParseChordError::UnknownToken(token.to_owned()))?,
-                    );
-                }
-            }
-        }
-
-        Ok(Self { mods, key })
-    }
-}
-
-/// Name -> keysym, explicit rather than via xkb so the accepted spellings do not
-/// shift with the user's keymap.
-fn keysym_from_name(lower: &str) -> Option<Keysym> {
-    // Shift lives in the modifier mask, not the keysym, so `Super+Shift+Q` is
-    // `{shift, q}` rather than `{shift, Q}`.
-    if lower.chars().count() == 1 {
-        let ch = lower.chars().next().expect("one char");
-        if ch.is_ascii_graphic() {
-            return Some(Keysym::from(ch as u32));
-        }
-    }
-
-    let raw = match lower {
-        "return" | "enter" => keysyms::KEY_Return,
-        "space" => keysyms::KEY_space,
-        "tab" => keysyms::KEY_Tab,
-        "escape" | "esc" => keysyms::KEY_Escape,
-        "backspace" => keysyms::KEY_BackSpace,
-        "delete" | "del" => keysyms::KEY_Delete,
-        "home" => keysyms::KEY_Home,
-        "end" => keysyms::KEY_End,
-        "pageup" | "prior" => keysyms::KEY_Prior,
-        "pagedown" | "next" => keysyms::KEY_Next,
-        "insert" => keysyms::KEY_Insert,
-        "left" => keysyms::KEY_Left,
-        "right" => keysyms::KEY_Right,
-        "up" => keysyms::KEY_Up,
-        "down" => keysyms::KEY_Down,
-        "f1" => keysyms::KEY_F1,
-        "f2" => keysyms::KEY_F2,
-        "f3" => keysyms::KEY_F3,
-        "f4" => keysyms::KEY_F4,
-        "f5" => keysyms::KEY_F5,
-        "f6" => keysyms::KEY_F6,
-        "f7" => keysyms::KEY_F7,
-        "f8" => keysyms::KEY_F8,
-        "f9" => keysyms::KEY_F9,
-        "f10" => keysyms::KEY_F10,
-        "f11" => keysyms::KEY_F11,
-        "f12" => keysyms::KEY_F12,
-        _ => return None,
-    };
-    Some(Keysym::new(raw))
-}
+use crate::input::shortcuts::{
+    action::Action,
+    chord::{Chord, ModMask},
+    custom::{self, Override},
+    defaults,
+};
 
 #[derive(Debug, Default)]
 pub struct Bindings {
@@ -162,94 +23,48 @@ pub struct Bindings {
 
 impl Bindings {
     pub fn defaults() -> Self {
-        const DEFAULTS: &[(&str, &str)] = &[
-            ("Super+Shift+E", "quit"),
-            ("Super+Return", "spawn kitty"),
-            ("Super+Q", "close-window"),
-            ("Super+H", "focus left"),
-            ("Super+L", "focus right"),
-            ("Super+K", "focus up"),
-            ("Super+J", "focus down"),
-            ("Super+Shift+H", "move left"),
-            ("Super+Shift+L", "move right"),
-            ("Super+Shift+K", "move up"),
-            ("Super+Shift+J", "move down"),
-            ("Super+Tab", "workspace +1"),
-            ("Super+Shift+Tab", "workspace -1"),
-            ("Super+1", "workspace 0"),
-            ("Super+2", "workspace 1"),
-            ("Super+3", "workspace 2"),
-            ("Super+4", "workspace 3"),
-            ("Super+5", "workspace 4"),
-            ("Super+Shift+1", "move-to-workspace 0 follow"),
-            ("Super+Shift+2", "move-to-workspace 1 follow"),
-            ("Super+Shift+3", "move-to-workspace 2 follow"),
-            ("Super+Shift+4", "move-to-workspace 3 follow"),
-            ("Super+Shift+5", "move-to-workspace 4 follow"),
-            ("Super+V", "toggle-float"),
-            ("Super+F", "toggle-fullscreen"),
-            ("Super+M", "toggle-maximize"),
-            // ("Super+Space", "cycle-layout"),
-            // ("Super+Shift+Space", "toggle-layout-mode"),
-            ("Super+Shift+C", "reload-config"),
-            ("Super+Ctrl+L", "resize-split 0.05"),
-            ("Super+Ctrl+H", "resize-split -0.05"),
-            ("Super+P", "promote"),
-            ("Super+R", "cycle-size"),
-            ("Super+Shift+R", "reset-size"),
-        ];
-
         let mut bindings = Self::default();
-        for (chord, action) in DEFAULTS {
-            let chord: Chord = chord.parse().expect("built-in chord parses");
-            let action: Action = action.parse().expect("built-in action parses");
-            bindings.insert(chord, action);
+        for (bind, action) in defaults::bindings() {
+            bindings.bind(bind.into(), action);
         }
         bindings
     }
 
-    pub fn from_config(config: &Keybinds) -> Self {
-        if config.custom_keybinds.is_empty() {
-            return Self::defaults();
+    /// The defaults with the config's rows laid over them.
+    ///
+    /// A row rebinds one chord and leaves every other alone, so adding a
+    /// shortcut cannot cost the user their way out of the session. Binding
+    /// `none` deletes a chord instead, which hands the key back to whatever has
+    /// focus — the only way to reach an application's own `Super+L`.
+    pub fn with_custom(custom: &[Binding]) -> Self {
+        let mut bindings = Self::defaults();
+
+        for Override { chord, action } in custom::overrides(custom) {
+            if chord.is_empty() {
+                tracing::debug!(?action, "a keybind with no shortcut binds nothing");
+            } else if matches!(action, Action::None) {
+                bindings.unbind(chord);
+            } else {
+                bindings.bind(chord, action);
+            }
         }
 
-        let mut bindings = Self::default();
-        for Binding { keys, action } in &config.custom_keybinds {
-            let chord = match keys.parse::<Chord>() {
-                Ok(chord) => chord,
-                Err(err) => {
-                    tracing::warn!(%err, keys, action, "skipping keybind");
-                    continue;
-                }
-            };
-            let parsed = match action.parse::<Action>() {
-                Ok(parsed) => parsed,
-                Err(err) => {
-                    tracing::warn!(%err, keys, action, "skipping keybind");
-                    continue;
-                }
-            };
-            bindings.insert(chord, parsed);
-        }
         bindings
     }
 
-    fn insert(&mut self, chord: Chord, action: Action) {
-        match chord.key {
-            Some(key) => {
-                self.keys.insert(
-                    Chord {
-                        mods: chord.mods,
-                        key: Some(key),
-                    },
-                    action,
-                );
-            }
-            // `"None"` binds nothing — how a user asks for an empty table.
-            None if chord.mods.is_empty() => {}
-            None => {
-                self.mod_only.insert(chord.mods, action);
-            }
+    fn bind(&mut self, chord: Chord, action: Action) {
+        if chord.key.is_some() {
+            self.keys.insert(chord, action);
+        } else {
+            self.mod_only.insert(chord.mods, action);
+        }
+    }
+
+    fn unbind(&mut self, chord: Chord) {
+        if chord.key.is_some() {
+            self.keys.remove(&chord);
+        } else {
+            self.mod_only.remove(&chord.mods);
         }
     }
 
@@ -257,132 +72,54 @@ impl Bindings {
     /// Cyrillic or Dvorak keymap, then falls back to the modified symbol.
     pub fn lookup(&self, modifiers: &ModifiersState, handle: &KeysymHandle<'_>) -> Option<Action> {
         let mods = ModMask::from_smithay(modifiers);
+        let at = |key| {
+            self.keys.get(&Chord {
+                mods,
+                key: Some(key),
+            })
+        };
 
         handle
             .raw_latin_sym_or_raw_current_sym()
-            .and_then(|key| {
-                self.keys.get(&Chord {
-                    mods,
-                    key: Some(key),
-                })
-            })
-            .or_else(|| {
-                self.keys.get(&Chord {
-                    mods,
-                    key: Some(handle.modified_sym()),
-                })
-            })
+            .and_then(at)
+            .or_else(|| at(handle.modified_sym()))
             .cloned()
     }
 
     pub fn lookup_mod_only(&self, mods: ModMask) -> Option<Action> {
         self.mod_only.get(&mods).cloned()
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty() && self.mod_only.is_empty()
-    }
-}
-
-/// Touchpad gestures resolve to the same [`Action`]s the keyboard produces.
-#[derive(Debug, Default)]
-pub struct GestureBindings {
-    map: HashMap<crate::input::trackpad::gestures::SwipeGesture, Action>,
-}
-
-impl GestureBindings {
-    pub fn defaults() -> Self {
-        use crate::input::trackpad::gestures::{Fingers, SwipeGesture};
-
-        let mut map = HashMap::new();
-        map.insert(
-            SwipeGesture::LeftToRight(Fingers::Three),
-            Action::Workspace(WorkspaceRef::Relative(-1)),
-        );
-        map.insert(
-            SwipeGesture::RightToLeft(Fingers::Three),
-            Action::Workspace(WorkspaceRef::Relative(1)),
-        );
-        map.insert(
-            SwipeGesture::BottomToTop(Fingers::Four),
-            Action::OpenWorkspaceView,
-        );
-        map.insert(
-            SwipeGesture::TopToBottom(Fingers::Four),
-            Action::CloseWorkspaceView,
-        );
-        Self { map }
-    }
-
-    pub fn lookup(
-        &self,
-        gesture: crate::input::trackpad::gestures::SwipeGesture,
-    ) -> Option<Action> {
-        self.map.get(&gesture).cloned()
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crownos_config::Keybind;
+
     use super::*;
+    use crate::input::shortcuts::action::{Direction, WorkspaceRef};
 
-    fn chord(s: &str) -> Chord {
-        s.parse().unwrap_or_else(|err| panic!("`{s}`: {err}"))
+    fn chord(written: &str) -> Chord {
+        written
+            .parse::<Keybind>()
+            .unwrap_or_else(|err| panic!("`{written}`: {err}"))
+            .into()
     }
 
-    #[test]
-    fn chord_parsing_is_order_and_case_insensitive() {
-        assert_eq!(chord("Super+Shift+Q"), chord("shift+SUPER+q"));
+    fn row(keys: &str, action: &str) -> Binding {
+        Binding {
+            keys: keys.to_owned(),
+            action: action.to_owned(),
+        }
     }
 
-    #[test]
-    fn modifier_only_chords_have_no_key() {
-        let parsed = chord("Super");
-        assert!(parsed.mods.logo);
-        assert_eq!(parsed.key, None);
-    }
-
-    #[test]
-    fn letters_are_lowercased_and_shift_stays_in_the_mask() {
-        let parsed = chord("Super+Shift+Q");
-        assert!(parsed.mods.shift);
-        assert_eq!(parsed.key, Some(Keysym::from('q' as u32)));
-    }
-
-    #[test]
-    fn named_keys_resolve() {
-        assert_eq!(
-            chord("Super+Return").key,
-            Some(Keysym::new(keysyms::KEY_Return))
-        );
-        assert_eq!(
-            chord("Super+Space").key,
-            Some(Keysym::new(keysyms::KEY_space))
-        );
-        assert_eq!(chord("F11").key, Some(Keysym::new(keysyms::KEY_F11)));
-    }
-
-    #[test]
-    fn unknown_and_ambiguous_chords_are_errors() {
-        assert!("Super+Frobnicate".parse::<Chord>().is_err());
-        assert!("Super+Q+W".parse::<Chord>().is_err());
-        assert!("".parse::<Chord>().is_err());
-    }
-
-    #[test]
-    fn every_default_binding_parses() {
-        // `defaults()` unwraps, so a typo in the table is a startup panic. This
-        // turns it into a test failure that names the row.
-        let bindings = Bindings::defaults();
-        assert!(bindings.keys.len() > 20, "the table should be substantial");
+    fn bound(bindings: &Bindings, keys: &str) -> Option<Action> {
+        bindings.keys.get(&chord(keys)).cloned()
     }
 
     #[test]
     fn the_defaults_cover_every_core_operation() {
         let bindings = Bindings::defaults();
-        let bound: Vec<&Action> = bindings.keys.values().collect();
-
-        let has = |predicate: fn(&Action) -> bool| bound.iter().any(|a| predicate(a));
+        let has = |predicate: fn(&Action) -> bool| bindings.keys.values().any(predicate);
 
         assert!(has(|a| matches!(a, Action::Quit)), "no way to quit");
         assert!(has(|a| matches!(a, Action::CloseWindow)));
@@ -403,85 +140,139 @@ mod tests {
     #[test]
     fn all_four_focus_directions_are_bound() {
         let bindings = Bindings::defaults();
-        for dir in [
+
+        for direction in [
             Direction::Left,
             Direction::Right,
             Direction::Up,
             Direction::Down,
         ] {
             assert!(
-                bindings.keys.values().any(|a| *a == Action::Focus(dir)),
-                "{dir:?} is not bound"
+                bindings
+                    .keys
+                    .values()
+                    .any(|a| *a == Action::Focus(direction)),
+                "{direction:?} is not bound"
             );
         }
     }
 
     #[test]
-    fn no_chord_is_bound_twice() {
-        // A duplicate would silently overwrite, so the later row wins with no
-        // diagnostic. Counting the table against the source rows catches it.
-        let bindings = Bindings::defaults();
-        let mut seen = std::collections::HashSet::new();
-        for chord in bindings.keys.keys() {
-            assert!(seen.insert(*chord), "{chord:?} is bound more than once");
-        }
-    }
-
-    #[test]
     fn defaults_bind_a_way_out() {
-        let bindings = Bindings::defaults();
         assert_eq!(
-            bindings.keys.get(&chord("Super+Shift+E")),
-            Some(&Action::Quit),
+            bound(&Bindings::defaults(), "Super+Shift+E"),
+            Some(Action::Quit),
             "a fresh install must have a quit binding"
         );
     }
 
+    /// A digit reaches the workspace it is written on, not the one after it.
     #[test]
-    fn empty_config_falls_back_to_defaults() {
-        let config = Keybinds::default();
-        assert!(
-            !Bindings::from_config(&config).is_empty(),
-            "an empty keybinds list means defaults, not an empty table"
+    fn the_workspace_digits_line_up_with_their_index() {
+        let bindings = Bindings::defaults();
+
+        assert_eq!(
+            bound(&bindings, "Super+1"),
+            Some(Action::Workspace(WorkspaceRef::Index(0)))
+        );
+        assert_eq!(
+            bound(&bindings, "Super+Shift+5"),
+            Some(Action::MoveWindowToWorkspace {
+                target: WorkspaceRef::Index(4),
+                follow: true,
+            })
+        );
+    }
+
+    /// Two defaults on one chord would let the later row win silently.
+    #[test]
+    fn no_default_chord_is_bound_twice() {
+        let bindings = Bindings::defaults();
+
+        assert_eq!(
+            defaults::bindings().count(),
+            bindings.keys.len() + bindings.mod_only.len()
         );
     }
 
     #[test]
-    fn explicit_none_binds_nothing() {
-        let config = Keybinds {
-            custom_keybinds: vec![Binding {
-                keys: "None".into(),
-                action: "quit".into(),
-            }],
-            ..Default::default()
-        };
-        assert!(
-            Bindings::from_config(&config).is_empty(),
-            "a single `None` row is how a user asks for no bindings at all"
+    fn an_empty_config_leaves_the_defaults_alone() {
+        assert_eq!(
+            bound(&Bindings::with_custom(&[]), "Super+Q"),
+            Some(Action::CloseWindow)
         );
     }
 
     #[test]
-    fn one_bad_row_does_not_discard_the_others() {
-        let config = Keybinds {
-            custom_keybinds: vec![
-                Binding {
-                    keys: "Supper+Q".into(),
-                    action: "quit".into(),
-                },
-                Binding {
-                    keys: "Super+Q".into(),
-                    action: "frobnicate".into(),
-                },
-                Binding {
-                    keys: "Super+E".into(),
-                    action: "quit".into(),
-                },
-            ],
-            ..Default::default()
-        };
-        let bindings = Bindings::from_config(&config);
-        assert_eq!(bindings.keys.len(), 1);
-        assert_eq!(bindings.keys.get(&chord("Super+E")), Some(&Action::Quit));
+    fn a_custom_row_adds_without_costing_a_default() {
+        let bindings = Bindings::with_custom(&[row("Super+B", "spawn firefox")]);
+
+        assert_eq!(
+            bound(&bindings, "Super+B"),
+            Some(Action::Spawn(vec!["firefox".to_owned()]))
+        );
+        assert_eq!(
+            bound(&bindings, "Super+Shift+E"),
+            Some(Action::Quit),
+            "one custom row must not discard the built-in table"
+        );
+    }
+
+    #[test]
+    fn a_custom_row_replaces_the_default_on_the_same_chord() {
+        let bindings = Bindings::with_custom(&[row("Super+Enter", "spawn alacritty")]);
+
+        assert_eq!(
+            bound(&bindings, "Super+Enter"),
+            Some(Action::Spawn(vec!["alacritty".to_owned()]))
+        );
+    }
+
+    /// Deleted rather than bound to a no-op, so the key reaches the client.
+    #[test]
+    fn binding_none_gives_the_chord_back_to_the_client() {
+        let bindings = Bindings::with_custom(&[row("Super+L", "none")]);
+
+        assert_eq!(bound(&bindings, "Super+L"), None);
+        assert_eq!(
+            bound(&bindings, "Super+H"),
+            Some(Action::Focus(Direction::Left)),
+            "unbinding one chord must not touch its neighbours"
+        );
+    }
+
+    #[test]
+    fn a_modifier_only_row_fires_on_its_own_mask() {
+        let bindings = Bindings::with_custom(&[row("Super+Ctrl", "spawn crownlauncher")]);
+
+        assert_eq!(
+            bindings.lookup_mod_only(chord("Super+Ctrl").mods),
+            Some(Action::Spawn(vec!["crownlauncher".to_owned()]))
+        );
+        assert_eq!(bindings.lookup_mod_only(chord("Super+Alt").mods), None);
+    }
+
+    #[test]
+    fn a_row_with_no_shortcut_is_ignored() {
+        let bindings = Bindings::with_custom(&[row("None", "quit")]);
+
+        assert_eq!(
+            bound(&bindings, "Super+Shift+E"),
+            Some(Action::Quit),
+            "an unbound row says nothing about the rest of the table"
+        );
+    }
+
+    #[test]
+    fn the_last_row_on_a_chord_wins() {
+        let bindings = Bindings::with_custom(&[
+            row("Super+B", "spawn firefox"),
+            row("Super+B", "spawn chromium"),
+        ]);
+
+        assert_eq!(
+            bound(&bindings, "Super+B"),
+            Some(Action::Spawn(vec!["chromium".to_owned()]))
+        );
     }
 }

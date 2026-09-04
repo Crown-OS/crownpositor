@@ -8,3 +8,6 @@ crownos-config = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+ron = "0.12"

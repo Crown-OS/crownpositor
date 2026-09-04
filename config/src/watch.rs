@@ -7,8 +7,9 @@
 use std::sync::Arc;
 
 use crownos_config::{
-    schema::{compositor, display, LayoutMode, OutputSetting},
-    subscribe_key, subscribe_typed, Appearance, DisplayScale, Key, Keybinds, Subscription,
+    Appearance, DisplayScale, Key, Subscription,
+    schema::{Binding, LayoutMode, OutputSetting, compositor, display, keybinds},
+    subscribe_key, subscribe_typed,
 };
 use serde::de::DeserializeOwned;
 
@@ -24,7 +25,7 @@ pub enum Update {
     Outputs(Vec<OutputSetting>),
     WindowRules(WindowRules),
     Scale(DisplayScale),
-    Keybinds(Keybinds),
+    CustomKeybinds(Vec<Binding>),
     Appearance(Appearance),
 }
 
@@ -53,7 +54,7 @@ impl Watch {
                     Update::WindowRules(WindowRules::compile(&rules))
                 }),
                 key(&sink, display::Scale, Update::Scale),
-                section(&sink, Keybinds::SECTION, Update::Keybinds),
+                key(&sink, keybinds::CustomKeybinds, Update::CustomKeybinds),
                 section(&sink, Appearance::SECTION, Update::Appearance),
             ],
         }

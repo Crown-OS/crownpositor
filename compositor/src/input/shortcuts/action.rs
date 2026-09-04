@@ -4,7 +4,9 @@
 //! and go down one dispatch path, `State::handle_action`. No second enum for
 //! gestures — that is how "swipe left" and "Super+Tab" drift apart.
 
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
+
+use thiserror::Error;
 
 /// Which way a focus or move operation goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,11 +124,15 @@ pub enum Action {
     ResetSize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ParseActionError {
+    #[error("empty action")]
     Empty,
+    #[error("unknown action `{0}`")]
     UnknownAction(String),
+    #[error("invalid {what} `{got}`")]
     BadArgument { what: &'static str, got: String },
+    #[error("`{action}` needs a {what}")]
     MissingArgument { action: String, what: &'static str },
 }
 
@@ -138,21 +144,6 @@ impl ParseActionError {
         }
     }
 }
-
-impl fmt::Display for ParseActionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(f, "empty action"),
-            Self::UnknownAction(name) => write!(f, "unknown action `{name}`"),
-            Self::BadArgument { what, got } => write!(f, "invalid {what} `{got}`"),
-            Self::MissingArgument { action, what } => {
-                write!(f, "`{action}` needs a {what}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ParseActionError {}
 
 impl FromStr for Action {
     type Err = ParseActionError;
@@ -241,6 +232,27 @@ impl FromStr for Action {
     }
 }
 
+impl From<Direction> for crate::layout::Direction {
+    fn from(dir: Direction) -> Self {
+        match dir {
+            Direction::Left => Self::Left,
+            Direction::Right => Self::Right,
+            Direction::Up => Self::Up,
+            Direction::Down => Self::Down,
+        }
+    }
+}
+
+impl From<LayoutSelection> for crate::layout::LayoutKind {
+    fn from(selection: LayoutSelection) -> Self {
+        match selection {
+            LayoutSelection::MasterStack => Self::MasterStack,
+            LayoutSelection::ScrollingColumns => Self::ScrollingColumns,
+            LayoutSelection::Floating => Self::Floating,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,26 +337,5 @@ mod tests {
 
         let err = "focus".parse::<Action>().unwrap_err();
         assert_eq!(err.to_string(), "`focus` needs a direction");
-    }
-}
-
-impl From<Direction> for crate::layout::Direction {
-    fn from(dir: Direction) -> Self {
-        match dir {
-            Direction::Left => Self::Left,
-            Direction::Right => Self::Right,
-            Direction::Up => Self::Up,
-            Direction::Down => Self::Down,
-        }
-    }
-}
-
-impl From<LayoutSelection> for crate::layout::LayoutKind {
-    fn from(selection: LayoutSelection) -> Self {
-        match selection {
-            LayoutSelection::MasterStack => Self::MasterStack,
-            LayoutSelection::ScrollingColumns => Self::ScrollingColumns,
-            LayoutSelection::Floating => Self::Floating,
-        }
     }
 }
