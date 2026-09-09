@@ -36,8 +36,6 @@ impl TryFrom<&Binding> for Override {
     }
 }
 
-/// Every row that parses, in file order.
-///
 /// A row that does not is logged and dropped: one typo must not take the rest
 /// of the file with it, and least of all the defaults it was laid over.
 pub fn overrides(custom: &[Binding]) -> impl Iterator<Item = Override> + '_ {

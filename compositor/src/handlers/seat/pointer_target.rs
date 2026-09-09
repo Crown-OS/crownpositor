@@ -43,24 +43,39 @@ pub enum PointerFocusTarget {
         layer: LayerSurface,
         surface: WlSurface,
     },
+    /// A window's own frame — its titlebar and controls. The compositor drew
+    /// those pixels, so it answers for them: nothing is forwarded to the client,
+    /// and the handlers in `input::decoration` do the work instead.
+    ///
+    /// Which *part* of the frame is deliberately absent. The pointer crossing
+    /// from one control to the next would otherwise change the target's
+    /// identity, and the seat would read that as leaving one window for another.
+    Decoration { window: Window },
 }
 
 impl PointerFocusTarget {
-    /// The surface the events are addressed to.
-    pub fn surface(&self) -> &WlSurface {
+    /// The client surface the events are addressed to, if any. A frame has
+    /// none: its pixels belong to the compositor.
+    pub fn surface(&self) -> Option<&WlSurface> {
         match self {
-            Self::Window { surface, .. } | Self::LayerShell { surface, .. } => surface,
+            Self::Window { surface, .. } | Self::LayerShell { surface, .. } => Some(surface),
+            Self::Decoration { .. } => None,
         }
     }
 
-    /// The toplevel the pointer is inside, if it is inside one. A layer surface
-    /// answers `None`: it is not a window, and window focus has nowhere to move
-    /// to when a click lands on one.
+    /// The toplevel the pointer is inside, if it is inside one — its frame
+    /// included, because clicking a titlebar focuses the window under it. A
+    /// layer surface answers `None`: it is not a window, and window focus has
+    /// nowhere to move to when a click lands on one.
     pub fn window(&self) -> Option<&Window> {
         match self {
-            Self::Window { window, .. } => Some(window),
+            Self::Window { window, .. } | Self::Decoration { window } => Some(window),
             Self::LayerShell { .. } => None,
         }
+    }
+
+    pub fn is_decoration(&self) -> bool {
+        matches!(self, Self::Decoration { .. })
     }
 }
 
@@ -71,17 +86,27 @@ impl IsAlive for PointerFocusTarget {
         match self {
             Self::Window { window, surface } => window.alive() && surface.alive(),
             Self::LayerShell { layer, surface } => layer.alive() && surface.alive(),
+            Self::Decoration { window } => window.alive(),
         }
     }
 }
 
 impl WaylandFocus for PointerFocusTarget {
+    /// A frame answers with the window it belongs to. It is not a surface the
+    /// pointer can enter, but it *is* that client's window, which is what
+    /// `same_client_as` below is asking.
     fn wl_surface(&self) -> Option<Cow<'_, WlSurface>> {
-        Some(Cow::Borrowed(self.surface()))
+        match self {
+            Self::Window { surface, .. } | Self::LayerShell { surface, .. } => {
+                Some(Cow::Borrowed(surface))
+            }
+            Self::Decoration { window } => window.wl_surface(),
+        }
     }
 
     fn same_client_as(&self, object_id: &ObjectId) -> bool {
-        self.surface().id().same_client_as(object_id)
+        self.wl_surface()
+            .is_some_and(|surface| surface.id().same_client_as(object_id))
     }
 }
 
@@ -92,7 +117,9 @@ macro_rules! delegate_to_surface {
     ($($method:ident($($arg:ident: $ty:ty),*);)*) => {
         $(
             fn $method(&self, seat: &Seat<State>, data: &mut State $(, $arg: $ty)*) {
-                PointerTarget::$method(self.surface(), seat, data $(, $arg)*);
+                if let Some(surface) = self.surface() {
+                    PointerTarget::$method(surface, seat, data $(, $arg)*);
+                }
             }
         )*
     };
@@ -102,6 +129,14 @@ macro_rules! delegate_to_surface {
 /// actually emits `wl_pointer.enter/motion/button/axis/frame/leave` and the
 /// `wp_pointer_gestures` events.
 ///
+/// A frame has no surface, so every method here does nothing for one. That is
+/// the whole of its behaviour as a *target*: it exists to withhold events from
+/// the client under it. What a frame does with a click is decided in
+/// [`input::decoration`](crate::input::decoration), driven from the pointer
+/// handlers rather than from inside this dispatch — smithay holds the pointer's
+/// own lock for the duration of these calls, so anything reaching back into the
+/// seat from here would deadlock the compositor.
+///
 /// `replace` is left to the trait default: it does leave-old, reset the cursor
 /// to the default shape, enter-new, in that order, and the reset is what stops
 /// a window's custom cursor from following the pointer out of it.
@@ -109,8 +144,9 @@ impl PointerTarget<State> for PointerFocusTarget {
     delegate_to_surface! {
         enter(event: &MotionEvent);
         motion(event: &MotionEvent);
-        relative_motion(event: &RelativeMotionEvent);
+        leave(serial: Serial, time: u32);
         button(event: &ButtonEvent);
+        relative_motion(event: &RelativeMotionEvent);
         axis(frame: AxisFrame);
         frame();
         gesture_swipe_begin(event: &GestureSwipeBeginEvent);
@@ -121,6 +157,5 @@ impl PointerTarget<State> for PointerFocusTarget {
         gesture_pinch_end(event: &GesturePinchEndEvent);
         gesture_hold_begin(event: &GestureHoldBeginEvent);
         gesture_hold_end(event: &GestureHoldEndEvent);
-        leave(serial: Serial, time: u32);
     }
 }

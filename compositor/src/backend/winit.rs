@@ -16,7 +16,7 @@ use smithay::{
 use crate::{
     backend::render::CrownRenderer as _,
     rendering::{
-        self,
+        self, FrameStyle,
         blur::{self, BlurBuffers, BlurConfig},
         rounded::GlesDecorator,
     },
@@ -165,6 +165,19 @@ fn init_dmabuf(
 }
 
 fn render(state: &mut State) -> anyhow::Result<()> {
+    let Some(scale) = state
+        .backend
+        .winit()
+        .map(|winit| Scale::from(winit.output.current_scale().fractional_scale()))
+    else {
+        return Ok(());
+    };
+
+    // The menu geometry is what both the renderer and the hit test read, so it
+    // is settled before either of them runs — and before the borrows below,
+    // because laying it out needs the whole state.
+    state.layout_menus(scale.y);
+
     let State {
         backend,
         common,
@@ -172,16 +185,14 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         clock,
         config,
         input,
+        text,
         ..
     } = state;
-    // Physical pixels, because that is the space the shader works in.
-    let radius = config.current.appearance.border_radius as f32;
 
     let Some(winit) = backend.winit() else {
         return Ok(());
     };
 
-    let scale = Scale::from(winit.output.current_scale().fractional_scale());
     // A hardcoded age of 0 makes every frame a full repaint.
     let age = winit.backend.buffer_age().unwrap_or(0);
 
@@ -240,7 +251,14 @@ fn render(state: &mut State) -> anyhow::Result<()> {
             &mut input.cursor,
             input.pointer_location,
             scale,
-            radius,
+            &mut FrameStyle::new(
+                &config.current.appearance,
+                scale.y,
+                monitor.geometry().loc,
+                text,
+                shell.focused_window_id(),
+                input.hovered_control,
+            ),
         );
 
         let result = winit

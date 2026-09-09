@@ -1,9 +1,11 @@
 //! The model: monitors own workspaces, workspaces own tiles, and the indices
 //! here are the only way to get from a surface to any of it.
 
+pub mod decoration;
 pub mod grab;
 pub mod monitor;
 pub mod scale;
+pub mod snap;
 pub mod tile;
 pub mod transaction;
 pub mod workspace;
@@ -33,11 +35,13 @@ use config::{Config, ResolvedRule};
 use crate::{
     animations::spring::SpringProfile,
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
-    layout::{Direction, Gaps, LayoutKind, LayoutOp},
+    layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
+    menu::Menus,
     shell::{
         monitor::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
+        snap::{SnapPreview, SnapPreviews},
         tile::{Tile, WindowState},
         transaction::Transaction,
         workspace::{Workspace, WorkspaceRef},
@@ -57,10 +61,13 @@ fn configure(
 ) -> Option<smithay::utils::Serial> {
     let toplevel = tile.toplevel().cloned()?;
     let state = tile.state();
-    let size = tile.target().size;
+    // The size the client is *told*, which is the frame minus its decoration —
+    // and nothing at all while the client still owns the decision.
+    let size = tile.configured_size();
+    let recorded = tile.content_size();
 
     toplevel.with_pending_state(|pending| {
-        pending.size = Some(size);
+        pending.size = size;
         pending.bounds = Some(bounds);
 
         toggle(&mut pending.states, XdgState::Activated, activated);
@@ -76,8 +83,9 @@ fn configure(
         );
 
         // Tells the client its edges are not freely resizable, so it can drop
-        // its own shadows and rounded corners.
-        let tiled = state.is_tiled();
+        // its own shadows and rounded corners. A snapped window is pinned to an
+        // edge just as firmly as a tiled one.
+        let tiled = state.is_tiled() || matches!(state, WindowState::Snapped(_));
         for edge in [
             XdgState::TiledLeft,
             XdgState::TiledRight,
@@ -89,7 +97,7 @@ fn configure(
     });
 
     let serial = toplevel.send_pending_configure()?;
-    tile.record_sent(size, serial);
+    tile.record_sent(recorded, serial);
     Some(serial)
 }
 
@@ -163,6 +171,26 @@ fn layer_under(
     None
 }
 
+/// Which part of a window a point landed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowPart {
+    /// The compositor's own frame. No client hears about it.
+    TitleBar,
+    /// The client's area, or a popup hanging off it.
+    Content,
+}
+
+/// The topmost window at a point, and where its pieces are.
+#[derive(Debug, Clone, Copy)]
+pub struct WindowHit {
+    pub id: WindowId,
+    /// The whole window including its frame, in global coordinates.
+    pub frame: Point<i32, Logical>,
+    /// Where the client's own `(0, 0)` lands, in the same space.
+    pub content_origin: Point<i32, Logical>,
+    pub part: WindowPart,
+}
+
 /// Which workspace on which output a window lives on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Location {
@@ -202,7 +230,7 @@ pub struct Shell {
 
     pub activated: Option<Window>,
 
-    global_layout: LayoutKind,
+    default_mode: WorkspaceMode,
     gaps: Gaps,
     /// The feel every monitor's viewport is given, kept here so a monitor
     /// plugged in later gets the same one. `None` disables motion.
@@ -212,6 +240,13 @@ pub struct Shell {
     transactions: Vec<Transaction>,
     /// Bumped per floating placement so a burst of dialogs cascades.
     cascade: usize,
+    /// Where a dragged window would land. At most one, and only while a drag is
+    /// actually over an edge.
+    snap_previews: SnapPreviews,
+    /// Every window's menubar, and whichever one is open. Here rather than on
+    /// `State` because hit-testing has to see it: an open menu is on top of
+    /// every window, and a click has to reach it before anything else.
+    pub menus: Menus,
 }
 
 impl Shell {
@@ -229,7 +264,7 @@ impl Shell {
             layer_shell: WlrLayerShellState::new::<State>(display),
             popups: PopupManager::default(),
             activated: None,
-            global_layout: config.compositor.layout.into(),
+            default_mode: config.compositor.layout,
             gaps: Gaps {
                 inner: config.appearance.gaps_inner.into(),
                 outer: config.appearance.gaps_outer.into(),
@@ -238,6 +273,8 @@ impl Shell {
             unmapped: Vec::new(),
             transactions: Vec::new(),
             cascade: 0,
+            snap_previews: SnapPreviews::default(),
+            menus: Menus::default(),
         })
     }
 
@@ -321,11 +358,11 @@ impl Shell {
             position: (0, 0).into(),
             refresh_interval: descriptor.refresh_interval,
             enabled: true,
-            default_layout: None,
+            default_mode: None,
         };
 
         if let Some(setting) = config.output_setting(&descriptor.name, connector.as_str()) {
-            output_config.default_layout = setting.layout.map(Into::into);
+            output_config.default_mode = setting.layout;
             output_config.enabled = setting.enabled.unwrap_or(true);
         }
 
@@ -334,7 +371,7 @@ impl Shell {
             output.clone(),
             Some(global),
             output_config,
-            self.global_layout,
+            self.default_mode,
             self.gaps,
         );
         monitor.set_animation_profile(self.animation);
@@ -551,9 +588,8 @@ impl Shell {
     }
 
     pub fn normalize_all(&mut self) {
-        let global = self.global_layout;
         for monitor in &mut self.monitors {
-            monitor.normalize(global);
+            monitor.normalize();
         }
     }
 
@@ -627,21 +663,29 @@ impl Shell {
         self.monitor_by_id(*id).map(Monitor::output)
     }
 
-    // ---- windows ----
-
-    pub fn global_layout(&self) -> LayoutKind {
-        self.global_layout
+    /// Whether the surface still carries a layer-shell role the shell knows
+    /// about, which stops being true the moment the client destroys it.
+    pub fn tracks_layer(&self, surface: &WlSurface) -> bool {
+        self.layer_to_output.contains_key(surface)
     }
 
-    pub fn set_global_layout(&mut self, kind: LayoutKind) {
-        if self.global_layout == kind {
+    // ---- windows ----
+
+    pub fn default_mode(&self) -> WorkspaceMode {
+        self.default_mode
+    }
+
+    /// The mode workspaces created from now on start in.
+    ///
+    /// Deliberately not retro-applied: a workspace the user switched to
+    /// floating by hand must not be re-tiled because the default changed.
+    pub fn set_default_mode(&mut self, mode: WorkspaceMode) {
+        if self.default_mode == mode {
             return;
         }
-        self.global_layout = kind;
+        self.default_mode = mode;
         for monitor in &mut self.monitors {
-            for workspace in monitor.workspaces_mut() {
-                workspace.dirty.layout = true;
-            }
+            monitor.set_default_mode(mode);
         }
     }
 
@@ -652,6 +696,18 @@ impl Shell {
         self.gaps = gaps;
         for monitor in &mut self.monitors {
             monitor.set_gaps(gaps);
+        }
+    }
+
+    /// Resizes every existing frame. New windows read the config themselves.
+    pub fn set_titlebar_height(&mut self, height: i32) {
+        for monitor in &mut self.monitors {
+            for workspace in monitor.workspaces_mut() {
+                for tile in workspace.tiles_mut() {
+                    tile.set_titlebar_height(height);
+                }
+                workspace.dirty.layout = true;
+            }
         }
     }
 
@@ -687,9 +743,8 @@ impl Shell {
     /// Releases the swipe into its spring. `velocity` is in pages per second,
     /// positive rightward; returns whether the active workspace moved.
     pub fn end_workspace_swipe(&mut self, velocity: f64) -> bool {
-        let global = self.global_layout;
         self.focused_monitor_mut()
-            .is_some_and(|monitor| monitor.end_switch_gesture(velocity, global))
+            .is_some_and(|monitor| monitor.end_switch_gesture(velocity))
     }
 
     pub fn cancel_workspace_swipe(&mut self) {
@@ -797,14 +852,10 @@ impl Shell {
         {
             self.focused_output = index;
         }
-        let global = self.global_layout;
         let Some(workspace) = self.workspace_mut(location) else {
             return false;
         };
-        let changed = workspace.focus_window(id);
-        // Harmless for layouts that fit everything on screen.
-        workspace.reveal_focus(global);
-        changed
+        workspace.focus_window(id)
     }
 
     pub fn focused_window(&self) -> Option<&Window> {
@@ -840,6 +891,17 @@ impl Shell {
         &self,
         location: Point<f64, Logical>,
     ) -> Option<(WindowId, Point<i32, Logical>)> {
+        self.window_part_under(location)
+            .map(|hit| (hit.id, hit.content_origin))
+    }
+
+    /// The topmost window at a global logical point, which part of it the point
+    /// landed on, and where its client area starts.
+    ///
+    /// Walks the same workspaces, in the same order, that the renderer draws,
+    /// so what you click is what you see on top — including mid-switch, where
+    /// two workspaces share the output and both are shifted sideways.
+    pub fn window_part_under(&self, location: Point<f64, Logical>) -> Option<WindowHit> {
         let monitor = self.monitor_at(location)?;
         let origin = monitor.geometry().loc;
         let output_local = location - origin.to_f64();
@@ -848,27 +910,40 @@ impl Shell {
             .visible_workspaces()
             .find_map(|(workspace, offset)| {
                 let local = output_local - offset;
-                let at = |tile: &Tile| {
-                    (
-                        tile.id(),
-                        origin + (tile.target().loc.to_f64() + offset).to_i32_round(),
-                    )
+                let hit = |tile: &Tile, part| {
+                    let shift = origin.to_f64() + offset;
+                    WindowHit {
+                        id: tile.id(),
+                        frame: (tile.target().loc.to_f64() + shift).to_i32_round(),
+                        content_origin: (tile.content_rect().loc.to_f64() + shift).to_i32_round(),
+                        part,
+                    }
                 };
 
                 // A fullscreen window swallows every click on its workspace.
                 if let Some(tile) = workspace.fullscreen().and_then(|id| workspace.tile(id)) {
-                    return Some(at(tile));
+                    return Some(hit(tile, WindowPart::Content));
                 }
 
-                workspace
-                    .stacking_order()
-                    .find(|tile| {
-                        tile.target().to_f64().contains(local)
-                            && tile
-                                .window()
-                                .is_in_input_region(&(local - tile.target().loc.to_f64()))
-                    })
-                    .map(at)
+                workspace.stacking_order().find_map(|tile| {
+                    let frame = tile.target();
+                    if !frame.to_f64().contains(local) {
+                        return None;
+                    }
+
+                    // The decoration is opaque to input: the compositor drew it,
+                    // so the client has no say over which parts of it are live.
+                    if tile.insets().contains(frame, local) {
+                        return Some(hit(tile, WindowPart::TitleBar));
+                    }
+
+                    let content = tile.content_rect();
+                    let inside = content.to_f64().contains(local)
+                        && tile
+                            .window()
+                            .is_in_input_region(&(local - content.loc.to_f64()));
+                    inside.then(|| hit(tile, WindowPart::Content))
+                })
             })
     }
 
@@ -902,22 +977,36 @@ impl Shell {
         &self,
         location: Point<f64, Logical>,
     ) -> Option<(PointerFocusTarget, Point<f64, Logical>)> {
-        let (id, window_location) = self.window_under(location)?;
-        let window = self.tile(id)?.window().clone();
-        let (surface, offset) =
-            window.surface_under(location - window_location.to_f64(), WindowSurfaceType::ALL)?;
+        let hit = self.window_part_under(location)?;
+        let window = self.tile(hit.id)?.window().clone();
+
+        // The frame is not a surface, so nothing is handed to the client: the
+        // compositor drew those pixels and answers for them itself. The part is
+        // deliberately not baked into the target — the pointer crossing from one
+        // control to the next would otherwise read as leaving one window and
+        // entering another.
+        if hit.part == WindowPart::TitleBar {
+            return Some((
+                PointerFocusTarget::Decoration { window },
+                hit.frame.to_f64(),
+            ));
+        }
+
+        let (surface, offset) = window.surface_under(
+            location - hit.content_origin.to_f64(),
+            WindowSurfaceType::ALL,
+        )?;
         Some((
             PointerFocusTarget::Window { window, surface },
-            (offset + window_location).to_f64(),
+            (offset + hit.content_origin).to_f64(),
         ))
     }
 
     // ---- actions ----
 
     pub fn switch_workspace(&mut self, target: WorkspaceRef) -> bool {
-        let global = self.global_layout;
         self.focused_monitor_mut()
-            .is_some_and(|monitor| monitor.switch_to(target, global))
+            .is_some_and(|monitor| monitor.switch_to(target))
     }
 
     /// Moves the focused window to another workspace on the same output.
@@ -951,9 +1040,8 @@ impl Shell {
             self.switch_workspace(WorkspaceRef::Index(index));
         } else {
             // The window left, so the source may now be reapable.
-            let global = self.global_layout;
             if let Some(monitor) = self.focused_monitor_mut() {
-                monitor.normalize(global);
+                monitor.normalize();
             }
         }
         true
@@ -974,7 +1062,7 @@ impl Shell {
     fn neighbour(&self, dir: Direction) -> Option<WindowId> {
         let workspace = self.focused_monitor()?.active();
         let from = workspace.focus()?;
-        workspace.neighbour(from, dir, self.global_layout)
+        workspace.neighbour(from, dir)
     }
 
     /// Moves the focused window within its workspace's layout order.
@@ -1053,9 +1141,8 @@ impl Shell {
         };
 
         tile.toggle_floating();
-        if tile.state().is_floating() && tile.floating_rect().size.w == 0 {
-            let size = Size::from((area.size.w / 2, area.size.h / 2));
-            tile.set_floating_rect(crate::layout::floating::place(area, size, None, cascade));
+        if tile.state().is_floating() && tile.floating_rect().is_empty() {
+            tile.float_into(area, cascade);
         }
         self.mark_focused_dirty();
         true
@@ -1122,7 +1209,7 @@ impl Shell {
         true
     }
 
-    fn mark_dirty(&mut self, id: WindowId) {
+    pub fn mark_dirty(&mut self, id: WindowId) {
         if let Some(location) = self.location(id)
             && let Some(workspace) = self.workspace_mut(location)
         {
@@ -1130,41 +1217,22 @@ impl Shell {
         }
     }
 
-    pub fn toggle_global_layout(&mut self) -> bool {
-        let next = match self.global_layout {
-            LayoutKind::MasterStack => LayoutKind::ScrollingColumns,
-            _ => LayoutKind::MasterStack,
-        };
-        self.set_global_layout(next);
-        true
+    /// Flips the focused workspace between tiling and floating.
+    pub fn toggle_workspace_mode(&mut self) -> bool {
+        let mode = self
+            .focused_monitor()
+            .map(|monitor| monitor.active().mode());
+        mode.is_some_and(|mode| self.set_workspace_mode(mode.toggled()))
     }
 
-    /// Cycles this workspace's override: none -> master -> scrolling -> none.
-    pub fn cycle_workspace_layout(&mut self) -> bool {
-        let Some(monitor) = self.focused_monitor_mut() else {
-            return false;
-        };
-        let next = match monitor.active().mode_override() {
-            None => Some(LayoutKind::MasterStack),
-            Some(LayoutKind::MasterStack) => Some(LayoutKind::ScrollingColumns),
-            Some(_) => None,
-        };
-        monitor.active_mut().set_mode_override(next);
-        true
-    }
-
-    pub fn set_workspace_layout(&mut self, kind: LayoutKind) -> bool {
-        let Some(monitor) = self.focused_monitor_mut() else {
-            return false;
-        };
-        monitor.active_mut().set_mode_override(Some(kind));
-        true
+    pub fn set_workspace_mode(&mut self, mode: WorkspaceMode) -> bool {
+        self.focused_monitor_mut()
+            .is_some_and(|monitor| monitor.active_mut().set_mode(mode))
     }
 
     pub fn apply_layout_op(&mut self, op: LayoutOp) -> bool {
-        let global = self.global_layout;
         self.focused_monitor_mut()
-            .is_some_and(|monitor| monitor.active_mut().apply_layout_op(op, global))
+            .is_some_and(|monitor| monitor.active_mut().apply_layout_op(op))
     }
 
     fn mark_focused_dirty(&mut self) {
@@ -1173,8 +1241,88 @@ impl Shell {
         }
     }
 
-    /// Moves a floating window, keeping it on screen.
-    pub fn move_floating(&mut self, id: WindowId, to: Point<i32, Logical>) -> bool {
+    /// Drops a window to the back of its workspace and moves focus off it.
+    ///
+    /// What the minimize control does, there being nowhere to minimize *to*
+    /// yet: the window goes behind everything else on the workspace and stops
+    /// holding the keyboard.
+    pub fn lower_window(&mut self, id: WindowId) -> bool {
+        let Some(location) = self.location(id) else {
+            return false;
+        };
+        let Some(workspace) = self.workspace_mut(location) else {
+            return false;
+        };
+        if !workspace.lower(id) {
+            return false;
+        }
+
+        let next = workspace
+            .stacking_order()
+            .map(Tile::id)
+            .find(|other| *other != id);
+        if let Some(next) = next {
+            self.focus_window(next);
+        }
+        true
+    }
+
+    pub fn snap_preview(&self) -> Option<&SnapPreview> {
+        self.snap_previews.get()
+    }
+
+    /// Follows a drag with the preview. Returns whether the screen changed.
+    ///
+    /// Called from the move grab on every motion event, so the "same zone as
+    /// last time" case has to be cheap — it is a zone lookup and a comparison.
+    pub fn track_snap(&mut self, id: WindowId, pointer: Point<f64, Logical>) -> bool {
+        let Some(location) = self.location(id) else {
+            return self.snap_previews.clear();
+        };
+        let Some(workspace) = self.workspace(location) else {
+            return self.snap_previews.clear();
+        };
+
+        // The pointer is global and the workspace's rects are local to it, so
+        // the zone test happens in the workspace's own space.
+        let Some(monitor) = self.monitor_by_id(location.output) else {
+            return self.snap_previews.clear();
+        };
+        let local = pointer - monitor.geometry().loc.to_f64();
+
+        self.snap_previews.track(
+            id,
+            location.output,
+            local,
+            SnapBounds {
+                output: workspace.output_area(),
+                area: workspace.area(),
+                gaps: workspace.gaps(),
+            },
+        )
+    }
+
+    /// Ends a drag, snapping the window if the preview named a zone.
+    pub fn release_snap(&mut self, id: WindowId) -> bool {
+        match self.snap_previews.release() {
+            Some(zone) => self.snap_window(id, zone),
+            None => false,
+        }
+    }
+
+    /// Parks the focused window on an edge, as a drag to that edge would.
+    pub fn snap_focused(&mut self, zone: SnapZone) -> bool {
+        self.focused_window_id()
+            .is_some_and(|id| self.snap_window(id, zone))
+    }
+
+    /// The top edge resolves to the ordinary maximized state rather than a
+    /// snap of its own, so unmaximizing keeps working the way it always has.
+    ///
+    /// A tiled window is floated first: what it returns to when the snap is
+    /// released should be a rect of its own, not whatever slot the layout has
+    /// by then given away.
+    pub fn snap_window(&mut self, id: WindowId, zone: SnapZone) -> bool {
         let Some(area) = self
             .location(id)
             .and_then(|at| self.workspace(at))
@@ -1182,6 +1330,30 @@ impl Shell {
         else {
             return false;
         };
+        let cascade = self.next_cascade();
+
+        let Some(tile) = self.tile_mut(id) else {
+            return false;
+        };
+        if tile.state().is_tiled() {
+            tile.float_into(area, cascade);
+        }
+        tile.set_state(match zone {
+            SnapZone::Maximize => WindowState::Maximized,
+            zone => WindowState::Snapped(zone),
+        });
+
+        self.mark_dirty(id);
+        true
+    }
+
+    /// Moves a floating window to exactly where the drag put it.
+    ///
+    /// Not corrected onto the screen: the window is following a cursor, and a
+    /// window that stops at the edge while the cursor carries on has lost the
+    /// grip point the user is holding it by. The overflow is simply clipped,
+    /// and shoving the cursor into an edge is what snaps it.
+    pub fn move_floating(&mut self, id: WindowId, to: Point<i32, Logical>) -> bool {
         let Some(tile) = self.tile_mut(id) else {
             return false;
         };
@@ -1189,13 +1361,17 @@ impl Shell {
             return false;
         }
 
-        let rect = Rectangle::new(to, tile.floating_rect().size);
-        tile.set_floating_rect(crate::layout::floating::clamp_into(rect, area));
+        tile.set_floating_rect(Rectangle::new(to, tile.floating_rect().size));
         self.mark_dirty(id);
         true
     }
 
     /// Resizes a floating window, respecting its own size hints.
+    ///
+    /// The top edge is held inside the usable area here rather than left to
+    /// `arrange`: a resize anchors the edge opposite the one being dragged, and
+    /// nudging the whole window down — which is all `keep_reachable` can do —
+    /// would drag that anchor along with it.
     pub fn resize_floating(&mut self, id: WindowId, rect: Rectangle<i32, Logical>) -> bool {
         let Some(area) = self
             .location(id)
@@ -1212,7 +1388,7 @@ impl Shell {
         }
 
         let size = tile.info().constrain(rect.size);
-        tile.set_floating_rect(crate::layout::floating::clamp_into(
+        tile.set_floating_rect(placement::keep_top_reachable(
             Rectangle::new(rect.loc, size),
             area,
         ));
@@ -1230,15 +1406,14 @@ impl Shell {
         self.resolve_transactions();
         self.normalize_all();
 
-        let global = self.global_layout;
         let mut resized = Vec::new();
         for monitor in &mut self.monitors {
             for workspace in monitor.workspaces_mut() {
                 if workspace.dirty.layout || workspace.dirty.area {
-                    workspace.arrange(global, &mut resized);
+                    workspace.arrange(&mut resized);
                     tracing::debug!(
                         workspace = %workspace.id(),
-                        layout = ?workspace.effective_kind(global),
+                        mode = ?workspace.mode(),
                         area = ?workspace.area(),
                         tiles = ?workspace
                             .tiles()
@@ -1320,6 +1495,7 @@ impl Shell {
     /// input too, and a 1000 Hz mouse would step springs a thousand times per
     /// frame nobody sees.
     pub fn advance_animations(&mut self, dt: f32) {
+        self.snap_previews.step(dt);
         for monitor in &mut self.monitors {
             monitor.switch_mut().step(dt);
             for workspace in monitor.workspaces_mut() {
@@ -1333,13 +1509,13 @@ impl Shell {
     /// Short-circuits on the first moving spring, because this is asked once per
     /// frame to decide whether to schedule another.
     pub fn is_animating(&self) -> bool {
-        self.monitors.iter().any(|monitor| {
-            monitor.is_switching()
-                || monitor
-                    .workspaces()
-                    .iter()
-                    .any(|workspace| workspace.tiles().iter().any(|tile| !tile.anim().at_rest()))
-        })
+        self.snap_previews.is_animating()
+            || self.monitors.iter().any(|monitor| {
+                monitor.is_switching()
+                    || monitor.workspaces().iter().any(|workspace| {
+                        workspace.tiles().iter().any(|tile| !tile.anim().at_rest())
+                    })
+            })
     }
 
     /// Lands every spring on exact integers once motion stops.

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crownos_config::{
     Appearance, DisplayScale, Key, Subscription,
-    schema::{Binding, LayoutMode, OutputSetting, compositor, display, keybinds},
+    schema::{Binding, OutputSetting, WorkspaceMode, compositor, display, keybinds},
     subscribe_key, subscribe_typed,
 };
 use serde::de::DeserializeOwned;
@@ -20,7 +20,7 @@ type Sink = dyn Fn(Update) + Send + Sync;
 /// A config change, narrowed to the component that has to act on it.
 #[derive(Debug)]
 pub enum Update {
-    Layout(LayoutMode),
+    DefaultMode(WorkspaceMode),
     FocusFollowsMouse(bool),
     Outputs(Vec<OutputSetting>),
     WindowRules(WindowRules),
@@ -43,7 +43,7 @@ impl Watch {
 
         Self {
             _subscriptions: vec![
-                key(&sink, compositor::Layout, Update::Layout),
+                key(&sink, compositor::Layout, Update::DefaultMode),
                 key(
                     &sink,
                     compositor::FocusFollowsMouse,

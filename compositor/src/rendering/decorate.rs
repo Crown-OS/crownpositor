@@ -6,6 +6,8 @@
 //! decorator, and gets whatever effects its renderer supports — [`PassThrough`]
 //! if none.
 
+use crate::rendering::decoration::{Border, TitleBarParams};
+
 use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
@@ -60,7 +62,7 @@ where
         renderer: &mut R,
         element: Cropped<R>,
         size: (f32, f32),
-        radius: f32,
+        radius: [f32; 4],
     ) -> Option<Self::Element>;
 
     /// One rectangle of the blurred glass drawn *behind* a surface that
@@ -69,6 +71,22 @@ where
     /// without the effect.
     fn backdrop(&mut self, renderer: &mut R, backdrop: Backdrop) -> Option<Self::Element> {
         let _ = (renderer, backdrop);
+        None
+    }
+
+    /// A floating window's titlebar: its tint, its highlight and its three
+    /// controls, generated from geometry in one pass. `None` — the default —
+    /// leaves the window undecorated, which is what a renderer with no custom
+    /// shaders can offer.
+    fn title_bar(&mut self, renderer: &mut R, params: TitleBarParams) -> Option<Self::Element> {
+        let _ = (renderer, params);
+        None
+    }
+
+    /// The hairline ring around a floating window. `None` — the default —
+    /// leaves it without one.
+    fn border(&mut self, renderer: &mut R, border: Border) -> Option<Self::Element> {
+        let _ = (renderer, border);
         None
     }
 
@@ -98,7 +116,7 @@ where
         _renderer: &mut R,
         element: Cropped<R>,
         _size: (f32, f32),
-        _radius: f32,
+        _radius: [f32; 4],
     ) -> Option<Self::Element> {
         Some(element)
     }

@@ -36,8 +36,10 @@ uniform float tint;
 // Additional uniforms, declared on the Rust side by `RoundedCornerShader`.
 // Element size in pixels, in the same space as `v_coords`.
 uniform vec2 size;
-// Corner radius in pixels.
-uniform float radius;
+// Corner radii in pixels, one per corner: right-bottom, right-top,
+// left-bottom, left-top — the order `rounded_box` reads them in. A decorated
+// window squares its top pair, because its titlebar rounds those instead.
+uniform vec4 radius;
 
 // Signed distance to a box with per-corner radii, after Inigo Quilez.
 // `r` holds the radii of the (+x, +y), (+x, -y), (-x, +y) and (-x, -y) corners.
@@ -57,8 +59,9 @@ void main() {
 
     vec2 half_size = size * 0.5;
     // A radius wider than the element would fold the distance field inside out.
-    float r = min(radius, min(half_size.x, half_size.y));
-    float distance = rounded_box(v_coords * size - half_size, half_size, vec4(r));
+    float limit = min(half_size.x, half_size.y);
+    vec4 r = min(radius, vec4(limit));
+    float distance = rounded_box(v_coords * size - half_size, half_size, r);
 
 #if defined(GL_OES_standard_derivatives)
     // Width of one screen pixel in distance-field units, so the edge stays one

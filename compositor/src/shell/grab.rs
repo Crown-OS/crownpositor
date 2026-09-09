@@ -18,7 +18,7 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Serial, Size},
 };
 
-use crate::{state::State, utils::id::WindowId};
+use crate::{layout::placement, state::State, utils::id::WindowId};
 
 pub struct MoveGrab {
     start_data: GrabStartData<State>,
@@ -61,6 +61,12 @@ impl PointerGrab<State> for MoveGrab {
 
         let location = (event.location - self.offset).to_i32_round();
         state.shell.move_floating(self.window, location);
+
+        // Windows-style: the preview follows the pointer, not the window, so
+        // brushing an edge with the cursor is what arms a snap.
+        if state.shell.track_snap(self.window, event.location) {
+            state.queue_redraw();
+        }
     }
 
     fn relative_motion(
@@ -105,7 +111,19 @@ impl PointerGrab<State> for MoveGrab {
         &self.start_data
     }
 
-    fn unset(&mut self, _state: &mut State) {}
+    /// The drag is over, however it ended — released, cancelled, or the window
+    /// died under it. Landing the snap here rather than in `button` means a
+    /// cancelled drag cannot leave a preview stranded on screen.
+    fn unset(&mut self, state: &mut State) {
+        // The layout takes the position back *before* the snap is applied, so a
+        // window released onto an edge glides into it instead of jumping.
+        if let Some(tile) = state.shell.tile_mut(self.window) {
+            tile.release_pointer();
+        }
+        state.shell.release_snap(self.window);
+        state.shell.refresh();
+        state.queue_redraw();
+    }
 
     // Gestures are meaningless mid-drag, but the trait needs them forwarded.
     fn gesture_swipe_begin(
@@ -294,7 +312,11 @@ impl PointerGrab<State> for ResizeGrab {
         &self.start_data
     }
 
-    fn unset(&mut self, _state: &mut State) {}
+    fn unset(&mut self, state: &mut State) {
+        if let Some(tile) = state.shell.tile_mut(self.window) {
+            tile.release_pointer();
+        }
+    }
 
     fn gesture_swipe_begin(
         &mut self,
@@ -372,8 +394,7 @@ impl State {
             return;
         };
 
-        self.float_for_grab(id);
-        let Some(origin) = self.shell.tile(id).map(|tile| tile.floating_rect().loc) else {
+        let Some(origin) = self.begin_move(id, start_data.location) else {
             return;
         };
 
@@ -395,8 +416,7 @@ impl State {
             return;
         };
 
-        self.float_for_grab(id);
-        let Some(initial) = self.shell.tile(id).map(|tile| tile.floating_rect()) else {
+        let Some(initial) = self.begin_resize(id, start_data.location) else {
             return;
         };
 
@@ -410,22 +430,110 @@ impl State {
         }
     }
 
-    /// A tiled window is floated at its current geometry, so the drag starts
-    /// from where the user can see it rather than from a stale floating rect.
-    fn float_for_grab(&mut self, id: WindowId) {
+    /// Starts a move the *compositor* asked for — a drag on a titlebar.
+    ///
+    /// Unlike [`start_move`](Self::start_move) there is no serial to validate:
+    /// the request did not come from a client, it came from a button press this
+    /// compositor is in the middle of handling.
+    pub fn start_frame_move(&mut self, id: WindowId, serial: Serial) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+        let start_data = GrabStartData {
+            focus: None,
+            button: 0x110,
+            location: pointer.current_location(),
+        };
+
+        let Some(origin) = self.begin_move(id, start_data.location) else {
+            return;
+        };
+
+        pointer.set_grab(
+            self,
+            MoveGrab::new(start_data, id, origin),
+            serial,
+            Focus::Clear,
+        );
+    }
+
+    /// Floats a window for a drag and hands its geometry to the pointer.
+    ///
+    /// Returns where the window starts, which is what keeps the grab point
+    /// under the cursor.
+    fn begin_move(
+        &mut self,
+        id: WindowId,
+        grip: Point<f64, Logical>,
+    ) -> Option<Point<i32, Logical>> {
+        Some(self.begin_drag(id, grip)?.loc)
+    }
+
+    /// The same, for a resize: the whole rect is what the deltas apply to.
+    fn begin_resize(
+        &mut self,
+        id: WindowId,
+        grip: Point<f64, Logical>,
+    ) -> Option<Rectangle<i32, Logical>> {
+        self.begin_drag(id, grip)
+    }
+
+    fn begin_drag(
+        &mut self,
+        id: WindowId,
+        grip: Point<f64, Logical>,
+    ) -> Option<Rectangle<i32, Logical>> {
+        // The grab arrives in global coordinates and a window's rect is local
+        // to its workspace, so the two are brought into one space before
+        // anything is measured between them.
+        let origin = self
+            .shell
+            .location(id)
+            .and_then(|at| self.shell.monitor_by_id(at.output))
+            .map(|monitor| monitor.geometry().loc)
+            .unwrap_or_default();
+
+        self.float_for_grab(id, grip - origin.to_f64());
+        let tile = self.shell.tile_mut(id)?;
+        tile.follow_pointer();
+        Some(tile.floating_rect())
+    }
+
+    /// Floats a window for a drag, at a rect the cursor still has hold of.
+    ///
+    /// A tiled window keeps the geometry it already had. A snapped or maximized
+    /// one goes back to the size it had before, placed so the grab point keeps
+    /// its position along the titlebar — restoring it to the rect it last
+    /// floated at would drop it elsewhere on screen and leave the pointer
+    /// holding nothing.
+    fn float_for_grab(&mut self, id: WindowId, grip: Point<f64, Logical>) {
         let Some(tile) = self.shell.tile_mut(id) else {
             return;
         };
         if tile.state().is_floating() {
             return;
         }
-        let current = tile.target();
-        tile.set_floating_rect(current);
+
+        // Where it is on screen right now, which is what the grab point is
+        // relative to. Read before `restore` changes anything.
+        let from = tile.target();
+        if !tile.state().is_tiled() {
+            tile.restore();
+        }
+
+        // A window that has never floated has no other size to go back to.
+        let restored = if tile.state().is_tiled() {
+            from.size
+        } else {
+            tile.floating_rect().size
+        };
+
+        tile.set_floating_rect(placement::keep_grip(restored, from, grip));
         tile.set_state(crate::shell::tile::WindowState::Floating);
         self.shell.refresh();
     }
 
-    fn window_id_of(&self, window: &Window) -> Option<WindowId> {
+    pub fn window_id_of(&self, window: &Window) -> Option<WindowId> {
         use smithay::wayland::seat::WaylandFocus;
         let surface = window.wl_surface()?;
         self.shell.window_id(&surface)

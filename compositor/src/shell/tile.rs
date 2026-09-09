@@ -9,17 +9,49 @@ use config::ResolvedRule;
 
 use crate::{
     animations::spring::{Spring, SpringProfile},
-    layout::TileInfo,
+    layout::{SnapZone, TileInfo, placement},
+    shell::decoration::{DecorationCommit, DecorationIds, Insets},
     utils::id::WindowId,
 };
+
+/// Who decides how big a window is.
+///
+/// A floating window opens at the size its client asked for and keeps it: the
+/// configure carries no size at all, which is how xdg-shell spells "you
+/// choose". The moment the compositor has to impose one — tiling, snapping,
+/// maximizing, or the user dragging an edge — it latches over and stays there,
+/// because a window the user has sized should not be resized behind their back
+/// by its own client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeAuthority {
+    Client,
+    Compositor,
+}
+
+/// Who decides where a window is and how big it is, right now.
+///
+/// The layout, normally: a new rect goes to the springs and the window eases
+/// into place. While the user is dragging or resizing it the pointer owns the
+/// geometry instead and the springs are pinned to the cursor — a window that
+/// eases *toward* the pointer trails behind it, which reads as the compositor
+/// being slow rather than as polish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeometryAuthority {
+    Layout,
+    Pointer,
+}
 
 /// What a window *is*, not what it looks like.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowState {
-    /// Positioned by the workspace's layout.
+    /// Positioned by the workspace's tiling layout.
     Tiled,
     /// Keeps its own rect and is never passed to the layout.
     Floating,
+    /// Dragged onto a screen edge. The zone owns the rect, and the window's
+    /// `floating_rect` is left untouched — which is what lets dragging it back
+    /// off restore the size it had before.
+    Snapped(SnapZone),
     /// Fills the usable area, so panels stay visible.
     Maximized,
     /// Fills the whole output, ignoring exclusive zones.
@@ -31,9 +63,15 @@ impl WindowState {
         matches!(self, Self::Tiled)
     }
 
-    /// Floating windows and the two overriding states all render above tiles.
+    /// Whether `floating_rect` is this window's geometry authority.
     pub fn is_floating(self) -> bool {
         matches!(self, Self::Floating)
+    }
+
+    /// Whether the window stacks above the tiled ones. A snapped window is
+    /// still a floating window that happens to be parked on an edge.
+    pub fn floats_above(self) -> bool {
+        matches!(self, Self::Floating | Self::Snapped(_))
     }
 }
 
@@ -55,6 +93,18 @@ pub struct Tile {
     /// Size and serial of the last configure we sent.
     sent: Option<(Size<i32, Logical>, Serial)>,
 
+    size_authority: SizeAuthority,
+    geometry_authority: GeometryAuthority,
+    decoration_ids: DecorationIds,
+    decoration_commit: DecorationCommit,
+    /// The window's title, cached so the render path does not lock the client's
+    /// xdg state once per frame.
+    title: String,
+    /// Titlebar height in logical pixels, resolved from the config when the
+    /// window maps so the render path never consults the config per frame. Zero
+    /// turns decoration off entirely.
+    titlebar_height: i32,
+
     anim: TileAnim,
     /// Whether the layout has positioned this window yet. The first placement
     /// snaps — sliding in from the origin reads as a bug, not as polish.
@@ -74,6 +124,7 @@ impl Tile {
         surface: WlSurface,
         rules: ResolvedRule,
         opacity: f32,
+        titlebar_height: i32,
     ) -> Self {
         let state = if rules.floating.unwrap_or(false) {
             WindowState::Floating
@@ -90,6 +141,16 @@ impl Tile {
             floating_rect: Rectangle::default(),
             target: Rectangle::default(),
             sent: None,
+            size_authority: if state.is_floating() {
+                SizeAuthority::Client
+            } else {
+                SizeAuthority::Compositor
+            },
+            geometry_authority: GeometryAuthority::Layout,
+            decoration_ids: DecorationIds::default(),
+            decoration_commit: DecorationCommit::default(),
+            title: String::new(),
+            titlebar_height,
             anim: TileAnim::new(Rectangle::default()),
             placed: false,
             rules,
@@ -131,8 +192,73 @@ impl Tile {
         &self.rules
     }
 
+    /// The whole visible window, decoration included. What the layout assigns
+    /// and what the renderer draws into.
     pub fn target(&self) -> Rectangle<i32, Logical> {
         self.target
+    }
+
+    /// Whether this window wears a frame.
+    ///
+    /// Keyed on the window's own state, not the workspace's mode, so a dialog
+    /// floated inside a tiling workspace is decorated too. A maximized window
+    /// keeps whichever answer it will return to.
+    pub fn is_decorated(&self) -> bool {
+        self.titlebar_height > 0
+            && match self.state {
+                WindowState::Tiled | WindowState::Fullscreen => false,
+                WindowState::Floating | WindowState::Snapped(_) => true,
+                WindowState::Maximized => self.restore_state.is_floating(),
+            }
+    }
+
+    pub fn insets(&self) -> Insets {
+        if self.is_decorated() {
+            Insets::top(self.titlebar_height)
+        } else {
+            Insets::NONE
+        }
+    }
+
+    pub fn set_titlebar_height(&mut self, height: i32) {
+        self.titlebar_height = height.max(0);
+    }
+
+    pub fn decoration_ids(&self) -> &DecorationIds {
+        &self.decoration_ids
+    }
+
+    /// The commit counter for a frame drawn with this appearance. Changes only
+    /// when the appearance does, which is what stops the frame repainting every
+    /// time the window moves.
+    pub fn decoration_commit(
+        &self,
+        appearance: u64,
+    ) -> smithay::backend::renderer::utils::CommitCounter {
+        self.decoration_commit.get(appearance)
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// Returns whether it changed, which is what gates re-rasterising it.
+    pub fn set_title(&mut self, title: &str) -> bool {
+        if self.title == title {
+            return false;
+        }
+        self.title.clear();
+        self.title.push_str(title);
+        true
+    }
+
+    /// The part of the frame the client actually draws into.
+    pub fn content_rect(&self) -> Rectangle<i32, Logical> {
+        self.insets().content(self.target)
+    }
+
+    pub fn content_size(&self) -> Size<i32, Logical> {
+        self.insets().content_size(self.target.size)
     }
 
     pub fn floating_rect(&self) -> Rectangle<i32, Logical> {
@@ -157,6 +283,57 @@ impl Tile {
         self.max_size = max;
     }
 
+    pub fn size_authority(&self) -> SizeAuthority {
+        self.size_authority
+    }
+
+    /// Takes the sizing decision away from the client, for good.
+    pub fn claim_size(&mut self) {
+        self.size_authority = SizeAuthority::Compositor;
+    }
+
+    /// Hands the window's geometry to a drag in progress.
+    pub fn follow_pointer(&mut self) {
+        self.geometry_authority = GeometryAuthority::Pointer;
+    }
+
+    /// Gives it back to the layout. Called before the drag's final rect is
+    /// decided, so a window released onto an edge still glides into the snap
+    /// rather than jumping there.
+    pub fn release_pointer(&mut self) {
+        self.geometry_authority = GeometryAuthority::Layout;
+    }
+
+    /// The size to put in a configure. `None` leaves the choice to the client,
+    /// which is what a freshly floated window gets.
+    pub fn configured_size(&self) -> Option<Size<i32, Logical>> {
+        match self.size_authority {
+            SizeAuthority::Client => None,
+            SizeAuthority::Compositor => Some(self.content_size()),
+        }
+    }
+
+    /// Follows a client that resized itself while it owned the decision.
+    ///
+    /// Returns whether anything moved, which is what the caller turns into a
+    /// relayout — the new size still has to be clamped onto the screen.
+    pub fn adopt_client_size(&mut self) -> bool {
+        if self.size_authority != SizeAuthority::Client || !self.state.is_floating() {
+            return false;
+        }
+        // The client speaks in content sizes; `floating_rect` is a frame.
+        let requested = self.window.geometry().size;
+        if requested.w <= 0 || requested.h <= 0 {
+            return false;
+        }
+        let frame = self.insets().frame_size(requested);
+        if frame == self.floating_rect.size {
+            return false;
+        }
+        self.floating_rect.size = frame;
+        true
+    }
+
     /// Returns whether the *size* changed, which is what gates a configure —
     /// moving a window does not require telling it anything.
     pub fn set_target(&mut self, rect: Rectangle<i32, Logical>) -> bool {
@@ -165,12 +342,14 @@ impl Tile {
         if self.state.is_floating() {
             self.floating_rect = rect;
         }
-        if self.placed {
-            self.anim.retarget(rect);
-        } else {
+        if !self.placed {
             self.placed = true;
             self.anim.snap(rect);
             self.anim.fade_in();
+        } else if self.geometry_authority == GeometryAuthority::Pointer {
+            self.anim.follow(rect);
+        } else {
+            self.anim.retarget(rect);
         }
         resized
     }
@@ -208,7 +387,8 @@ impl Tile {
 
     /// Whether a configure would say anything new.
     pub fn needs_configure(&self) -> bool {
-        self.sent.is_none_or(|(size, _)| size != self.target.size)
+        self.sent
+            .is_none_or(|(size, _)| size != self.content_size())
     }
 
     /// Moves between states, remembering where to come back to.
@@ -228,6 +408,28 @@ impl Tile {
 
     pub fn restore(&mut self) {
         self.set_state(self.restore_state);
+    }
+
+    /// Turns a tiled window loose at the size it should float at.
+    ///
+    /// A window that has floated before returns to the rect it left; one that
+    /// never has takes the size its client asked for, which is what it would
+    /// have opened at had the workspace been floating all along.
+    pub fn float_into(&mut self, area: Rectangle<i32, Logical>, cascade: usize) {
+        // The state has to move first: the insets the frame is built from
+        // depend on it, and a tiled window reports none.
+        self.set_state(WindowState::Floating);
+        self.floating_rect = if self.floating_rect.is_empty() {
+            placement::initial_rect(
+                self.window.geometry().size,
+                self.insets().top,
+                area,
+                None,
+                cascade,
+            )
+        } else {
+            placement::clamp_into(self.floating_rect, area)
+        };
     }
 
     /// Toggles between tiled and floating, keeping the current rect as the
@@ -295,8 +497,26 @@ impl TileAnim {
         self.h.set_target(rect.size.h as f32);
     }
 
+    /// Puts the window exactly where the pointer has it.
+    ///
+    /// Every geometry spring is pinned rather than retargeted, so they exert no
+    /// force and carry no velocity: the window is under the cursor on the very
+    /// next frame instead of easing toward where it was. Size as well as
+    /// position, because a resize drags an edge — an edge that eases toward the
+    /// cursor is the same lag by another name.
+    pub fn follow(&mut self, rect: Rectangle<i32, Logical>) {
+        self.x.hold(rect.loc.x as f32);
+        self.y.hold(rect.loc.y as f32);
+        self.w.hold(rect.size.w as f32);
+        self.h.hold(rect.size.h as f32);
+    }
+
     pub fn fade_in(&mut self) {
         self.alpha.set_target(1.0);
+    }
+
+    pub fn fade_out(&mut self) {
+        self.alpha.set_target(0.0);
     }
 
     /// Jumps the geometry to `rect` without animating. Alpha is left alone, so a
@@ -410,6 +630,50 @@ mod tests {
 
         settle(&mut anim);
         assert!((anim.rect().loc.x - 500.0).abs() < 1.0);
+    }
+
+    /// The whole point of `follow`: a dragged window is under the cursor on the
+    /// very next frame, with nothing to step first.
+    #[test]
+    fn a_followed_position_lands_exactly_where_the_pointer_put_it() {
+        let mut anim = TileAnim::new(rect(0, 0, 800, 600));
+        anim.snap(rect(0, 0, 800, 600));
+
+        anim.follow(rect(500, 300, 800, 600));
+
+        let placed = anim.rect().loc;
+        assert_eq!(placed.x, 500.0);
+        assert_eq!(placed.y, 300.0);
+    }
+
+    /// Grabbing a window that was still flying must not let the speed it had
+    /// built up carry it past the cursor.
+    #[test]
+    fn following_drops_the_velocity_the_spring_had_built_up() {
+        let mut anim = TileAnim::new(rect(0, 0, 800, 600));
+        anim.snap(rect(0, 0, 800, 600));
+        anim.retarget(rect(900, 900, 800, 600));
+        anim.step(1.0 / 60.0);
+        assert!(anim.rect().loc.x > 0.0, "the spring should be moving");
+
+        anim.follow(rect(100, 100, 800, 600));
+        anim.step(1.0 / 60.0);
+
+        assert_eq!(anim.rect().loc.x, 100.0);
+        assert_eq!(anim.rect().loc.y, 100.0);
+    }
+
+    /// A resize drags an edge, so the size is pinned exactly like the position
+    /// — the edge has to be under the cursor, not easing toward it.
+    #[test]
+    fn following_pins_the_size_as_well() {
+        let mut anim = TileAnim::new(rect(0, 0, 800, 600));
+        anim.snap(rect(0, 0, 800, 600));
+
+        anim.follow(rect(0, 0, 400, 300));
+
+        assert_eq!(anim.rect().size.w, 400.0);
+        assert_eq!(anim.rect().size.h, 300.0);
     }
 
     #[test]

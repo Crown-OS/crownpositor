@@ -21,7 +21,8 @@ smithay::backend::renderer::element::render_elements! {
     /// Anything the backend's decorator produced: a toplevel it drew, or a
     /// rectangle of blurred glass to go behind one.
     Tile = Wrap<E>,
-    /// A themed cursor, rasterised into main memory rather than owned by a
-    /// client. `ImportMem` above is what this variant costs.
-    Cursor = MemoryRenderBufferRenderElement<R>,
+    /// Anything the compositor rasterised on the CPU rather than a client
+    /// giving it: a themed cursor, a window's title. `ImportMem` above is what
+    /// this variant costs.
+    Memory = MemoryRenderBufferRenderElement<R>,
 }

@@ -43,3 +43,6 @@ tiny-skia = "0.12.0"
 # XCursor theme lookup and file parsing, so `rendering::cursor` only has to
 # decide *which* shape to draw, not how to find or decode it.
 xcursor = "0.3.11"
+cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash", "fontconfig", "sys-locale"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }

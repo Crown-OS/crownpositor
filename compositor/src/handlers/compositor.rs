@@ -15,7 +15,7 @@ use smithay::{
 };
 
 use crate::{
-    handlers::xdg_shell,
+    handlers::{layer_shell, xdg_shell},
     state::{ClientState, State},
 };
 
@@ -31,7 +31,9 @@ impl CompositorHandler for State {
             .compositor_client_state
     }
 
-    fn new_surface(&mut self, _surface: &WlSurface) {}
+    fn new_surface(&mut self, surface: &WlSurface) {
+        layer_shell::shield_orphaned_layer_state(surface);
+    }
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);

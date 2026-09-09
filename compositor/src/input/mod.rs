@@ -1,3 +1,4 @@
+pub mod decoration;
 mod keyboard;
 pub mod libinput;
 pub mod mouse;

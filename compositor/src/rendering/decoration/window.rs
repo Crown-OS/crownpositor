@@ -60,6 +60,41 @@ pub struct Border {
     pub alpha: f32,
 }
 
+/// The rect a border ring occupies around a window, its integral thickness and
+/// its *outer* radius.
+///
+/// Free of the renderer so the arithmetic the shader depends on can be tested
+/// without a GL context, and public because the glass drawn behind a frame has
+/// to grow to exactly the same rect — the ring is translucent, and a sheet that
+/// stopped at the window's own edge would leave the ring unlit.
+///
+/// `None` when there would be no ring: nothing to draw around, or nothing to
+/// draw it with.
+pub fn outline(
+    window: Rectangle<i32, Physical>,
+    thickness: f32,
+    radius: f32,
+) -> Option<(Rectangle<i32, Physical>, f32, f32)> {
+    // Rounded once, and used for both the geometry and the distance field.
+    // A fractional thickness would put the ring's outer edge half a pixel
+    // off the element boundary, where it is either clipped or leaves a gap.
+    let thickness = thickness.round();
+
+    // An empty window collapses the hole to a point and the ring fills
+    // solid — a block of accent colour where no window is.
+    if thickness < 1.0 || window.is_empty() {
+        return None;
+    }
+
+    let grown = thickness as i32;
+    let geometry = Rectangle::new(
+        window.loc - Point::from((grown, grown)),
+        window.size + Size::from((grown * 2, grown * 2)),
+    );
+
+    Some((geometry, thickness, radius.max(0.0) + thickness))
+}
+
 /// One window's border ring.
 #[derive(Debug, Clone)]
 pub struct WindowDecoration {
@@ -92,7 +127,7 @@ impl WindowDecoration {
         }
 
         let (geometry, thickness, radius) =
-            Self::ring(border.window, border.thickness, border.radius)?;
+            outline(border.window, border.thickness, border.radius)?;
         let [red, green, blue, alpha] = border.color;
 
         Some(Self {
@@ -105,38 +140,6 @@ impl WindowDecoration {
             color: [red * alpha, green * alpha, blue * alpha, alpha],
             alpha: border.alpha,
         })
-    }
-
-    /// The ring's rect, its integral thickness and its *outer* radius.
-    ///
-    /// Kept separate from [`new`] and free of the renderer so the arithmetic
-    /// the shader depends on can be tested without a GL context — this is the
-    /// half that decides whether the ring meets the window or leaves a seam.
-    ///
-    /// [`new`]: Self::new
-    fn ring(
-        window: Rectangle<i32, Physical>,
-        thickness: f32,
-        radius: f32,
-    ) -> Option<(Rectangle<i32, Physical>, f32, f32)> {
-        // Rounded once, and used for both the geometry and the distance field.
-        // A fractional thickness would put the ring's outer edge half a pixel
-        // off the element boundary, where it is either clipped or leaves a gap.
-        let thickness = thickness.round();
-
-        // An empty window collapses the hole to a point and the ring fills
-        // solid — a block of accent colour where no window is.
-        if thickness < 1.0 || window.is_empty() {
-            return None;
-        }
-
-        let grown = thickness as i32;
-        let geometry = Rectangle::new(
-            window.loc - Point::from((grown, grown)),
-            window.size + Size::from((grown * 2, grown * 2)),
-        );
-
-        Some((geometry, thickness, radius.max(0.0) + thickness))
     }
 
     /// The ring's own area, which is what `v_coords` has to span: the shader
@@ -279,7 +282,7 @@ mod tests {
 
     #[test]
     fn the_ring_surrounds_the_window_evenly() {
-        let (ring, _, _) = WindowDecoration::ring(window(40, 20, 200, 100), 2.0, 8.0).unwrap();
+        let (ring, _, _) = outline(window(40, 20, 200, 100), 2.0, 8.0).unwrap();
 
         assert_eq!(ring, window(38, 18, 204, 104));
     }
@@ -290,7 +293,7 @@ mod tests {
     #[test]
     fn the_inner_edge_traces_the_window() {
         let window = window(40, 20, 200, 100);
-        let (ring, thickness, radius) = WindowDecoration::ring(window, 2.0, 8.0).unwrap();
+        let (ring, thickness, radius) = outline(window, 2.0, 8.0).unwrap();
 
         let inset = 2 * thickness as i32;
         assert_eq!(ring.size.w - inset, window.size.w);
@@ -303,8 +306,7 @@ mod tests {
     /// and 2px on the other, and the ring would sit off-centre.
     #[test]
     fn a_fractional_thickness_is_rounded_once() {
-        let (ring, thickness, _) =
-            WindowDecoration::ring(window(0, 0, 100, 100), 1.6, 8.0).unwrap();
+        let (ring, thickness, _) = outline(window(0, 0, 100, 100), 1.6, 8.0).unwrap();
 
         assert_eq!(thickness, 2.0);
         assert_eq!(ring, window(-2, -2, 104, 104));
@@ -312,23 +314,22 @@ mod tests {
 
     #[test]
     fn a_hairline_border_is_dropped_rather_than_drawn() {
-        assert!(WindowDecoration::ring(window(0, 0, 100, 100), 0.4, 8.0).is_none());
-        assert!(WindowDecoration::ring(window(0, 0, 100, 100), 0.0, 8.0).is_none());
+        assert!(outline(window(0, 0, 100, 100), 0.4, 8.0).is_none());
+        assert!(outline(window(0, 0, 100, 100), 0.0, 8.0).is_none());
     }
 
     /// A window mid-animation can round to an empty rect. Drawing a ring around
     /// it fills solid, because the hole collapses to a point.
     #[test]
     fn an_empty_window_has_no_border() {
-        assert!(WindowDecoration::ring(window(40, 20, 0, 0), 2.0, 8.0).is_none());
-        assert!(WindowDecoration::ring(window(40, 20, 200, 0), 2.0, 8.0).is_none());
+        assert!(outline(window(40, 20, 0, 0), 2.0, 8.0).is_none());
+        assert!(outline(window(40, 20, 200, 0), 2.0, 8.0).is_none());
     }
 
     /// Square windows get a square ring, not one rounded by the thickness.
     #[test]
     fn a_square_window_keeps_square_corners() {
-        let (_, thickness, radius) =
-            WindowDecoration::ring(window(0, 0, 100, 100), 3.0, 0.0).unwrap();
+        let (_, thickness, radius) = outline(window(0, 0, 100, 100), 3.0, 0.0).unwrap();
 
         assert_eq!(radius - thickness, 0.0);
     }

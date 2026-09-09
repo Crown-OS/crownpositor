@@ -11,4 +11,5 @@ features = ["wayland_frontend"]
 
 [dependencies]
 tracing = { workspace = true }
+wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }
 wayland-server = { workspace = true }

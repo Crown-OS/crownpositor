@@ -5,7 +5,7 @@
 
 use crownos_config::{KeyCode, Keybind, Mods};
 
-use crate::input::shortcuts::action::{Action, Direction, WorkspaceRef};
+use crate::input::shortcuts::action::{Action, Direction, SnapZone, WorkspaceRef};
 
 const SUPER: Mods = Mods::META;
 const SUPER_SHIFT: Mods = Mods {
@@ -67,13 +67,27 @@ pub fn bindings() -> impl Iterator<Item = (Keybind, Action)> {
         (SUPER, KeyCode::V, Action::ToggleFloating),
         (SUPER, KeyCode::F, Action::ToggleFullscreen),
         (SUPER, KeyCode::M, Action::ToggleMaximize),
-        (SUPER_SHIFT, KeyCode::Space, Action::CycleLayout),
-        (SUPER_CTRL, KeyCode::Space, Action::ToggleLayoutMode),
+        (SUPER_CTRL, KeyCode::Space, Action::ToggleWorkspaceMode),
         (SUPER_CTRL, KeyCode::L, Action::ResizeSplit(0.05)),
         (SUPER_CTRL, KeyCode::H, Action::ResizeSplit(-0.05)),
         (SUPER, KeyCode::P, Action::PromoteDemote),
-        (SUPER, KeyCode::R, Action::CycleSize),
         (SUPER_SHIFT, KeyCode::R, Action::ResetSize),
+        // The three edges Windows snaps to, on the arrows that point at them.
+        (
+            SUPER,
+            KeyCode::ArrowLeft,
+            Action::SnapWindow(SnapZone::LeftHalf),
+        ),
+        (
+            SUPER,
+            KeyCode::ArrowRight,
+            Action::SnapWindow(SnapZone::RightHalf),
+        ),
+        (
+            SUPER,
+            KeyCode::ArrowUp,
+            Action::SnapWindow(SnapZone::Maximize),
+        ),
     ]
     .into_iter()
     .map(|(mods, key, action)| (Keybind::new(mods, Some(key)), action));

@@ -430,19 +430,28 @@ pub struct BlurBackdrop {
 }
 
 impl BlurBackdrop {
-    pub fn new(renderer: &GlesRenderer, source: &BackdropSource, params: Backdrop) -> Self {
-        let program = BlurShaders::get(renderer).map(|shaders| shaders.finish);
-        Self {
+    /// `None` when there is nothing of this backdrop on screen.
+    ///
+    /// The blurred scene covers the output and no more, so the part of a window
+    /// hanging off an edge has nothing to sample: clipped to what exists rather
+    /// than smeared, which is what reading past a texture's edge would give.
+    /// The *mask* is left whole, so the corners still round against the window
+    /// rather than against the piece of it that survived.
+    pub fn new(renderer: &GlesRenderer, source: &BackdropSource, params: Backdrop) -> Option<Self> {
+        let size = source.texture.size();
+        let scene = Rectangle::from_size(Size::<i32, Physical>::from((size.w, size.h)));
+
+        Some(Self {
             id: params.id,
             commit: params.commit,
             texture: source.texture.clone(),
-            program,
-            geometry: params.geometry,
+            program: BlurShaders::get(renderer).map(|shaders| shaders.finish),
+            geometry: params.geometry.intersection(scene)?,
             mask: params.mask,
             radius: params.radius,
             noise: source.noise,
             alpha: params.alpha,
-        }
+        })
     }
 
     /// The window rect in the blurred texture's buffer space (1:1 physical).

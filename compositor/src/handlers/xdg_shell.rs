@@ -16,7 +16,7 @@ use smithay::{
 };
 
 use crate::{
-    layout::floating,
+    layout::placement,
     shell::tile::{Tile, WindowState},
     state::State,
     utils::id::WindowId,
@@ -61,6 +61,7 @@ impl XdgShellHandler for State {
             return;
         };
         self.shell.remove_tile(id);
+        self.shell.menus.forget(id);
         self.queue_redraw();
     }
 
@@ -215,8 +216,13 @@ impl State {
                 .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         let opacity = self.config.current.opacity_for(&rules);
 
-        if let Some(tile) = self.shell.tile_mut(id) {
+        // The frame draws the title, so a rename has to reach the screen.
+        let renamed = self.shell.tile_mut(id).is_some_and(|tile| {
             tile.set_opacity(opacity);
+            tile.set_title(title.as_deref().unwrap_or_default())
+        });
+        if renamed {
+            self.queue_redraw();
         }
     }
 
@@ -264,8 +270,10 @@ impl State {
             surface.clone(),
             rules.clone(),
             opacity,
+            self.config.current.appearance.titlebar_height.into(),
         );
         tile.set_size_hints(min_size, max_size);
+        tile.set_title(title.as_deref().unwrap_or_default());
 
         if tile.state().is_floating() {
             let parent_rect = parent
@@ -273,9 +281,14 @@ impl State {
                 .and_then(|parent| self.shell.window_id(parent))
                 .and_then(|parent| self.shell.tile(parent))
                 .map(Tile::target);
-            let size = size_or(unmapped.window.geometry().size, area.size);
             let cascade = self.shell.next_cascade();
-            tile.set_floating_rect(floating::place(area, size, parent_rect, cascade));
+            tile.set_floating_rect(placement::initial_rect(
+                unmapped.window.geometry().size,
+                tile.insets().top,
+                area,
+                parent_rect,
+                cascade,
+            ));
         }
 
         if rules.fullscreen.unwrap_or(false) {
@@ -288,6 +301,13 @@ impl State {
 
         if rules.focus.unwrap_or(true) {
             self.shell.focus_window(id);
+        }
+
+        // A client can name its menu before it maps, in which case the address
+        // is already sitting on the surface and nothing has read it yet.
+        let address = with_states(surface, protocols::appmenu::menu_address);
+        if address.is_some() {
+            self.fetch_menu(id, address);
         }
 
         tracing::debug!(
@@ -330,14 +350,6 @@ fn size_hints(surface: &WlSurface) -> (Size<i32, Logical>, Size<i32, Logical>) {
     })
 }
 
-fn size_or(size: Size<i32, Logical>, fallback: Size<i32, Logical>) -> Size<i32, Logical> {
-    if size.w > 0 && size.h > 0 {
-        size
-    } else {
-        Size::from((fallback.w / 2, fallback.h / 2))
-    }
-}
-
 /// Sends the initial configure once a surface has committed for the first time.
 pub fn handle_commit(state: &mut State, surface: &WlSurface) {
     state.map_pending(surface);
@@ -363,11 +375,16 @@ pub fn handle_commit(state: &mut State, surface: &WlSurface) {
         }
     }
 
-    // Size hints can change at any time and feed the next relayout.
+    // Size hints can change at any time and feed the next relayout, and a
+    // client that still owns its own size may have just changed it.
     if let Some(id) = state.shell.window_id(surface) {
         let (min, max) = size_hints(surface);
-        if let Some(tile) = state.shell.tile_mut(id) {
+        let resized = state.shell.tile_mut(id).is_some_and(|tile| {
             tile.set_size_hints(min, max);
+            tile.adopt_client_size()
+        });
+        if resized {
+            state.shell.mark_dirty(id);
         }
     }
 

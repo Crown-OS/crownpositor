@@ -13,9 +13,7 @@ impl XdgDecorationHandler for State {
     }
 
     fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode) {
-        // TODO: honour client-side decorations once the shell can draw both.
-        let _ = mode;
-        toplevel.with_pending_state(|state| state.decoration_mode = Some(Mode::ServerSide));
+        toplevel.with_pending_state(|state| state.decoration_mode = Some(mode));
         toplevel.send_configure();
     }
 

@@ -8,7 +8,10 @@ use smithay::{
     wayland::{seat::WaylandFocus, shell::wlr_layer::KeyboardInteractivity},
 };
 
-use crate::{handlers::seat::PointerFocusTarget, shell::monitor::Monitor, state::State};
+use crate::{
+    handlers::seat::PointerFocusTarget, input::decoration, shell::monitor::Monitor, state::State,
+    utils::id::WindowId,
+};
 
 impl State {
     /// Absolute motion, from winit and touchscreens. Transforms against the
@@ -44,7 +47,21 @@ impl State {
 
         let previous = self.input.pointer_location;
         self.input.pointer_location = location;
+
+        // An open menu owns the pointer while it is inside it: highlighting
+        // follows the cursor and no client hears a thing.
+        if self.shell.menus.contains(location) {
+            self.on_menu_motion();
+            self.queue_redraw_at(previous);
+            self.queue_redraw_at(location);
+            return;
+        }
+
         let under = self.shell.pointer_focus_under(location);
+        let on_frame = under
+            .as_ref()
+            .is_some_and(|(target, _)| target.is_decoration());
+        self.track_frame_hover(on_frame);
 
         pointer.motion(
             self,
@@ -98,10 +115,42 @@ impl State {
         let serial = SERIAL_COUNTER.next_serial();
         let state = event.state();
 
-        if state == ButtonState::Pressed && !pointer.is_grabbed() {
+        // A press while a menu is open belongs to the menu: inside it, to
+        // whichever row it landed on; outside, to dismissing it. Either way no
+        // client sees the click, which is what makes clicking away from a menu
+        // close it rather than doing two things at once.
+        if state == ButtonState::Pressed
+            && !pointer.is_grabbed()
+            && self.shell.menus.open().is_some()
+        {
+            if self.shell.menus.contains(self.input.pointer_location) {
+                self.on_menu_press();
+            } else {
+                self.dismiss_menu();
+            }
+            return;
+        }
+
+        // Which frame the click belongs to, decided before the dispatch and
+        // acted on after it: a frame click can start a move grab, and smithay
+        // holds the pointer's lock for the whole of `PointerHandle::button`.
+        //
+        // A release goes to whichever frame armed the press even when the
+        // pointer has since left it — having left is exactly what cancels the
+        // click, and the frame is the only thing that can say so.
+        let on_left = !pointer.is_grabbed() && event.button_code() == decoration::LEFT_BUTTON;
+        let frame = match state {
+            ButtonState::Pressed => on_left.then(|| self.frame_under_pointer()).flatten(),
+            ButtonState::Released => self.input.frame_press.map(|press| press.window),
+        };
+
+        if state == ButtonState::Pressed && !pointer.is_grabbed() && frame.is_none() {
             self.focus_under_pointer();
         }
 
+        // Still dispatched even for a frame, so the seat's own record of which
+        // buttons are down stays honest — the `Decoration` target forwards
+        // nothing, so no client hears it.
         pointer.button(
             self,
             &ButtonEvent {
@@ -112,6 +161,21 @@ impl State {
             },
         );
         pointer.frame(self);
+
+        if let Some(window) = frame {
+            self.on_frame_click(window, state, serial);
+        }
+    }
+
+    /// The window whose frame the pointer is over, by id.
+    fn frame_under_pointer(&self) -> Option<WindowId> {
+        let (target, _) = self
+            .shell
+            .pointer_focus_under(self.input.pointer_location)?;
+        if !target.is_decoration() {
+            return None;
+        }
+        self.window_id_of(target.window()?)
     }
 
     pub(super) fn on_pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
@@ -158,6 +222,11 @@ impl State {
             .map(|(target, _)| target);
 
         match under {
+            // The frame handles its own press, focus included: it has to raise
+            // the window *before* deciding whether the click was a control or
+            // the start of a drag.
+            Some(PointerFocusTarget::Decoration { .. }) => {}
+
             Some(PointerFocusTarget::Window { window, .. }) => {
                 if let Some(id) = window
                     .wl_surface()

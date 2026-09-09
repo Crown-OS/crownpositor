@@ -9,5 +9,6 @@
 //! That decoupling is why these live in their own crate: nothing in here may
 //! reach back into the compositor, and the crate boundary is what enforces it.
 
+pub mod appmenu;
 pub mod background_effect;
 pub mod region;

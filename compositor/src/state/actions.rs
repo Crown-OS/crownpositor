@@ -82,14 +82,17 @@ impl State {
                 self.shell.toggle_window_state(WindowState::Maximized);
             }
 
-            Action::ToggleLayoutMode => {
-                self.shell.toggle_global_layout();
+            Action::ToggleWorkspaceMode => {
+                self.shell.toggle_workspace_mode();
             }
-            Action::CycleLayout => {
-                self.shell.cycle_workspace_layout();
+            Action::SetWorkspaceMode(mode) => {
+                self.shell.set_workspace_mode(mode);
             }
-            Action::SetLayout(selection) => {
-                self.shell.set_workspace_layout(selection.into());
+            Action::SnapWindow(zone) => {
+                self.shell.snap_focused(zone);
+            }
+            Action::CloseMenu => {
+                self.dismiss_menu();
             }
 
             Action::ResizeSplit(fraction) => {
@@ -100,15 +103,8 @@ impl State {
                     self.shell.apply_layout_op(LayoutOp::PromoteDemote(id));
                 }
             }
-            Action::CycleSize => {
-                if let Some(id) = self.shell.focused_window_id() {
-                    self.shell.apply_layout_op(LayoutOp::CyclePreset(id));
-                }
-            }
             Action::ResetSize => {
-                if let Some(id) = self.shell.focused_window_id() {
-                    self.shell.apply_layout_op(LayoutOp::ResetSize(id));
-                }
+                self.shell.apply_layout_op(LayoutOp::ResetSize);
             }
 
             // TODO: needs the exposé view in `shell/workspaces_view`.
@@ -151,11 +147,13 @@ impl State {
     pub fn apply_config(&mut self, new: Config) {
         self.input.bindings = Bindings::with_custom(&new.keybinds.custom_keybinds);
 
-        self.shell.set_global_layout(new.compositor.layout.into());
+        self.shell.set_default_mode(new.compositor.layout);
         self.shell.set_gaps(Gaps {
             inner: new.appearance.gaps_inner.into(),
             outer: new.appearance.gaps_outer.into(),
         });
+        self.shell
+            .set_titlebar_height(new.appearance.titlebar_height.into());
         self.shell
             .set_workspace_animation(SpringProfile::from_config(new.appearance.animations));
 
@@ -189,9 +187,9 @@ impl State {
         let config = &mut self.config.current;
 
         match update {
-            Update::Layout(layout) => {
-                config.compositor.layout = layout;
-                self.shell.set_global_layout(layout.into());
+            Update::DefaultMode(mode) => {
+                config.compositor.layout = mode;
+                self.shell.set_default_mode(mode);
             }
             Update::FocusFollowsMouse(follows) => config.compositor.focus_follows_mouse = follows,
             Update::WindowRules(rules) => config.window_rules = rules,
@@ -214,6 +212,8 @@ impl State {
                     inner: appearance.gaps_inner.into(),
                     outer: appearance.gaps_outer.into(),
                 });
+                self.shell
+                    .set_titlebar_height(appearance.titlebar_height.into());
                 self.shell
                     .set_workspace_animation(SpringProfile::from_config(appearance.animations));
                 config.appearance = appearance;

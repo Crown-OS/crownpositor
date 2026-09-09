@@ -36,13 +36,15 @@ use smithay::{
     },
 };
 
-use protocols::background_effect::{
-    BackgroundEffectState, Capability as BackgroundEffectCapability,
+use protocols::{
+    appmenu::AppmenuState,
+    background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
 };
 
 use crate::state::State;
 
 pub struct WaylandState {
+    pub appmenu_state: AppmenuState,
     pub background_effect_state: BackgroundEffectState,
     pub compositor_state: CompositorState,
     // pub corner_radius_state: CornerRadiusState,
@@ -122,6 +124,7 @@ impl WaylandState {
             // blur shaders fail to compile degrades to drawing windows without
             // the effect rather than withdrawing the capability, which the
             // protocol explicitly allows ("subject to compositor policies").
+            appmenu_state: AppmenuState::new::<State>(display),
             background_effect_state: BackgroundEffectState::new::<State>(
                 display,
                 BackgroundEffectCapability::Blur,

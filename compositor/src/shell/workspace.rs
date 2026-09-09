@@ -2,8 +2,8 @@ use smithay::utils::{Logical, Rectangle};
 
 use crate::{
     layout::{
-        Direction, Gaps, LayoutInput, LayoutKind, LayoutOp, LayoutOutput, LayoutSet, TileInfo,
-        floating,
+        Direction, Gaps, LayoutInput, LayoutOp, LayoutOutput, TileInfo, TilingLayout,
+        WorkspaceMode, placement,
     },
     shell::tile::{Tile, WindowState},
     utils::id::{OutputId, WindowId, WorkspaceId},
@@ -56,9 +56,13 @@ pub struct Workspace {
     /// doing rather than to whatever tile shifted into the slot.
     focus_stack: Vec<WindowId>,
 
-    /// `None` follows the compositor-wide default.
-    mode_override: Option<LayoutKind>,
-    layouts: LayoutSet,
+    /// This workspace's own regime. Nothing outside it has a say: the config
+    /// value seeds it at construction and never again, so switching one
+    /// workspace to floating leaves every other one alone.
+    mode: WorkspaceMode,
+    /// Kept across a trip through floating, so returning to tiling restores the
+    /// master ratio the user had set.
+    tiling: TilingLayout,
 
     /// Workspace-local, exclusive zones and the outer gap already subtracted.
     area: Rectangle<i32, Logical>,
@@ -73,15 +77,15 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(output: OutputId, kind: LayoutKind, gaps: Gaps) -> Self {
+    pub fn new(output: OutputId, mode: WorkspaceMode, gaps: Gaps) -> Self {
         Self {
             id: WorkspaceId::next(),
             output,
             tiles: Vec::new(),
             focus: None,
             focus_stack: Vec::new(),
-            mode_override: None,
-            layouts: LayoutSet::new(kind),
+            mode,
+            tiling: TilingLayout::default(),
             area: Rectangle::default(),
             output_area: Rectangle::default(),
             gaps,
@@ -124,12 +128,12 @@ impl Workspace {
             .tiles
             .iter()
             .rev()
-            .filter(|tile| tile.state().is_floating());
+            .filter(|tile| tile.state().floats_above());
         let tiled = self
             .tiles
             .iter()
             .rev()
-            .filter(|tile| !tile.state().is_floating());
+            .filter(|tile| !tile.state().floats_above());
         floating.chain(tiled)
     }
 
@@ -161,6 +165,10 @@ impl Workspace {
         self.output_area
     }
 
+    pub fn gaps(&self) -> Gaps {
+        self.gaps
+    }
+
     /// At most one, enforced by `set_state` going through here.
     pub fn fullscreen(&self) -> Option<WindowId> {
         self.tiles
@@ -169,19 +177,42 @@ impl Workspace {
             .map(Tile::id)
     }
 
-    pub fn effective_kind(&self, global: LayoutKind) -> LayoutKind {
-        self.mode_override.unwrap_or(global)
+    pub fn mode(&self) -> WorkspaceMode {
+        self.mode
     }
 
-    pub fn mode_override(&self) -> Option<LayoutKind> {
-        self.mode_override
-    }
-
-    pub fn set_mode_override(&mut self, kind: Option<LayoutKind>) {
-        if self.mode_override != kind {
-            self.mode_override = kind;
-            self.dirty.layout = true;
+    /// Switches the regime, converting every window that was following the old
+    /// one.
+    ///
+    /// The conversion only retargets each tile, so the springs in `TileAnim`
+    /// carry the windows to their new places — the transition needs no
+    /// animation machinery of its own.
+    pub fn set_mode(&mut self, mode: WorkspaceMode) -> bool {
+        if self.mode == mode {
+            return false;
         }
+        self.mode = mode;
+
+        let area = self.area;
+        match mode {
+            WorkspaceMode::Floating => {
+                for (cascade, tile) in self.tiles.iter_mut().enumerate() {
+                    if tile.state().is_tiled() {
+                        tile.float_into(area, cascade);
+                    }
+                }
+            }
+            WorkspaceMode::Tiling => {
+                for tile in &mut self.tiles {
+                    if tile.state().floats_above() {
+                        tile.set_state(WindowState::Tiled);
+                    }
+                }
+            }
+        }
+
+        self.dirty.layout = true;
+        true
     }
 
     pub fn set_area(
@@ -206,17 +237,26 @@ impl Workspace {
 
     // ---- membership: `pub(super)` so only `shell/mod.rs` can move a tile ----
 
-    pub(super) fn push_tile(&mut self, tile: Tile) {
+    pub(super) fn push_tile(&mut self, mut tile: Tile) {
         let id = tile.id();
+
+        // A window opening on a floating workspace floats, whatever it arrived
+        // as. Without this a new window would be laid out by the tiling layout
+        // on a workspace that has none — the single place a tile joins a
+        // workspace is the only place that cannot be forgotten.
+        if self.mode.is_floating() && tile.state().is_tiled() {
+            tile.float_into(self.area, self.tiles.len());
+        }
+
         // Floating windows go to the front of their subsequence (topmost);
         // tiled windows append in layout order.
-        if tile.state().is_floating() {
+        if tile.state().floats_above() {
             self.tiles.push(tile);
         } else {
             let insert_at = self
                 .tiles
                 .iter()
-                .position(|existing| existing.state().is_floating())
+                .position(|existing| existing.state().floats_above())
                 .unwrap_or(self.tiles.len());
             self.tiles.insert(insert_at, tile);
         }
@@ -228,10 +268,9 @@ impl Workspace {
         let index = self.tiles.iter().position(|tile| tile.id() == id)?;
         let tile = self.tiles.remove(index);
 
-        // Every algorithm, not just the active one: an inactive layout's side
-        // table must not retain a dead id either. Doing it here rather than in
-        // `Shell::remove_tile` means it cannot be forgotten by a new call site.
-        self.layouts.forget(id);
+        // Doing it here rather than in `Shell::remove_tile` means it cannot be
+        // forgotten by a new call site.
+        self.tiling.forget(id);
         self.focus_stack.retain(|existing| *existing != id);
         if self.focus == Some(id) {
             self.focus = self.focus_stack.last().copied().or_else(|| {
@@ -249,35 +288,6 @@ impl Workspace {
         Some(tile)
     }
 
-    /// Pans a viewport layout so the focused window is fully visible.
-    ///
-    /// A no-op for layouts that fit everything on screen, which is why it can be
-    /// called unconditionally after any focus change.
-    pub fn reveal_focus(&mut self, global: LayoutKind) -> bool {
-        let Some(focus) = self.focus else {
-            return false;
-        };
-        self.sync_layout(global);
-
-        self.scratch_in.clear();
-        self.scratch_in.extend(
-            self.tiles
-                .iter()
-                .filter(|tile| tile.state().is_tiled())
-                .map(Tile::info),
-        );
-        let input = LayoutInput {
-            area: self.area,
-            gaps: self.gaps,
-            focused: self.focus,
-            tiles: &self.scratch_in,
-        };
-
-        let moved = self.layouts.current_mut().reveal(focus, &input);
-        self.dirty.layout |= moved;
-        moved
-    }
-
     pub fn focus_window(&mut self, id: WindowId) -> bool {
         if !self.contains(id) || self.focus == Some(id) {
             return false;
@@ -288,7 +298,9 @@ impl Workspace {
         self.dirty.focus = true;
 
         // Floating windows raise within their subsequence when focused.
-        if self.tile(id).is_some_and(|tile| tile.state().is_floating())
+        if self
+            .tile(id)
+            .is_some_and(|tile| tile.state().floats_above())
             && let Some(index) = self.tiles.iter().position(|tile| tile.id() == id)
         {
             let tile = self.tiles.remove(index);
@@ -297,16 +309,34 @@ impl Workspace {
         true
     }
 
-    /// The layout's own answer, falling back to list order.
+    /// Sends a window to the back of its own subsequence.
+    pub fn lower(&mut self, id: WindowId) -> bool {
+        let Some(index) = self.tiles.iter().position(|tile| tile.id() == id) else {
+            return false;
+        };
+        let tile = self.tiles.remove(index);
+        let insert_at = if tile.state().floats_above() {
+            // Behind the other floating windows, but still above the tiled ones.
+            self.tiles
+                .iter()
+                .position(|other| other.state().floats_above())
+                .unwrap_or(self.tiles.len())
+        } else {
+            0
+        };
+        self.tiles.insert(insert_at, tile);
+
+        self.focus_stack.retain(|existing| *existing != id);
+        self.focus_stack.insert(0, id);
+        self.dirty.layout = true;
+        true
+    }
+
+    /// The tiling layout's own answer, falling back to list order.
     ///
-    /// The fallback is what makes vertical movement work in a master stack,
-    /// where the algorithm only has an opinion about crossing the split.
-    pub fn neighbour(
-        &self,
-        from: WindowId,
-        dir: Direction,
-        global: LayoutKind,
-    ) -> Option<WindowId> {
+    /// The fallback is what makes vertical movement work, where the layout only
+    /// has an opinion about crossing the master/stack split.
+    pub fn neighbour(&self, from: WindowId, dir: Direction) -> Option<WindowId> {
         let tiles: Vec<TileInfo> = self
             .tiles
             .iter()
@@ -314,17 +344,7 @@ impl Workspace {
             .map(Tile::info)
             .collect();
 
-        let input = LayoutInput {
-            area: self.area,
-            gaps: self.gaps,
-            focused: self.focus,
-            tiles: &tiles,
-        };
-
-        let kind = self.mode_override.unwrap_or(global);
-        if self.layouts.active() == kind
-            && let Some(id) = self.layouts.current().neighbour(&input, from, dir)
-        {
+        if let Some(id) = self.tiling.neighbour(&tiles, from, dir) {
             return Some(id);
         }
 
@@ -352,13 +372,12 @@ impl Workspace {
         true
     }
 
-    pub fn apply_layout_op(&mut self, op: LayoutOp, global: LayoutKind) -> bool {
-        self.sync_layout(global);
+    pub fn apply_layout_op(&mut self, op: LayoutOp) -> bool {
         self.scratch_in.clear();
         self.scratch_in.extend(
             self.tiles
                 .iter()
-                .filter(|t| t.state().is_tiled())
+                .filter(|tile| tile.state().is_tiled())
                 .map(Tile::info),
         );
 
@@ -369,25 +388,16 @@ impl Workspace {
             tiles: &self.scratch_in,
         };
 
-        let changed = self.layouts.current_mut().apply(op, &input);
+        let changed = self.tiling.apply(op, &input);
         self.dirty.layout |= changed;
         changed
     }
 
-    fn sync_layout(&mut self, global: LayoutKind) {
-        let kind = self.mode_override.unwrap_or(global);
-        if self.layouts.set_active(kind) {
-            self.dirty.layout = true;
-        }
-    }
-
     /// Assigns every tile a target rect. Returns the ids whose size changed, so
     /// the caller knows exactly who needs a configure.
-    pub(super) fn arrange(&mut self, global: LayoutKind, resized: &mut Vec<WindowId>) {
-        self.sync_layout(global);
-
+    pub(super) fn arrange(&mut self, resized: &mut Vec<WindowId>) {
         let fullscreen = self.fullscreen();
-        let (area, output_area) = (self.area, self.output_area);
+        let (area, output_area, gaps) = (self.area, self.output_area, self.gaps);
 
         self.scratch_in.clear();
         self.scratch_in.extend(
@@ -397,31 +407,40 @@ impl Workspace {
                 .map(Tile::info),
         );
 
-        if !self.scratch_in.is_empty() {
+        if self.scratch_in.is_empty() {
+            self.scratch_out.clear();
+        } else {
             let input = LayoutInput {
                 area,
-                gaps: self.gaps,
+                gaps,
                 focused: self.focus,
                 tiles: &self.scratch_in,
             };
-            self.layouts
-                .current_mut()
-                .layout(&input, &mut self.scratch_out);
+            self.tiling.arrange(&input, &mut self.scratch_out);
             debug_assert_eq!(
                 self.scratch_out.rects.len(),
                 self.scratch_in.len(),
-                "a layout must return exactly one rect per tile"
+                "the tiling layout must return exactly one rect per tile"
             );
-        } else {
-            self.scratch_out.clear();
         }
 
         let mut next = 0;
         for tile in &mut self.tiles {
+            // Every state but `Floating` has the compositor dictating a size,
+            // which is what takes the decision away from the client for good.
+            if !tile.state().is_floating() {
+                tile.claim_size();
+            }
+
             let rect = match tile.state() {
                 WindowState::Fullscreen => output_area,
                 WindowState::Maximized => area,
-                WindowState::Floating => floating::clamp_into(tile.floating_rect(), area),
+                WindowState::Snapped(zone) => zone.rect(area, gaps),
+                // Free to hang off any edge the drag took it over, but never
+                // so far that there is nothing left to catch it by.
+                WindowState::Floating => {
+                    placement::keep_reachable(tile.floating_rect(), area, tile.insets().top)
+                }
                 WindowState::Tiled => {
                     // A fullscreen window is excluded from the layout, so it
                     // keeps whatever it had until it comes back.
@@ -440,16 +459,13 @@ impl Workspace {
             }
         }
     }
-
-    pub fn view_offset(&self) -> smithay::utils::Point<f64, Logical> {
-        self.scratch_out.view_offset
-    }
 }
 
 impl std::fmt::Debug for Workspace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Workspace")
             .field("id", &self.id)
+            .field("mode", &self.mode)
             .field("tiles", &self.tiles.len())
             .field("focus", &self.focus)
             .finish_non_exhaustive()

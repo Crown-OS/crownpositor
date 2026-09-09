@@ -8,7 +8,7 @@ pub mod defaults;
 pub mod gestures;
 
 #[allow(unused_imports)]
-pub use action::{Action, Direction, LayoutSelection, WorkspaceRef};
+pub use action::{Action, Direction, WorkspaceRef};
 pub use bindings::Bindings;
 #[allow(unused_imports)]
 pub use chord::{Chord, ModMask};

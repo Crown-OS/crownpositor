@@ -9,7 +9,7 @@ impl RoundedCornerShader {
     fn uniforms() -> [UniformName<'static>; 2] {
         [
             UniformName::new("size", UniformType::_2f),
-            UniformName::new("radius", UniformType::_1f),
+            UniformName::new("radius", UniformType::_4f),
         ]
     }
 
@@ -34,7 +34,8 @@ impl RoundedCornerShader {
             .map(|shader| shader.0.clone())
     }
 
-    pub fn uniform_values(size: (f32, f32), radius: f32) -> [Uniform<'static>; 2] {
+    /// `radius` is per corner: right-bottom, right-top, left-bottom, left-top.
+    pub fn uniform_values(size: (f32, f32), radius: [f32; 4]) -> [Uniform<'static>; 2] {
         [
             Uniform::new("size", (size.0, size.1)),
             Uniform::new("radius", radius),

@@ -26,6 +26,7 @@ use crate::{
     rendering::{
         blur::{BackdropSource, BlurBackdrop},
         decorate::{Backdrop, Cropped, TileDecorator},
+        decoration::{Border, TitleBar, TitleBarParams, WindowDecoration},
     },
     shaders::rounded_corner::RoundedCornerShader,
 };
@@ -41,11 +42,18 @@ pub struct Rounded<E> {
     /// The window's size in physical pixels; the shader needs it to know where
     /// the corners are.
     size: (f32, f32),
-    radius: f32,
+    /// One radius per corner, so a decorated window can keep its top two square
+    /// where the titlebar covers them.
+    radius: [f32; 4],
 }
 
 impl<E> Rounded<E> {
-    pub fn new(inner: E, program: Option<GlesTexProgram>, size: (f32, f32), radius: f32) -> Self {
+    pub fn new(
+        inner: E,
+        program: Option<GlesTexProgram>,
+        size: (f32, f32),
+        radius: [f32; 4],
+    ) -> Self {
         Self {
             inner,
             program,
@@ -183,6 +191,8 @@ where
 pub enum Decorated<E> {
     Window(Rounded<E>),
     Backdrop(BlurBackdrop),
+    TitleBar(TitleBar),
+    Border(WindowDecoration),
 }
 
 impl<E: Element> Element for Decorated<E> {
@@ -190,6 +200,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.id(),
             Self::Backdrop(backdrop) => backdrop.id(),
+            Self::TitleBar(bar) => bar.id(),
+            Self::Border(border) => border.id(),
         }
     }
 
@@ -197,6 +209,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.current_commit(),
             Self::Backdrop(backdrop) => backdrop.current_commit(),
+            Self::TitleBar(bar) => bar.current_commit(),
+            Self::Border(border) => border.current_commit(),
         }
     }
 
@@ -204,6 +218,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.src(),
             Self::Backdrop(backdrop) => backdrop.src(),
+            Self::TitleBar(bar) => bar.src(),
+            Self::Border(border) => border.src(),
         }
     }
 
@@ -211,6 +227,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.geometry(scale),
             Self::Backdrop(backdrop) => backdrop.geometry(scale),
+            Self::TitleBar(bar) => bar.geometry(scale),
+            Self::Border(border) => border.geometry(scale),
         }
     }
 
@@ -218,6 +236,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.location(scale),
             Self::Backdrop(backdrop) => backdrop.location(scale),
+            Self::TitleBar(bar) => bar.location(scale),
+            Self::Border(border) => border.location(scale),
         }
     }
 
@@ -225,6 +245,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.transform(),
             Self::Backdrop(backdrop) => backdrop.transform(),
+            Self::TitleBar(bar) => bar.transform(),
+            Self::Border(border) => border.transform(),
         }
     }
 
@@ -236,6 +258,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.damage_since(scale, commit),
             Self::Backdrop(backdrop) => backdrop.damage_since(scale, commit),
+            Self::TitleBar(bar) => bar.damage_since(scale, commit),
+            Self::Border(border) => border.damage_since(scale, commit),
         }
     }
 
@@ -243,6 +267,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.opaque_regions(scale),
             Self::Backdrop(backdrop) => backdrop.opaque_regions(scale),
+            Self::TitleBar(bar) => bar.opaque_regions(scale),
+            Self::Border(border) => border.opaque_regions(scale),
         }
     }
 
@@ -250,6 +276,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.alpha(),
             Self::Backdrop(backdrop) => backdrop.alpha(),
+            Self::TitleBar(bar) => bar.alpha(),
+            Self::Border(border) => border.alpha(),
         }
     }
 
@@ -257,6 +285,8 @@ impl<E: Element> Element for Decorated<E> {
         match self {
             Self::Window(window) => window.kind(),
             Self::Backdrop(backdrop) => backdrop.kind(),
+            Self::TitleBar(bar) => bar.kind(),
+            Self::Border(border) => border.kind(),
         }
     }
 }
@@ -280,6 +310,12 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
                 damage,
                 opaque_regions,
             ),
+            Self::TitleBar(bar) => {
+                RenderElement::<GlesRenderer>::draw(bar, frame, src, dst, damage, opaque_regions)
+            }
+            Self::Border(border) => {
+                RenderElement::<GlesRenderer>::draw(border, frame, src, dst, damage, opaque_regions)
+            }
         }
     }
 
@@ -287,6 +323,10 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
         match self {
             Self::Window(window) => window.underlying_storage(renderer),
             Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
+            Self::TitleBar(bar) => RenderElement::<GlesRenderer>::underlying_storage(bar, renderer),
+            Self::Border(border) => {
+                RenderElement::<GlesRenderer>::underlying_storage(border, renderer)
+            }
         }
     }
 }
@@ -313,6 +353,22 @@ where
                 damage,
                 opaque_regions,
             ),
+            Self::TitleBar(bar) => RenderElement::<KmsRenderer<'render>>::draw(
+                bar,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+            ),
+            Self::Border(border) => RenderElement::<KmsRenderer<'render>>::draw(
+                border,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+            ),
         }
     }
 
@@ -323,6 +379,12 @@ where
         match self {
             Self::Window(window) => window.underlying_storage(renderer),
             Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
+            Self::TitleBar(bar) => {
+                RenderElement::<KmsRenderer<'render>>::underlying_storage(bar, renderer)
+            }
+            Self::Border(border) => {
+                RenderElement::<KmsRenderer<'render>>::underlying_storage(border, renderer)
+            }
         }
     }
 }
@@ -352,7 +414,7 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
         renderer: &mut GlesRenderer,
         element: Cropped<GlesRenderer>,
         size: (f32, f32),
-        radius: f32,
+        radius: [f32; 4],
     ) -> Option<Self::Element> {
         // A missing program (shader never compiled) squares the corners; it
         // must not drop the window.
@@ -372,9 +434,19 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
         backdrop: Backdrop,
     ) -> Option<Self::Element> {
         let source = self.backdrop.as_ref()?;
-        Some(Decorated::Backdrop(BlurBackdrop::new(
-            renderer, source, backdrop,
-        )))
+        BlurBackdrop::new(renderer, source, backdrop).map(Decorated::Backdrop)
+    }
+
+    fn title_bar(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        params: TitleBarParams,
+    ) -> Option<Self::Element> {
+        TitleBar::new(renderer, params).map(Decorated::TitleBar)
+    }
+
+    fn border(&mut self, renderer: &mut GlesRenderer, border: Border) -> Option<Self::Element> {
+        WindowDecoration::new(renderer, border).map(Decorated::Border)
     }
 }
 
@@ -398,7 +470,7 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
         renderer: &mut KmsRenderer<'render>,
         element: Cropped<KmsRenderer<'render>>,
         size: (f32, f32),
-        radius: f32,
+        radius: [f32; 4],
     ) -> Option<Self::Element> {
         let program = RoundedCornerShader::get(renderer.as_mut());
         Some(Decorated::Window(Rounded::new(
@@ -416,10 +488,22 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
         backdrop: Backdrop,
     ) -> Option<Self::Element> {
         let source = self.backdrop.as_ref()?;
-        Some(Decorated::Backdrop(BlurBackdrop::new(
-            renderer.as_mut(),
-            source,
-            backdrop,
-        )))
+        BlurBackdrop::new(renderer.as_mut(), source, backdrop).map(Decorated::Backdrop)
+    }
+
+    fn title_bar(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        params: TitleBarParams,
+    ) -> Option<Self::Element> {
+        TitleBar::new(renderer.as_mut(), params).map(Decorated::TitleBar)
+    }
+
+    fn border(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        border: Border,
+    ) -> Option<Self::Element> {
+        WindowDecoration::new(renderer.as_mut(), border).map(Decorated::Border)
     }
 }

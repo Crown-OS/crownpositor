@@ -1,6 +1,6 @@
 use smithay::{
     backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent},
-    input::keyboard::{FilterResult, KeysymHandle, keysyms},
+    input::keyboard::{FilterResult, Keysym, KeysymHandle, keysyms},
     utils::SERIAL_COUNTER,
 };
 
@@ -47,6 +47,21 @@ impl State {
                          * not also fire the bare-Super binding on release.
                          */
                         state.input.mod_chord_polluted = true;
+
+                        // An open menu owns the keyboard: it was opened
+                        // deliberately, and a keystroke reaching the client
+                        // behind it would type into a window the user cannot
+                        // see. Escape closes it; everything else is swallowed.
+                        // if state.shell.menus.open().is_some() {
+                        //     state.input.intercepted.insert(handle.raw_code());
+                        //     return FilterResult::Intercept(
+                        //         if handle.modified_syms().contains(&Keysym::Escape) {
+                        //             Action::CloseMenu
+                        //         } else {
+                        //             Action::None
+                        //         },
+                        //     );
+                        // }
 
                         // Ctrl+Alt+F<n>, before every inhibitor: we hold the
                         // evdev devices, so the kernel never sees this chord.

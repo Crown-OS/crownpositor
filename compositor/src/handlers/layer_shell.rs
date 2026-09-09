@@ -3,8 +3,12 @@ use smithay::{
     desktop::{LayerSurface, WindowSurfaceType, layer_map_for_output},
     output::Output,
     reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
-    wayland::shell::wlr_layer::{
-        Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+    wayland::{
+        compositor::{add_post_commit_hook, add_pre_commit_hook, with_states},
+        shell::wlr_layer::{
+            Anchor, Layer, LayerSurface as WlrLayerSurface, LayerSurfaceCachedState,
+            LayerSurfaceData, WlrLayerShellHandler, WlrLayerShellState,
+        },
     },
 };
 
@@ -99,6 +103,53 @@ impl State {
 
         self.shell.refresh_usable(&output);
     }
+}
+
+/// Keeps a client alive when it dismisses a panel by destroying its layer
+/// surface and then unmapping the `wl_surface` it hung off — the sequence a
+/// launcher such as vicinae sends when its window is closed with Esc.
+///
+/// smithay resets the role's double-buffered state as the role object goes
+/// away, but leaves its validation hook on the surface, so the commit that
+/// follows is measured against that reset — 0x0 with no anchors — and answered
+/// with an `invalid_size` protocol error on an object the client has already
+/// destroyed. The client is killed for a request it never made.
+///
+/// Pre-commit hooks run in the order they were added and smithay adds its own
+/// along with the role, so this one has to be installed while the surface is
+/// still roleless to land ahead of it. The post-commit hook puts the reset
+/// back, so a surface that is later given a fresh layer surface does not
+/// inherit an anchor the client never asked for.
+pub fn shield_orphaned_layer_state(surface: &WlSurface) {
+    add_pre_commit_hook::<State, _>(surface, |state, _, surface| {
+        if state.shell.tracks_layer(surface) {
+            return;
+        }
+        with_orphaned_layer_state(surface, |orphan| orphan.anchor = Anchor::all());
+    });
+
+    add_post_commit_hook::<State, _>(surface, |state, _, surface| {
+        if state.shell.tracks_layer(surface) {
+            return;
+        }
+        with_orphaned_layer_state(surface, |orphan| {
+            *orphan = LayerSurfaceCachedState::default()
+        });
+    });
+}
+
+/// Applies `edit` to both halves of the double-buffered state a destroyed
+/// layer surface left behind on its `wl_surface`.
+fn with_orphaned_layer_state(surface: &WlSurface, edit: impl Fn(&mut LayerSurfaceCachedState)) {
+    with_states(surface, |states| {
+        if states.data_map.get::<LayerSurfaceData>().is_none() {
+            return;
+        }
+
+        let mut cached = states.cached_state.get::<LayerSurfaceCachedState>();
+        edit(cached.pending());
+        edit(cached.current());
+    });
 }
 
 delegate_layer_shell!(State);

@@ -10,7 +10,7 @@ use config::{OutputSetting, OutputTransform};
 
 use crate::{
     animations::spring::SpringProfile,
-    layout::{Gaps, LayoutKind},
+    layout::{Gaps, WorkspaceMode},
     shell::{
         workspace::{Workspace, WorkspaceRef},
         workspace_switch::{PAGE_GAP, WorkspaceSwitch},
@@ -69,7 +69,7 @@ pub struct OutputConfig {
     pub refresh_interval: Option<Duration>,
     pub enabled: bool,
     /// Overrides the compositor-wide default for workspaces created here.
-    pub default_layout: Option<LayoutKind>,
+    pub default_mode: Option<WorkspaceMode>,
 }
 
 impl OutputConfig {
@@ -110,6 +110,9 @@ pub struct Monitor {
     /// `layer_map_for_output(..).non_exclusive_zone()`, output-local.
     usable: Rectangle<i32, Logical>,
     gaps: Gaps,
+    /// What a workspace created on this output starts as. The output's own
+    /// setting where it has one, the compositor default otherwise.
+    default_mode: WorkspaceMode,
     /// Pinned by config; `None` lets `arrange_outputs` place it.
     fixed_position: Option<smithay::utils::Point<i32, Logical>>,
 }
@@ -120,10 +123,10 @@ impl Monitor {
         output: Output,
         global: Option<GlobalId>,
         config: OutputConfig,
-        global_layout: LayoutKind,
+        default_mode: WorkspaceMode,
         gaps: Gaps,
     ) -> Self {
-        let kind = config.default_layout.unwrap_or(global_layout);
+        let default_mode = config.default_mode.unwrap_or(default_mode);
         let usable = Rectangle::from_size(config.logical_size());
 
         let mut monitor = Self {
@@ -137,9 +140,12 @@ impl Monitor {
             switch: WorkspaceSwitch::new(0),
             usable,
             gaps,
+            default_mode,
             fixed_position: None,
         };
-        monitor.workspaces.push(Workspace::new(id, kind, gaps));
+        monitor
+            .workspaces
+            .push(Workspace::new(id, default_mode, gaps));
         monitor.push_areas();
         monitor
     }
@@ -285,10 +291,10 @@ impl Monitor {
     /// Ends the swipe and makes whichever workspace it landed on active, while
     /// the spring — carrying the speed already on screen — covers the rest of
     /// the distance. `velocity` is in pages per second, positive rightward.
-    pub fn end_switch_gesture(&mut self, velocity: f64, global: LayoutKind) -> bool {
+    pub fn end_switch_gesture(&mut self, velocity: f64) -> bool {
         let last = self.workspaces.len().saturating_sub(1);
         let target = self.switch.release(velocity, last);
-        self.commit(target, global)
+        self.commit(target)
     }
 
     pub fn cancel_switch_gesture(&mut self) {
@@ -406,7 +412,10 @@ impl Monitor {
             changed = true;
         }
 
-        self.config.default_layout = setting.and_then(|s| s.layout).map(Into::into);
+        self.config.default_mode = setting.and_then(|s| s.layout);
+        if let Some(mode) = self.config.default_mode {
+            self.default_mode = mode;
+        }
         self.config.enabled = setting.and_then(|s| s.enabled).unwrap_or(true);
 
         changed
@@ -422,12 +431,17 @@ impl Monitor {
         true
     }
 
-    pub fn default_layout(&self, global: LayoutKind) -> LayoutKind {
-        self.config.default_layout.unwrap_or(global)
+    pub fn default_mode(&self) -> WorkspaceMode {
+        self.default_mode
+    }
+
+    /// Follows the compositor-wide default unless this output pins its own.
+    pub fn set_default_mode(&mut self, mode: WorkspaceMode) {
+        self.default_mode = self.config.default_mode.unwrap_or(mode);
     }
 
     /// Restores the workspace-list invariants. Every mutation ends here.
-    pub fn normalize(&mut self, global: LayoutKind) {
+    pub fn normalize(&mut self) {
         // Reaping renumbers the list, and a viewport in flight sits *between*
         // two numbers — rebasing it would jump the animation. It happens on the
         // first normalize after the switch lands, which the render loop
@@ -435,7 +449,7 @@ impl Monitor {
         if !self.switch.is_active() {
             self.reap_empty();
         }
-        self.ensure_trailing_empty(global);
+        self.ensure_trailing_empty();
         debug_assert!(self.workspaces.last().is_some_and(Workspace::is_empty));
         debug_assert!(self.active < self.workspaces.len());
     }
@@ -470,12 +484,11 @@ impl Monitor {
         self.switch.snap_to(self.active);
     }
 
-    fn ensure_trailing_empty(&mut self, global: LayoutKind) {
+    fn ensure_trailing_empty(&mut self) {
         if self.workspaces.last().is_some_and(Workspace::is_empty) {
             return;
         }
-        let kind = self.default_layout(global);
-        let mut workspace = Workspace::new(self.id, kind, self.gaps);
+        let mut workspace = Workspace::new(self.id, self.default_mode, self.gaps);
         workspace.set_area(
             shrink(self.usable, self.gaps.outer),
             Rectangle::from_size(self.config.logical_size()),
@@ -500,27 +513,27 @@ impl Monitor {
         }
     }
 
-    pub fn switch_to(&mut self, target: WorkspaceRef, global: LayoutKind) -> bool {
-        self.activate(self.resolve(target), global)
+    pub fn switch_to(&mut self, target: WorkspaceRef) -> bool {
+        self.activate(self.resolve(target))
     }
 
-    pub fn activate(&mut self, index: usize, global: LayoutKind) -> bool {
+    pub fn activate(&mut self, index: usize) -> bool {
         let index = index.min(self.workspaces.len().saturating_sub(1));
         self.switch.animate_to(index);
-        self.commit(index, global)
+        self.commit(index)
     }
 
     /// Moves the model onto `index`, leaving the viewport alone — the caller
     /// has already aimed it, and a swipe's whole point is that its release
     /// velocity survives this step.
-    fn commit(&mut self, index: usize, global: LayoutKind) -> bool {
+    fn commit(&mut self, index: usize) -> bool {
         let index = index.min(self.workspaces.len().saturating_sub(1));
         let changed = index != self.active;
         if changed {
             self.previous = self.active;
             self.active = index;
         }
-        self.normalize(global);
+        self.normalize();
         changed
     }
 
@@ -617,7 +630,7 @@ mod tests {
                 position: (0, 0).into(),
                 refresh_interval: None,
                 enabled: true,
-                default_layout: None,
+                default_mode: None,
             },
             workspaces: Vec::new(),
             active: 0,
@@ -625,12 +638,13 @@ mod tests {
             switch: WorkspaceSwitch::new(0),
             usable: Rectangle::from_size((1920, 1080).into()),
             gaps: Gaps::default(),
+            default_mode: WorkspaceMode::Tiling,
             fixed_position: None,
         };
         for _ in 0..workspaces {
             monitor.workspaces.push(Workspace::new(
                 monitor.id,
-                LayoutKind::MasterStack,
+                WorkspaceMode::Tiling,
                 Gaps::default(),
             ));
         }
@@ -675,7 +689,7 @@ mod tests {
     #[test]
     fn normalize_reaps_every_empty_workspace_but_the_active_and_trailing_ones() {
         let mut monitor = monitor(4);
-        monitor.normalize(LayoutKind::MasterStack);
+        monitor.normalize();
 
         // All four were empty. The active one is spared — reaping the workspace
         // the user is looking at would teleport them — and so is the trailing
@@ -705,9 +719,9 @@ mod tests {
     #[test]
     fn normalize_is_idempotent() {
         let mut monitor = monitor(4);
-        monitor.normalize(LayoutKind::MasterStack);
+        monitor.normalize();
         let after_once = monitor.workspaces().len();
-        monitor.normalize(LayoutKind::MasterStack);
+        monitor.normalize();
         assert_eq!(monitor.workspaces().len(), after_once);
         assert_invariants(&monitor);
     }
@@ -728,7 +742,7 @@ mod tests {
     #[test]
     fn switching_away_reaps_the_workspace_you_left_once_the_viewport_lands() {
         let mut monitor = monitor(3);
-        monitor.activate(1, LayoutKind::MasterStack);
+        monitor.activate(1);
         assert_eq!(
             monitor.workspaces().len(),
             3,
@@ -736,7 +750,7 @@ mod tests {
         );
 
         settle(&mut monitor);
-        monitor.normalize(LayoutKind::MasterStack);
+        monitor.normalize();
 
         // Index 0 was empty and is no longer active, so it is gone — and the
         // viewport followed the workspace, not the index.
@@ -749,7 +763,7 @@ mod tests {
     #[test]
     fn activating_slides_the_viewport_rather_than_teleporting_it() {
         let mut monitor = monitor(4);
-        monitor.activate(2, LayoutKind::MasterStack);
+        monitor.activate(2);
 
         assert_eq!(monitor.active_index(), 2, "the model commits immediately");
         assert!(monitor.switch().position() < 2.0, "the pixels catch up");
@@ -768,7 +782,7 @@ mod tests {
         // Two thirds of the way to the next workspace, then let go still moving
         // at about a page a second.
         monitor.update_switch_gesture(-0.66);
-        let changed = monitor.end_switch_gesture(-1.0, LayoutKind::MasterStack);
+        let changed = monitor.end_switch_gesture(-1.0);
 
         assert!(changed);
         assert_eq!(monitor.active_index(), 1);
@@ -780,7 +794,7 @@ mod tests {
     #[test]
     fn an_abandoned_swipe_leaves_the_active_workspace_alone() {
         let mut monitor = monitor(4);
-        monitor.activate(2, LayoutKind::MasterStack);
+        monitor.activate(2);
         settle(&mut monitor);
 
         monitor.begin_switch_gesture();
@@ -789,7 +803,7 @@ mod tests {
         for _ in 0..3 {
             monitor.switch_mut().step(1.0 / 60.0);
         }
-        assert!(!monitor.end_switch_gesture(0.0, LayoutKind::MasterStack));
+        assert!(!monitor.end_switch_gesture(0.0));
         assert_eq!(monitor.active_index(), 2);
     }
 
@@ -833,7 +847,7 @@ mod tests {
     fn disabled_animations_switch_without_a_single_extra_frame() {
         let mut monitor = monitor(4);
         monitor.set_animation_profile(None);
-        monitor.activate(2, LayoutKind::MasterStack);
+        monitor.activate(2);
 
         assert!(!monitor.is_switching(), "nothing left to animate");
         // Nothing was in flight, so reaping was not deferred — which renumbers

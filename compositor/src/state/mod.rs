@@ -13,7 +13,10 @@ pub use crate::state::{
     backend::BackendState, client::ClientState, common::CommonState, config::ConfigState,
     input::InputState, wayland::WaylandState,
 };
-use crate::{animations::spring::Clock, shell::Shell, xwayland::Xwayland};
+use crate::{
+    animations::spring::Clock, rendering::decoration::TextRenderer, shell::Shell,
+    xwayland::Xwayland,
+};
 
 pub struct State {
     pub common: CommonState,
@@ -26,6 +29,10 @@ pub struct State {
     /// Drives the springs. Owned here because it is per-compositor, not
     /// per-output — every output steps by the same wall-clock delta.
     pub clock: Clock,
+    /// Shapes and caches titlebar text. Per-compositor rather than per-output:
+    /// the same title on two monitors differs only by scale, which the cache
+    /// key already covers.
+    pub text: TextRenderer,
 }
 
 impl State {
@@ -76,6 +83,7 @@ impl State {
             config,
             xwayland,
             clock: Clock::new(),
+            text: TextRenderer::new(),
         };
         // The global was created advertising everything the renderer can do;
         // the config gets the first word on what it will actually do.

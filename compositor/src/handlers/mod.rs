@@ -1,3 +1,4 @@
+mod appmenu;
 mod background_effect;
 mod compositor;
 mod dmabuf;

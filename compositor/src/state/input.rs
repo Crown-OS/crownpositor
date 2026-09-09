@@ -8,11 +8,14 @@ use smithay::{
 use config::Config;
 
 use crate::{
+    input::decoration::{FramePress, LastClick},
     input::{
         shortcuts::{Bindings, GestureBindings, ModMask},
         trackpad::gestures::GestureState,
     },
     rendering::cursor::Cursor,
+    shell::decoration::Control,
+    utils::id::WindowId,
 };
 
 pub struct InputState {
@@ -37,6 +40,15 @@ pub struct InputState {
     /// rather than per-output: the image cache is keyed on scale, so two
     /// monitors share every entry they have in common.
     pub cursor: Cursor,
+
+    /// The window control the pointer is over, if any. Only the renderer reads
+    /// it — a hovered control lifts rather than changing what a click does.
+    pub hovered_control: Option<(WindowId, Control)>,
+    /// A press on a control waiting for its release. A click that goes down on
+    /// one control and comes up somewhere else is cancelled, as everywhere else.
+    pub frame_press: Option<FramePress>,
+    /// The last click on a titlebar, for spotting the second half of a double.
+    pub last_frame_click: Option<LastClick>,
 }
 
 impl InputState {
@@ -50,6 +62,9 @@ impl InputState {
             mod_chord_polluted: false,
             pointer_location: (0.0, 0.0).into(),
             cursor: Cursor::new(),
+            hovered_control: None,
+            frame_press: None,
+            last_frame_click: None,
         }
     }
 }

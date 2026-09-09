@@ -52,7 +52,7 @@ use crate::{
         render::{CrownAllocator, DmabufExporter},
     },
     rendering::{
-        self,
+        self, FrameStyle,
         blur::{self, BlurBuffers, BlurConfig},
         rounded::MultiDecorator,
     },
@@ -313,6 +313,20 @@ pub fn redraw_queued_outputs(state: &mut State) {
 /// One frame for one output.
 fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     let handle = state.common.event_loop_handle.clone();
+
+    // The menu geometry is what both the renderer and the hit test read, so it
+    // is settled before either of them runs — and before the borrows below,
+    // because laying it out needs the whole state.
+    let scale = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get(&node))
+        .and_then(|device| device.surfaces.get(&crtc))
+        .map(|surface| surface.output.current_scale().fractional_scale());
+    if let Some(scale) = scale {
+        state.layout_menus(scale);
+    }
+
     let State {
         backend,
         shell,
@@ -320,9 +334,9 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         config,
         clock,
         input,
+        text,
         ..
     } = state;
-    let radius = config.current.appearance.border_radius as f32;
     let blur_config = BlurConfig::from(&config.current.appearance);
     let Some(kms) = backend.kms() else {
         return;
@@ -437,7 +451,14 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         &mut input.cursor,
         input.pointer_location,
         scale,
-        radius,
+        &mut FrameStyle::new(
+            &config.current.appearance,
+            scale.y,
+            monitor.geometry().loc,
+            text,
+            shell.focused_window_id(),
+            input.hovered_control,
+        ),
     );
 
     let mut submitted = false;

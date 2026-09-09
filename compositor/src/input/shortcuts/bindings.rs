@@ -131,8 +131,8 @@ mod tests {
         assert!(has(|a| matches!(a, Action::ToggleFloating)));
         assert!(has(|a| matches!(a, Action::ToggleFullscreen)));
         assert!(has(|a| matches!(a, Action::ToggleMaximize)));
-        assert!(has(|a| matches!(a, Action::CycleLayout)));
-        assert!(has(|a| matches!(a, Action::ToggleLayoutMode)));
+        assert!(has(|a| matches!(a, Action::ToggleWorkspaceMode)));
+        assert!(has(|a| matches!(a, Action::SnapWindow(_))));
         assert!(has(|a| matches!(a, Action::ResizeSplit(_))));
         assert!(has(|a| matches!(a, Action::PromoteDemote)));
     }

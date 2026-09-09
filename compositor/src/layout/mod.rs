@@ -1,47 +1,31 @@
 //! Pure geometry.
 //!
 //! Nothing here can see a `WlSurface`, a `Window`, an `Output` or the `Shell`.
-//! An algorithm is handed a description of the tiled windows and hands back one
-//! rectangle each; it cannot reorder the list, drop a window or send a
-//! configure. What it does own is its own parameters — master ratio, column
-//! widths, scroll offset — and those survive being swapped out.
+//! [`TilingLayout`] is handed a description of the tiled windows and hands back
+//! one rectangle each; it cannot reorder the list, drop a window or send a
+//! configure. What it does own is its own parameters — master ratio, master
+//! count — and those survive the workspace switching to floating and back.
 //!
-//! The payoff is that every algorithm is testable with a `Vec<TileInfo>` and a
+//! The payoff is that the arithmetic is testable with a `Vec<TileInfo>` and a
 //! rectangle, with no display and no event loop.
 
-pub mod floating;
-pub mod master_stack;
-pub mod scrolling;
+pub mod placement;
+pub mod snap;
+pub mod tiling;
 
-use std::fmt::Debug;
-
-use smithay::utils::{Logical, Point, Rectangle, Size};
-
-use config::LayoutMode;
+use smithay::utils::{Logical, Rectangle, Size};
 
 use crate::utils::id::WindowId;
 
-pub use floating::NoTiling;
-pub use master_stack::MasterStack;
-pub use scrolling::ScrollingColumns;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum LayoutKind {
-    #[default]
-    MasterStack,
-    ScrollingColumns,
-    Floating,
-}
-
-impl From<LayoutMode> for LayoutKind {
-    fn from(mode: LayoutMode) -> Self {
-        match mode {
-            LayoutMode::MasterStack => Self::MasterStack,
-            LayoutMode::ScrollingColumns => Self::ScrollingColumns,
-            LayoutMode::Floating => Self::Floating,
-        }
-    }
-}
+/// Which regime a workspace arranges its windows under.
+///
+/// Owned outright by each workspace: the config value only seeds a workspace as
+/// it is created, so switching one workspace never touches its neighbours. It is
+/// the config's own type rather than a mirror of it, because a second two-variant
+/// enum and the conversion between them would say nothing the first does not.
+pub use config::WorkspaceMode;
+pub use snap::{SnapBounds, SnapZone};
+pub use tiling::TilingLayout;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Gaps {
@@ -73,7 +57,7 @@ pub enum ResizeEdge {
     Bottom,
 }
 
-/// One tiled window, as much of it as an algorithm may see.
+/// One tiled window, as much of it as the layout may see.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TileInfo {
     pub id: WindowId,
@@ -109,8 +93,8 @@ impl TileInfo {
 #[derive(Debug)]
 pub struct LayoutInput<'a> {
     /// Workspace-local (origin `0,0`), exclusive zones and the outer gap already
-    /// subtracted. Algorithms never see global coordinates, so one written
-    /// against eDP-1 works unchanged on HDMI-1.
+    /// subtracted. The layout never sees global coordinates, so one arrangement
+    /// computed against eDP-1 works unchanged on HDMI-1.
     pub area: Rectangle<i32, Logical>,
     pub gaps: Gaps,
     pub focused: Option<WindowId>,
@@ -118,7 +102,7 @@ pub struct LayoutInput<'a> {
     pub tiles: &'a [TileInfo],
 }
 
-impl<'a> LayoutInput<'a> {
+impl LayoutInput<'_> {
     pub fn index_of(&self, id: WindowId) -> Option<usize> {
         self.tiles.iter().position(|tile| tile.id == id)
     }
@@ -130,143 +114,30 @@ impl<'a> LayoutInput<'a> {
 pub struct LayoutOutput {
     /// Exactly one rect per input tile, in the same order. Workspace-local.
     pub rects: Vec<Rectangle<i32, Logical>>,
-    /// Applied at render and hit-test time rather than baked into `rects`, so a
-    /// scrolling layout can pan without a relayout or retargeting every spring.
-    pub view_offset: Point<f64, Logical>,
 }
 
 impl LayoutOutput {
     pub fn clear(&mut self) {
         self.rects.clear();
-        self.view_offset = Point::default();
     }
 }
 
-/// Algorithm-specific adjustments.
+/// Adjustments to the tiling parameters.
 ///
 /// Note what is absent: swap, move-to-front, insert-at. Tile order belongs to
-/// the workspace, which applies those generically for every algorithm; an
-/// algorithm that also owned the order could disagree with it.
+/// the workspace, which applies those itself; a layout that also owned the order
+/// could disagree with it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LayoutOp {
-    /// Grow or shrink the primary split by a fraction of the area.
+    /// Grow or shrink the master column by a fraction of the area.
     Grow(f64),
-    /// Move a window into or out of the master area.
+    /// Move a window into or out of the master column.
     PromoteDemote(WindowId),
-    /// Cycle a window through the algorithm's preset sizes.
-    CyclePreset(WindowId),
-    ResetSize(WindowId),
+    ResetSize,
     DragEdge {
-        id: WindowId,
         edge: ResizeEdge,
-        delta: Point<f64, Logical>,
+        delta: f64,
     },
-}
-
-pub trait LayoutAlgorithm: Debug + 'static {
-    fn kind(&self) -> LayoutKind;
-
-    /// Must push exactly `input.tiles.len()` rects, in input order.
-    fn layout(&mut self, input: &LayoutInput<'_>, out: &mut LayoutOutput);
-
-    /// `true` if anything changed, which is what sets the workspace's dirty bit.
-    fn apply(&mut self, op: LayoutOp, input: &LayoutInput<'_>) -> bool;
-
-    /// Drop per-window state. Called from the shell's single removal choke
-    /// point, so an algorithm's side tables cannot outlive a window.
-    fn forget(&mut self, id: WindowId);
-
-    /// `None` falls back to the workspace's list-order neighbour.
-    fn neighbour(
-        &self,
-        input: &LayoutInput<'_>,
-        from: WindowId,
-        dir: Direction,
-    ) -> Option<WindowId> {
-        let _ = (input, from, dir);
-        None
-    }
-
-    /// Pan the viewport. Only viewport-style layouts implement this.
-    fn scroll(&mut self, delta: Point<f64, Logical>, input: &LayoutInput<'_>) -> bool {
-        let _ = (delta, input);
-        false
-    }
-
-    /// Pan so `id` is fully visible, after a focus change or an insert.
-    fn reveal(&mut self, id: WindowId, input: &LayoutInput<'_>) -> bool {
-        let _ = (id, input);
-        false
-    }
-}
-
-/// Every algorithm a workspace has used, kept alive.
-///
-/// Toggling MasterStack -> Scrolling -> MasterStack restores the master ratio
-/// you had set, and the scrolling layout still knows every column's width.
-#[derive(Debug)]
-pub struct LayoutSet {
-    active: LayoutKind,
-    /// At most three, so a `Vec` beats a `HashMap` on both counts.
-    slots: Vec<Box<dyn LayoutAlgorithm>>,
-}
-
-impl LayoutSet {
-    pub fn new(kind: LayoutKind) -> Self {
-        Self {
-            active: kind,
-            slots: vec![instantiate(kind)],
-        }
-    }
-
-    pub fn active(&self) -> LayoutKind {
-        self.active
-    }
-
-    pub fn set_active(&mut self, kind: LayoutKind) -> bool {
-        if self.active == kind {
-            return false;
-        }
-        if !self.slots.iter().any(|slot| slot.kind() == kind) {
-            self.slots.push(instantiate(kind));
-        }
-        self.active = kind;
-        true
-    }
-
-    pub fn current(&self) -> &dyn LayoutAlgorithm {
-        let kind = self.active;
-        self.slots
-            .iter()
-            .find(|slot| slot.kind() == kind)
-            .expect("the active layout is always instantiated")
-            .as_ref()
-    }
-
-    pub fn current_mut(&mut self) -> &mut dyn LayoutAlgorithm {
-        let kind = self.active;
-        self.slots
-            .iter_mut()
-            .find(|slot| slot.kind() == kind)
-            .expect("the active layout is always instantiated")
-            .as_mut()
-    }
-
-    /// Forwarded to every slot, not just the active one — an inactive
-    /// algorithm's side table must not retain a dead id either.
-    pub fn forget(&mut self, id: WindowId) {
-        for slot in &mut self.slots {
-            slot.forget(id);
-        }
-    }
-}
-
-fn instantiate(kind: LayoutKind) -> Box<dyn LayoutAlgorithm> {
-    match kind {
-        LayoutKind::MasterStack => Box::new(MasterStack::default()),
-        LayoutKind::ScrollingColumns => Box::new(ScrollingColumns::default()),
-        LayoutKind::Floating => Box::new(NoTiling),
-    }
 }
 
 /// Splits `area` into `count` rows separated by `gap`, distributing the
@@ -276,23 +147,13 @@ pub(crate) fn split_rows(
     count: usize,
     gap: i32,
 ) -> Vec<Rectangle<i32, Logical>> {
-    split(area, count, gap, true)
-}
-
-fn split(
-    area: Rectangle<i32, Logical>,
-    count: usize,
-    gap: i32,
-    vertical: bool,
-) -> Vec<Rectangle<i32, Logical>> {
     if count == 0 {
         return Vec::new();
     }
 
-    let total = if vertical { area.size.h } else { area.size.w };
-    let usable = (total - gap * (count as i32 - 1)).max(count as i32);
+    let usable = (area.size.h - gap * (count as i32 - 1)).max(count as i32);
     let each = usable / count as i32;
-    // Handing the remainder to the leading tiles is what makes the rects cover
+    // Handing the remainder to the leading rows is what makes the rects cover
     // the area exactly instead of leaving a stripe of background.
     let remainder = usable % count as i32;
 
@@ -301,17 +162,10 @@ fn split(
 
     for index in 0..count as i32 {
         let extent = each + i32::from(index < remainder);
-        rects.push(if vertical {
-            Rectangle::new(
-                (area.loc.x, area.loc.y + offset).into(),
-                (area.size.w, extent).into(),
-            )
-        } else {
-            Rectangle::new(
-                (area.loc.x + offset, area.loc.y).into(),
-                (extent, area.size.h).into(),
-            )
-        });
+        rects.push(Rectangle::new(
+            (area.loc.x, area.loc.y + offset).into(),
+            (area.size.w, extent).into(),
+        ));
         offset += extent + gap;
     }
 
@@ -398,49 +252,5 @@ mod tests {
         assert_eq!(size.h, 300, "above max shrinks");
         // A zero component is unconstrained on that axis.
         assert_eq!(tile.constrain((500, 10).into()), (500, 10).into());
-    }
-
-    #[test]
-    fn switching_layouts_keeps_the_old_one_alive() {
-        let mut set = LayoutSet::new(LayoutKind::MasterStack);
-        let tiles = tiles(3);
-        let input = input(area(800, 600), &tiles, Gaps::default());
-
-        set.current_mut().apply(LayoutOp::Grow(0.15), &input);
-        let mut grown = LayoutOutput::default();
-        set.current_mut().layout(&input, &mut grown);
-
-        set.set_active(LayoutKind::ScrollingColumns);
-        set.set_active(LayoutKind::MasterStack);
-
-        let mut again = LayoutOutput::default();
-        set.current_mut().layout(&input, &mut again);
-        assert_eq!(
-            grown.rects, again.rects,
-            "a round trip must not reset the master ratio"
-        );
-    }
-
-    #[test]
-    fn forget_reaches_inactive_slots() {
-        let mut set = LayoutSet::new(LayoutKind::ScrollingColumns);
-        let tiles = tiles(2);
-        let input = input(area(800, 600), &tiles, Gaps::default());
-        let id = tiles[0].id;
-
-        set.current_mut().apply(LayoutOp::CyclePreset(id), &input);
-        set.set_active(LayoutKind::MasterStack);
-        set.forget(id);
-        set.set_active(LayoutKind::ScrollingColumns);
-
-        let mut out = LayoutOutput::default();
-        set.current_mut().layout(&input, &mut out);
-        let mut fresh = ScrollingColumns::default();
-        let mut expected = LayoutOutput::default();
-        fresh.layout(&input, &mut expected);
-        assert_eq!(
-            out.rects, expected.rects,
-            "per-window state must be dropped"
-        );
     }
 }

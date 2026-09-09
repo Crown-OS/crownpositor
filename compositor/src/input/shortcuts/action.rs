@@ -58,24 +58,29 @@ impl FromStr for WorkspaceRef {
     }
 }
 
-/// Which layout a `set-layout` action names. Mirrors the config vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayoutSelection {
-    MasterStack,
-    ScrollingColumns,
-    Floating,
+pub use crate::layout::{SnapZone, WorkspaceMode};
+
+/// Parses the `set-mode` argument. The spellings are the config's own, in
+/// kebab case.
+pub fn parse_mode(s: &str) -> Result<WorkspaceMode, ParseActionError> {
+    match s {
+        "tiling" | "tiled" => Ok(WorkspaceMode::Tiling),
+        "floating" => Ok(WorkspaceMode::Floating),
+        other => Err(ParseActionError::bad_argument("mode", other)),
+    }
 }
 
-impl FromStr for LayoutSelection {
-    type Err = ParseActionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "master-stack" | "master" => Ok(Self::MasterStack),
-            "scrolling-columns" | "scrolling" => Ok(Self::ScrollingColumns),
-            "floating" => Ok(Self::Floating),
-            other => Err(ParseActionError::bad_argument("layout", other)),
-        }
+/// Parses the `snap` argument.
+pub fn parse_zone(s: &str) -> Result<SnapZone, ParseActionError> {
+    match s {
+        "left" => Ok(SnapZone::LeftHalf),
+        "right" => Ok(SnapZone::RightHalf),
+        "top-left" => Ok(SnapZone::TopLeft),
+        "top-right" => Ok(SnapZone::TopRight),
+        "bottom-left" => Ok(SnapZone::BottomLeft),
+        "bottom-right" => Ok(SnapZone::BottomRight),
+        "maximize" | "top" => Ok(SnapZone::Maximize),
+        other => Err(ParseActionError::bad_argument("zone", other)),
     }
 }
 
@@ -106,21 +111,21 @@ pub enum Action {
     ToggleFullscreen,
     ToggleMaximize,
 
-    /// Flips the compositor-wide default; explicit per-workspace overrides stay.
-    ToggleLayoutMode,
-    /// Cycles this workspace's override: none -> master -> scrolling -> none.
-    CycleLayout,
-    SetLayout(LayoutSelection),
+    /// Flips the focused workspace between tiling and floating.
+    ToggleWorkspaceMode,
+    SetWorkspaceMode(WorkspaceMode),
+    /// Parks the focused window on an edge, as a drag to that edge would.
+    SnapWindow(SnapZone),
+    /// Dismisses an open application menu.
+    CloseMenu,
 
     OpenWorkspaceView,
     CloseWorkspaceView,
 
-    /// Grow or shrink the layout's primary split by a fraction of the area.
+    /// Grow or shrink the master column by a fraction of the area.
     ResizeSplit(f64),
-    /// Into or out of the master area; full width in a scrolling layout.
+    /// Into or out of the master column.
     PromoteDemote,
-    /// Cycle the focused window through the layout's preset sizes.
-    CycleSize,
     ResetSize,
 }
 
@@ -209,9 +214,10 @@ impl FromStr for Action {
             "toggle-fullscreen" => Ok(Self::ToggleFullscreen),
             "toggle-maximize" => Ok(Self::ToggleMaximize),
 
-            "toggle-layout-mode" => Ok(Self::ToggleLayoutMode),
-            "cycle-layout" => Ok(Self::CycleLayout),
-            "set-layout" => Ok(Self::SetLayout(arg("layout", parts)?.parse()?)),
+            "toggle-mode" | "toggle-workspace-mode" => Ok(Self::ToggleWorkspaceMode),
+            "set-mode" => Ok(Self::SetWorkspaceMode(parse_mode(&arg("mode", parts)?)?)),
+            "snap" => Ok(Self::SnapWindow(parse_zone(&arg("zone", parts)?)?)),
+            "close-menu" => Ok(Self::CloseMenu),
 
             "open-workspace-view" => Ok(Self::OpenWorkspaceView),
             "close-workspace-view" => Ok(Self::CloseWorkspaceView),
@@ -224,7 +230,6 @@ impl FromStr for Action {
                 Ok(Self::ResizeSplit(fraction))
             }
             "promote" | "demote" => Ok(Self::PromoteDemote),
-            "cycle-size" => Ok(Self::CycleSize),
             "reset-size" => Ok(Self::ResetSize),
 
             other => Err(ParseActionError::UnknownAction(other.to_owned())),
@@ -239,16 +244,6 @@ impl From<Direction> for crate::layout::Direction {
             Direction::Right => Self::Right,
             Direction::Up => Self::Up,
             Direction::Down => Self::Down,
-        }
-    }
-}
-
-impl From<LayoutSelection> for crate::layout::LayoutKind {
-    fn from(selection: LayoutSelection) -> Self {
-        match selection {
-            LayoutSelection::MasterStack => Self::MasterStack,
-            LayoutSelection::ScrollingColumns => Self::ScrollingColumns,
-            LayoutSelection::Floating => Self::Floating,
         }
     }
 }
