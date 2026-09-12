@@ -5,8 +5,8 @@ use crate::animations::velocity::VelocityTracker;
 // Deltas are unaccelerated, normalized by libinput to a 1000 dpi device:
 // ~39 units are one millimetre of finger travel.
 
-/// Travel before a swipe commits to an axis (~2 mm).
-const AXIS_LOCK_THRESHOLD: f64 = 0.0;
+/// Travel before a swipe commits to an axis (~0.5 mm).
+const AXIS_LOCK_THRESHOLD: f64 = 20.0;
 /// Travel needed for a swipe to fire rather than snap back (~25 mm).
 const COMMIT_DISTANCE: f64 = 200.0;
 /// Release speed that fires a swipe on its own (~10 cm/s).
@@ -14,8 +14,6 @@ const COMMIT_VELOCITY: f64 = 4000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Fingers {
-    One,
-    Two,
     Three,
     Four,
     Five,
@@ -24,8 +22,6 @@ pub enum Fingers {
 impl Fingers {
     pub fn from_count(count: u32) -> Option<Self> {
         match count {
-            1 => Some(Self::One),
-            2 => Some(Self::Two),
             3 => Some(Self::Three),
             4 => Some(Self::Four),
             5 => Some(Self::Five),
@@ -227,11 +223,11 @@ mod tests {
     #[test]
     fn a_short_fast_flick_commits_on_velocity_alone() {
         let mut state = started(4);
-        // Well under the commit distance, but covered in 20 ms.
+        // Well under the commit distance, but covered in 10 ms.
         let step = COMMIT_DISTANCE * 0.2;
+        state.update((step, 0.0), ms(5));
         state.update((step, 0.0), ms(10));
-        state.update((step, 0.0), ms(20));
-        let release = state.end(false, ms(20)).expect("a gesture was running");
+        let release = state.end(false, ms(10)).expect("a gesture was running");
         assert!(release.velocity > COMMIT_VELOCITY, "{}", release.velocity);
         assert_eq!(
             release.gesture,

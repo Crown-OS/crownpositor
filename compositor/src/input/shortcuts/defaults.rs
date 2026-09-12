@@ -67,7 +67,7 @@ pub fn bindings() -> impl Iterator<Item = (Keybind, Action)> {
         (SUPER, KeyCode::V, Action::ToggleFloating),
         (SUPER, KeyCode::F, Action::ToggleFullscreen),
         (SUPER, KeyCode::M, Action::ToggleMaximize),
-        (SUPER_CTRL, KeyCode::Space, Action::ToggleWorkspaceMode),
+        (SUPER_SHIFT, KeyCode::Space, Action::ToggleWorkspaceMode),
         (SUPER_CTRL, KeyCode::L, Action::ResizeSplit(0.05)),
         (SUPER_CTRL, KeyCode::H, Action::ResizeSplit(-0.05)),
         (SUPER, KeyCode::P, Action::PromoteDemote),

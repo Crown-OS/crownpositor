@@ -4,7 +4,7 @@ use smithay::{
         PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
-    utils::{Logical, Point, SERIAL_COUNTER, Serial},
+    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
     wayland::{seat::WaylandFocus, shell::wlr_layer::KeyboardInteractivity},
 };
 
@@ -82,29 +82,30 @@ impl State {
         self.queue_redraw_at(location);
     }
 
-    /// Keeps the pointer inside the union of the mapped outputs.
+    /// Keeps the pointer on a monitor.
+    ///
+    /// Not inside their *union*: once outputs can be arranged in two
+    /// dimensions that union stops being a rectangle, and an L-shaped layout
+    /// has a hole in its bounding box where nothing is drawn. A pointer that
+    /// has left every output is pulled to the nearest point on the nearest
+    /// one instead.
     fn clamp_to_outputs(&self, location: Point<f64, Logical>) -> Point<f64, Logical> {
-        let Some(bounds) = self
-            .shell
-            .monitors()
-            .iter()
-            .map(Monitor::geometry)
-            .reduce(|acc, geometry| acc.merge(geometry))
-        else {
-            return location;
-        };
+        let mut nearest: Option<(f64, Point<f64, Logical>)> = None;
 
-        // The far edge is exclusive; a pointer exactly on it is outside every
-        // output, so nothing would be under it.
-        let min_x = bounds.loc.x as f64;
-        let min_y = bounds.loc.y as f64;
-        let max_x = (min_x + bounds.size.w as f64 - 1.0).max(min_x);
-        let max_y = (min_y + bounds.size.h as f64 - 1.0).max(min_y);
+        for geometry in self.shell.monitors().iter().map(Monitor::geometry) {
+            let clamped = clamp_to_rectangle(location, geometry);
+            if clamped == location {
+                return location;
+            }
 
-        Point::from((
-            location.x.clamp(min_x, max_x),
-            location.y.clamp(min_y, max_y),
-        ))
+            let offset = clamped - location;
+            let distance = offset.x * offset.x + offset.y * offset.y;
+            if nearest.is_none_or(|(best, _)| distance < best) {
+                nearest = Some((distance, clamped));
+            }
+        }
+
+        nearest.map_or(location, |(_, clamped)| clamped)
     }
 
     pub(super) fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
@@ -264,4 +265,53 @@ impl State {
 
 fn pointer_serial_time<I: InputBackend>(event: &impl Event<I>) -> (Serial, u32) {
     (SERIAL_COUNTER.next_serial(), event.time_msec())
+}
+
+/// The closest point inside `rectangle`.
+///
+/// The far edge is exclusive: a pointer exactly on it is outside the output,
+/// so nothing would be under it.
+fn clamp_to_rectangle(
+    location: Point<f64, Logical>,
+    rectangle: Rectangle<i32, Logical>,
+) -> Point<f64, Logical> {
+    let min_x = rectangle.loc.x as f64;
+    let min_y = rectangle.loc.y as f64;
+    let max_x = (min_x + rectangle.size.w as f64 - 1.0).max(min_x);
+    let max_y = (min_y + rectangle.size.h as f64 - 1.0).max(min_y);
+
+    Point::from((
+        location.x.clamp(min_x, max_x),
+        location.y.clamp(min_y, max_y),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn a_point_inside_is_left_alone() {
+        let output = rect(0, 0, 1920, 1080);
+        let inside = Point::from((100.0, 100.0));
+        assert_eq!(clamp_to_rectangle(inside, output), inside);
+    }
+
+    #[test]
+    fn the_far_edge_is_exclusive() {
+        let output = rect(0, 0, 1920, 1080);
+        let clamped = clamp_to_rectangle(Point::from((5000.0, 5000.0)), output);
+        assert_eq!(clamped, Point::from((1919.0, 1079.0)));
+    }
+
+    #[test]
+    fn a_point_before_the_origin_lands_on_it() {
+        let output = rect(1920, 0, 1920, 1080);
+        let clamped = clamp_to_rectangle(Point::from((0.0, -50.0)), output);
+        assert_eq!(clamped, Point::from((1920.0, 0.0)));
+    }
 }
