@@ -1,8 +1,9 @@
 //! One GPU: its DRM device, buffer allocation and connector bookkeeping.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use smithay::{
+    wayland::drm_lease::{DrmLease, DrmLeaseState},
     backend::{
         allocator::{
             dmabuf::DmabufAllocator,
@@ -10,12 +11,12 @@ use smithay::{
         },
         drm::{DrmDevice, DrmDeviceFd, DrmNode},
     },
-    reexports::{calloop::RegistrationToken, drm::control::crtc},
+    reexports::{calloop::RegistrationToken, drm::control::{connector, crtc}},
 };
 use smithay_drm_extras::drm_scanner::DrmScanner;
 
 use crate::backend::{
-    kms::{surface::Surface, vulkan::VulkanContext},
+    kms::{head::Head, surface::Surface, vulkan::VulkanContext},
     render::{CrownAllocator, GraphicsApi},
 };
 
@@ -31,11 +32,23 @@ pub struct Device {
     /// Tracks which connectors appeared/disappeared between udev `Changed`
     /// events and assigns CRTCs to them.
     pub scanner: DrmScanner,
+    /// Every connector that has something plugged into it, lit or not.
+    ///
+    /// The shell only knows about outputs that are *on*, so this is the only
+    /// record of a monitor the user has switched off — and therefore the only
+    /// way they can switch it back on.
+    pub heads: HashMap<connector::Handle, Head>,
     /// One rendering surface per connected monitor.
     pub surfaces: HashMap<crtc::Handle, Surface>,
     /// The DRM event source (vblanks) in the event loop, removed when the
     /// device is unplugged.
     pub drm_token: RegistrationToken,
+    /// `wp_drm_lease_device_v1` for this GPU, when it could be created.
+    pub lease_state: Option<DrmLeaseState>,
+    /// Leases handed out, by their protocol id. Dropping one revokes it.
+    pub active_leases: HashMap<u32, DrmLease>,
+    /// CRTCs a client is driving. Not the compositor's to give to a monitor.
+    pub leased_crtcs: HashSet<crtc::Handle>,
 }
 
 impl Device {

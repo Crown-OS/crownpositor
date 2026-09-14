@@ -1,6 +1,7 @@
 //! The model: monitors own workspaces, workspaces own tiles, and the indices
 //! here are the only way to get from a surface to any of it.
 
+pub mod arrangement;
 pub mod decoration;
 pub mod grab;
 pub mod monitor;
@@ -298,6 +299,23 @@ impl Shell {
         self.monitors.iter_mut().find(|monitor| monitor.id() == id)
     }
 
+    /// Looks a monitor up by connector name, which is how the protocol and the
+    /// config file both name outputs.
+    pub fn monitor_by_name(&self, name: &str) -> Option<&Monitor> {
+        self.monitors
+            .iter()
+            .find(|monitor| monitor.config().name == name)
+    }
+
+    /// The mutable half. Deliberately not a `monitors_mut()` slice: the list is
+    /// kept sorted by position, and handing it out mutably would let a caller
+    /// break that without going through `arrange_outputs`.
+    pub fn monitor_by_name_mut(&mut self, name: &str) -> Option<&mut Monitor> {
+        self.monitors
+            .iter_mut()
+            .find(|monitor| monitor.config().name == name)
+    }
+
     pub fn monitor_by_id(&self, id: OutputId) -> Option<&Monitor> {
         self.monitors.iter().find(|monitor| monitor.id() == id)
     }
@@ -357,13 +375,15 @@ impl Shell {
             transform: descriptor.native_transform,
             position: (0, 0).into(),
             refresh_interval: descriptor.refresh_interval,
-            enabled: true,
             default_mode: None,
+            edid: descriptor.edid.clone(),
         };
 
+        // `enabled` is deliberately not read here: a `Monitor` in the shell is
+        // enabled by definition, and a head the config turns off must never be
+        // brought up in the first place. The backend owns that decision.
         if let Some(setting) = config.output_setting(&descriptor.name, connector.as_str()) {
             output_config.default_mode = setting.layout;
-            output_config.enabled = setting.enabled.unwrap_or(true);
         }
 
         let mut monitor = Monitor::new(
@@ -509,42 +529,6 @@ impl Shell {
         }
     }
 
-    /// Places every monitor and keeps the list sorted by x, so index order
-    /// matches spatial order — which is what `Direction::Left/Right` and
-    /// `monitor_at` rely on.
-    ///
-    /// Config-pinned outputs keep their position; the rest are packed left to
-    /// right into the space that is left.
-    pub fn arrange_outputs(&mut self) {
-        for monitor in &mut self.monitors {
-            if let Some(fixed) = monitor.fixed_position() {
-                monitor.set_position(fixed);
-            }
-        }
-
-        // Start packing past the rightmost pinned output, so an auto output
-        // cannot land on top of one the user placed deliberately.
-        let mut x = self
-            .monitors
-            .iter()
-            .filter(|monitor| monitor.fixed_position().is_some())
-            .map(|monitor| monitor.geometry().loc.x + monitor.geometry().size.w)
-            .max()
-            .unwrap_or(0)
-            .max(0);
-
-        for monitor in &mut self.monitors {
-            if monitor.fixed_position().is_some() {
-                continue;
-            }
-            monitor.set_position((x, 0).into());
-            x += monitor.config().logical_size().w;
-        }
-
-        self.monitors
-            .sort_by_key(|monitor| monitor.config().position.x);
-    }
-
     /// Re-derives one output's usable area from its layer map.
     pub fn refresh_usable(&mut self, output: &Output) -> bool {
         let zone = {
@@ -558,7 +542,6 @@ impl Shell {
 
     /// Pushes the per-output half of the config onto every monitor.
     pub fn apply_output_settings(&mut self, config: &Config) {
-        let fallback = config.display.scale.factor();
         let mut changed = false;
 
         for index in 0..self.monitors.len() {
@@ -570,7 +553,7 @@ impl Shell {
                 )
             };
             let setting = config.output_setting(&name, &connector).cloned();
-            changed |= self.monitors[index].apply_settings(setting.as_ref(), fallback);
+            changed |= self.monitors[index].apply_settings(setting.as_ref());
         }
 
         if changed {
@@ -1081,12 +1064,7 @@ impl Shell {
     }
 
     pub fn focus_output_direction(&mut self, dir: Direction) -> bool {
-        // The monitor list is kept sorted by x, so this is index arithmetic.
-        let next = match dir {
-            Direction::Left | Direction::Up => self.focused_output.checked_sub(1),
-            Direction::Right | Direction::Down => Some(self.focused_output + 1),
-        };
-        let Some(next) = next.filter(|index| *index < self.monitors.len()) else {
+        let Some(next) = self.monitor_in_direction(self.focused_output, dir) else {
             return false;
         };
         self.focused_output = next;
@@ -1611,5 +1589,18 @@ impl Shell {
             self.monitors.is_empty() || self.focused_output < self.monitors.len(),
             "focused output is out of range"
         );
+
+        // `monitor_at` returns the first monitor containing a point, so two
+        // that overlap would make "which output is this on?" order-dependent.
+        for (index, monitor) in self.monitors.iter().enumerate() {
+            for other in &self.monitors[index + 1..] {
+                assert!(
+                    monitor.geometry().intersection(other.geometry()).is_none(),
+                    "outputs {} and {} overlap",
+                    monitor.id(),
+                    other.id()
+                );
+            }
+        }
     }
 }

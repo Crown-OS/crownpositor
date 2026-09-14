@@ -10,6 +10,7 @@
 //! and Background, so a wallpaper would cover the desktop.
 
 pub mod blur;
+pub mod color;
 pub mod cursor;
 pub mod decorate;
 pub mod decoration;
@@ -504,7 +505,7 @@ fn frame_backing<R, D>(
         elements.push(CrownElement::Tile(Wrap::from(panel)));
     }
 
-    if decorator.backdrop_source().is_none() {
+    if decorator.blur_fingerprint().is_none() {
         return;
     }
 
@@ -720,7 +721,7 @@ fn menu_elements<R, D>(
         elements.push(CrownElement::Tile(Wrap::from(border)));
     }
 
-    if decorator.backdrop_source().is_some()
+    if decorator.blur_fingerprint().is_some()
         && let Some(glass) = decorator.backdrop(
             renderer,
             Backdrop {
@@ -793,7 +794,7 @@ fn snap_preview_elements<R, D>(
         elements.push(CrownElement::Tile(Wrap::from(border)));
     }
 
-    if decorator.backdrop_source().is_some()
+    if decorator.blur_fingerprint().is_some()
         && let Some(glass) = decorator.backdrop(
             renderer,
             Backdrop {
@@ -844,9 +845,9 @@ fn backdrop_elements<R, D>(
     R::TextureId: Clone + 'static,
     D: TileDecorator<R>,
 {
-    // Nothing to sample from means nothing to work out: this is the path every
+    // No backdrops to draw means nothing to work out: this is the path every
     // frame takes on a backend without a blur pipeline, or with blur off.
-    let Some(serial) = decorator.backdrop_source() else {
+    let Some(fingerprint) = decorator.blur_fingerprint() else {
         return;
     };
 
@@ -855,7 +856,7 @@ fn backdrop_elements<R, D>(
         return;
     };
 
-    let (ids, commit) = blur::backdrop_slots(surface, rects.len(), serial, generation);
+    let (ids, commit) = blur::backdrop_slots(surface, rects.len(), fingerprint, generation);
     for (id, geometry) in std::iter::zip(ids, rects) {
         if let Some(backdrop) = decorator.backdrop(
             renderer,
@@ -899,25 +900,21 @@ fn layer_elements<R, D>(
             elements.extend(layers.into_iter().map(CrownElement::Surface));
 
             // Panels and notifications are what actually wants glass, so layer
-            // surfaces get the same treatment windows do — but only above the
-            // scene the blur is computed from, or a surface would sample a
-            // texture it is itself inside. Square corners: nothing rounds a
-            // layer surface here, and the backdrop has to match what is drawn
-            // over it.
-            if blur::BLURRABLE_LAYERS.contains(layer) {
-                let clip = Rectangle::new(location, geometry.size.to_physical_precise_round(scale));
-                backdrop_elements(
-                    elements,
-                    renderer,
-                    decorator,
-                    surface.wl_surface(),
-                    location,
-                    scale,
-                    clip,
-                    0.0,
-                    1.0,
-                );
-            }
+            // surfaces get the same treatment windows do. Square corners:
+            // nothing rounds a layer surface here, and the backdrop has to
+            // match what is drawn over it.
+            let clip = Rectangle::new(location, geometry.size.to_physical_precise_round(scale));
+            backdrop_elements(
+                elements,
+                renderer,
+                decorator,
+                surface.wl_surface(),
+                location,
+                scale,
+                clip,
+                0.0,
+                1.0,
+            );
         }
     }
 }

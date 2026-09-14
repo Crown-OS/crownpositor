@@ -65,7 +65,7 @@ impl Shell {
     /// commit; only a surface that turns out to be nobody's window or layer is
     /// worth searching the popup tree for, popups being parented outside
     /// `wl_subsurface`.
-    fn output_for_surface(&self, surface: &WlSurface) -> Option<&Output> {
+    pub fn output_for_surface(&self, surface: &WlSurface) -> Option<&Output> {
         let mut root = surface.clone();
         while let Some(parent) = get_parent(&root) {
             root = parent;

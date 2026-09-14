@@ -40,12 +40,12 @@ use smithay::backend::{
 
 use crate::{
     rendering::{
-        blur::BackdropSource,
         decorate::TileDecorator,
         rounded::{GlesDecorator, MultiDecorator},
     },
     shaders::{
-        blur::BlurShaders, border::BorderShader, rounded_corner::RoundedCornerShader,
+        blur::BlurShaders, border::BorderShader, color::ColorWindowShader,
+        rounded_corner::RoundedCornerShader,
         title_bar::TitleBarShader,
     },
 };
@@ -127,51 +127,43 @@ where
     Self::TextureId: Send + Clone + 'static,
 {
     /// The effect stack this renderer supports. [`PassThrough`] for a
-    /// renderer with no custom shaders.
+    /// renderer with no custom shaders. The lifetime is the frame's: a
+    /// decorator borrows the per-output state its effects are cached in.
     ///
     /// [`PassThrough`]: crate::rendering::decorate::PassThrough
-    type Decorator: TileDecorator<Self>;
+    type Decorator<'frame>: TileDecorator<Self>;
 
     /// Compiles this renderer's shader programs. Failure is *reported*, not
     /// fatal: effects degrade (square corners, no blur), windows still draw.
     fn compile_shaders(&mut self) -> Result<(), RenderInitError>;
-
-    /// A fresh decorator for one output's render pass. `backdrop` is the
-    /// output's blurred scene for this frame, if the backend produced one.
-    fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator;
 }
 
 impl CrownRenderer for GlesRenderer {
-    type Decorator = GlesDecorator;
+    type Decorator<'frame> = GlesDecorator<'frame>;
 
     fn compile_shaders(&mut self) -> Result<(), RenderInitError> {
         RoundedCornerShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        ColorWindowShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BlurShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BorderShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         TitleBarShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
-
-    fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator {
-        GlesDecorator::new(backdrop)
-    }
 }
 
 impl<'render> CrownRenderer for KmsRenderer<'render> {
-    type Decorator = MultiDecorator;
+    type Decorator<'frame> = MultiDecorator<'frame>;
 
     fn compile_shaders(&mut self) -> Result<(), RenderInitError> {
         // The programs land in the GLES renderer's EGL user data, so they
         // persist per GPU, not per `MultiRenderer` instance.
         RoundedCornerShader::init(self.as_mut())
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        ColorWindowShader::init(self.as_mut())
+            .map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BlurShaders::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BorderShader::init(self.as_mut())
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
         TitleBarShader::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))
-    }
-
-    fn decorator(&mut self, backdrop: Option<BackdropSource>) -> Self::Decorator {
-        MultiDecorator::new(backdrop)
     }
 }
 
@@ -292,7 +284,7 @@ mod tests {
             D: TileDecorator<R>,
         {
         }
-        takes_decorator::<R, R::Decorator>();
+        takes_decorator::<R, R::Decorator<'static>>();
         // And the no-effect fallback always fits.
         takes_decorator::<R, PassThrough>();
     }

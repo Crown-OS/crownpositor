@@ -1,0 +1,449 @@
+//! One rectangle of blurred glass, blurred out of the live framebuffer.
+
+use std::{mem, rc::Rc};
+
+use smithay::{
+    backend::renderer::{
+        Texture as _,
+        element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
+        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform, ffi},
+        multigpu::{Error as MultiError, MultiFrame},
+        utils::{CommitCounter, DamageSet, OpaqueRegions},
+    },
+    utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Size, Transform},
+};
+
+use crate::{
+    backend::render::{GbmGlesApi, KmsRenderer},
+    rendering::{
+        blur::{
+            BlurConfig,
+            cache::{BlurSession, Pyramid},
+        },
+        decorate::Backdrop,
+    },
+    shaders::blur::{BlurShaders, KawaseProgram},
+};
+
+/// One rectangle of the blurred glass behind a surface.
+///
+/// Holds no pixels of its own. The blur happens in `draw`, out of whatever the
+/// framebuffer holds under this rectangle at that moment — everything below it
+/// in the element list, and nothing above.
+#[derive(Debug)]
+pub struct BlurBackdrop {
+    id: Id,
+    commit: CommitCounter,
+    geometry: Rectangle<i32, Physical>,
+    mask: Rectangle<i32, Physical>,
+    radius: f32,
+    alpha: f32,
+    config: BlurConfig,
+    pyramid: Rc<Pyramid>,
+    shaders: BlurShaders,
+}
+
+impl BlurBackdrop {
+    /// `None` when nothing of this backdrop is on screen, or when the pipeline
+    /// is unavailable on this GPU.
+    ///
+    /// The *mask* is left whole, so the corners still round against the window
+    /// rather than against the piece of it that survived the output's edge.
+    pub fn new(
+        renderer: &mut GlesRenderer,
+        session: &mut BlurSession<'_>,
+        params: Backdrop,
+    ) -> Option<Self> {
+        let shaders = BlurShaders::get(renderer)?;
+        let geometry = params.geometry.intersection(session.output)?;
+        let size = session.transform.transform_size(geometry.size);
+        let pyramid = session
+            .cache
+            .pyramid(
+                renderer,
+                &params.id,
+                Size::<i32, BufferCoords>::from((size.w, size.h)),
+                session.config.passes(),
+            )
+            .inspect_err(|err| tracing::warn!(%err, "failed to allocate a blur pyramid"))
+            .ok()?;
+
+        Some(Self {
+            id: params.id,
+            commit: params.commit,
+            geometry,
+            mask: params.mask,
+            radius: params.radius,
+            alpha: params.alpha,
+            config: session.config,
+            pyramid,
+            shaders,
+        })
+    }
+
+    fn draw_gles(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        let Some(top) = self.pyramid.levels.first() else {
+            return Ok(());
+        };
+        let projection = *frame.projection();
+        let Some(uniforms) =
+            frame.with_context(|gl| unsafe { self.blur(gl, projection, dst, damage) })?
+        else {
+            return Ok(());
+        };
+
+        self.owe_halo(dst, damage);
+
+        frame.render_texture_from_to(
+            top,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            Transform::Normal,
+            self.alpha,
+            Some(&self.shaders.finish),
+            &uniforms,
+        )
+    }
+
+    /// Records the band this draw leaves stale: a changed pixel spreads
+    /// `radius` beyond the rectangle it arrived in, and the tracker has already
+    /// closed this frame's damage, so the ring is offered at the start of the
+    /// next one. Rectangles the tracker is repainting anyway are not owed
+    /// twice.
+    fn owe_halo(&self, dst: Rectangle<i32, Physical>, damage: &[Rectangle<i32, Physical>]) {
+        let mut halo = self.pyramid.halo.borrow_mut();
+        let fresh =
+            Rectangle::subtract_rects_many(damage.iter().copied(), mem::take(&mut halo.reported));
+
+        let bounds = Rectangle::from_size(dst.size);
+        let radius = self.config.radius();
+        halo.pending = Rectangle::subtract_rects_many(
+            fresh
+                .iter()
+                .filter_map(|rect| grow(*rect, radius).intersection(bounds)),
+            damage.iter().copied(),
+        );
+    }
+
+    /// Lifts the damaged part of the frame into the scene copy and runs the
+    /// pyramid over the dirty footprint, leaving the last upsample to the draw
+    /// that follows. `None` skips the backdrop entirely.
+    ///
+    /// # Safety
+    ///
+    /// `gl` must belong to the frame's context. Every state this changes is
+    /// restored before it returns.
+    unsafe fn blur(
+        &self,
+        gl: &ffi::Gles2,
+        projection: [f32; 9],
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> Option<[Uniform<'static>; 8]> {
+        let (mut viewport, mut previous) = ([0; 4], 0);
+        unsafe {
+            gl.GetIntegerv(ffi::VIEWPORT, viewport.as_mut_ptr());
+            gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING, &mut previous);
+        }
+
+        let space = FramebufferSpace {
+            projection,
+            viewport: Size::from((viewport[2], viewport[3])),
+        };
+        let backdrop = space.rect(dst);
+        let scene = self.pyramid.scene.size();
+        let bounds = Rectangle::from_size(Size::from((scene.w, scene.h)));
+        let top = self.pyramid.levels.first()?;
+        if backdrop.size != bounds.size {
+            return None;
+        }
+
+        // Damage arrives element-local; the scene is the same rectangle in the
+        // framebuffer's orientation, so one mapping serves both the blit source
+        // and its destination.
+        let dirty = |rect: &Rectangle<i32, Physical>| {
+            let mut rect = space.rect(Rectangle::new(rect.loc + dst.loc, rect.size));
+            rect.loc -= backdrop.loc;
+            rect.intersection(bounds)
+        };
+        let footprint = damage.iter().filter_map(dirty).reduce(Rectangle::merge)?;
+        let footprint = grow(footprint, self.config.radius()).intersection(bounds)?;
+        let offset = self.config.offset.max(0.0);
+
+        unsafe {
+            gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, previous as ffi::types::GLuint);
+            gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, self.shaders.framebuffer);
+            gl.FramebufferTexture2D(
+                ffi::DRAW_FRAMEBUFFER,
+                ffi::COLOR_ATTACHMENT0,
+                ffi::TEXTURE_2D,
+                self.pyramid.scene.tex_id(),
+                0,
+            );
+            gl.Disable(ffi::SCISSOR_TEST);
+            for rect in damage.iter().filter_map(dirty) {
+                let (x, y, w, h) = (rect.loc.x, rect.loc.y, rect.size.w, rect.size.h);
+                gl.BlitFramebuffer(
+                    backdrop.loc.x + x,
+                    backdrop.loc.y + y,
+                    backdrop.loc.x + x + w,
+                    backdrop.loc.y + y + h,
+                    x,
+                    y,
+                    x + w,
+                    y + h,
+                    ffi::COLOR_BUFFER_BIT,
+                    ffi::NEAREST,
+                );
+            }
+
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, self.shaders.framebuffer);
+            gl.Enable(ffi::SCISSOR_TEST);
+            gl.Disable(ffi::BLEND);
+
+            let (down, up) = (&self.shaders.down, &self.shaders.up);
+            let mut source = &self.pyramid.scene;
+            for (index, level) in self.pyramid.levels.iter().enumerate() {
+                pass(gl, down, source, level, footprint, index, offset);
+                source = level;
+            }
+            for index in (0..self.pyramid.levels.len().saturating_sub(1)).rev() {
+                let source = &self.pyramid.levels[index + 1];
+                let level = &self.pyramid.levels[index];
+                pass(gl, up, source, level, footprint, index, offset);
+            }
+
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, previous as ffi::types::GLuint);
+            gl.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+            gl.Scissor(viewport[0], viewport[1], viewport[2], viewport[3]);
+            gl.Enable(ffi::BLEND);
+            gl.BindTexture(ffi::TEXTURE_2D, 0);
+        }
+
+        // This draw is the pyramid's last upsample, so it reads the tap
+        // spacing of the level it samples exactly as the passes above do.
+        Some(BlurShaders::finish_uniforms(
+            backdrop,
+            space.rect(self.mask),
+            half_pixel(top.size(), scene),
+            offset,
+            self.radius,
+            self.config.noise,
+        ))
+    }
+}
+
+/// Maps output-local physical coordinates to framebuffer pixels.
+///
+/// The frame's projection already carries the output transform, so this is the
+/// single place a rotated or flipped output is dealt with: every rotation and
+/// flip keeps rectangles axis-aligned, which is all the blit and the scissor
+/// ask for.
+struct FramebufferSpace {
+    projection: [f32; 9],
+    viewport: Size<i32, Physical>,
+}
+
+impl FramebufferSpace {
+    fn point(&self, point: Point<i32, Physical>) -> Point<i32, Physical> {
+        let matrix = &self.projection;
+        let (x, y) = (point.x as f32, point.y as f32);
+        let ndc = (
+            matrix[0] * x + matrix[3] * y + matrix[6],
+            matrix[1] * x + matrix[4] * y + matrix[7],
+        );
+        Point::from((
+            ((ndc.0 + 1.0) * 0.5 * self.viewport.w as f32).round() as i32,
+            ((ndc.1 + 1.0) * 0.5 * self.viewport.h as f32).round() as i32,
+        ))
+    }
+
+    fn rect(&self, rect: Rectangle<i32, Physical>) -> Rectangle<i32, Physical> {
+        let start = self.point(rect.loc);
+        let end = self.point(rect.loc + rect.size.to_point());
+        Rectangle::from_extremities(
+            (start.x.min(end.x), start.y.min(end.y)),
+            (start.x.max(end.x), start.y.max(end.y)),
+        )
+    }
+}
+
+/// One pyramid pass: attach `destination`, clip to the footprint at its level,
+/// draw. `index` is the level `destination` sits at.
+///
+/// # Safety
+///
+/// The scratch framebuffer must be bound and the scissor test enabled.
+unsafe fn pass(
+    gl: &ffi::Gles2,
+    program: &KawaseProgram,
+    source: &GlesTexture,
+    destination: &GlesTexture,
+    footprint: Rectangle<i32, Physical>,
+    index: usize,
+    offset: f32,
+) {
+    let size = destination.size();
+    let area = level_area(footprint, index as u32 + 1, size);
+    unsafe {
+        gl.FramebufferTexture2D(
+            ffi::FRAMEBUFFER,
+            ffi::COLOR_ATTACHMENT0,
+            ffi::TEXTURE_2D,
+            destination.tex_id(),
+            0,
+        );
+        gl.Viewport(0, 0, size.w, size.h);
+        gl.Scissor(area.loc.x, area.loc.y, area.size.w, area.size.h);
+        program.run(
+            gl,
+            source,
+            (size.w as f32, size.h as f32),
+            half_pixel(source.size(), size),
+            offset,
+        );
+    }
+}
+
+/// `footprint`, expressed in the pixels of a level `shift` halvings down.
+fn level_area(
+    footprint: Rectangle<i32, Physical>,
+    shift: u32,
+    size: Size<i32, BufferCoords>,
+) -> Rectangle<i32, Physical> {
+    let round_up = |value: i32| (value + (1 << shift) - 1) >> shift;
+    Rectangle::from_extremities(
+        (
+            (footprint.loc.x >> shift).min(size.w),
+            (footprint.loc.y >> shift).min(size.h),
+        ),
+        (
+            round_up(footprint.loc.x + footprint.size.w).min(size.w),
+            round_up(footprint.loc.y + footprint.size.h).min(size.h),
+        ),
+    )
+}
+
+fn grow(rect: Rectangle<i32, Physical>, margin: i32) -> Rectangle<i32, Physical> {
+    let margin = Point::from((margin, margin));
+    Rectangle::from_extremities(rect.loc - margin, rect.loc + rect.size.to_point() + margin)
+}
+
+/// The dual-filter tap spacing: half a texel of the smaller of the two
+/// textures a pass involves, in UV space — the destination going down, the
+/// source coming back up.
+fn half_pixel(source: Size<i32, BufferCoords>, destination: Size<i32, BufferCoords>) -> (f32, f32) {
+    let spacing = |source: i32, destination: i32| 0.5 / source.min(destination).max(1) as f32;
+    (
+        spacing(source.w, destination.w),
+        spacing(source.h, destination.h),
+    )
+}
+
+impl Element for BlurBackdrop {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.commit
+    }
+
+    fn src(&self) -> Rectangle<f64, BufferCoords> {
+        self.pyramid
+            .levels
+            .first()
+            .map(|level| Rectangle::from_size(level.size().to_f64()))
+            .unwrap_or_default()
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.geometry
+    }
+
+    fn transform(&self) -> Transform {
+        Transform::Normal
+    }
+
+    /// Almost nothing of its own: a backdrop's pixels follow whatever is drawn
+    /// under it, which already damages this area, and the commit only moves
+    /// when the blur settings or the client's region do. What it does claim is
+    /// the band the last draw left stale around that damage.
+    fn damage_since(
+        &self,
+        _scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
+        let mut halo = self.pyramid.halo.borrow_mut();
+        if commit != Some(self.commit) {
+            halo.reported.clear();
+            return DamageSet::from_slice(&[Rectangle::from_size(self.geometry.size)]);
+        }
+
+        DamageSet::from_slice(&halo.reported)
+    }
+
+    /// Empty even though the blur itself is opaque: the corners are cut away,
+    /// and the backdrop fades with its window during animations.
+    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        OpaqueRegions::default()
+    }
+
+    fn alpha(&self) -> f32 {
+        self.alpha
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+}
+
+impl RenderElement<GlesRenderer> for BlurBackdrop {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        self.draw_gles(frame, src, dst, damage, opaque_regions)
+    }
+
+    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        // Never a plane candidate: the pixels only exist through the shader.
+        None
+    }
+}
+
+impl<'render> RenderElement<KmsRenderer<'render>> for BlurBackdrop {
+    fn draw(
+        &self,
+        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
+        // The pyramid lives on the render device's GLES context — the same one
+        // `frame.as_mut()` exposes — so this never crosses GPUs.
+        self.draw_gles(frame.as_mut(), src, dst, damage, opaque_regions)
+            .map_err(MultiError::Render)
+    }
+
+    fn underlying_storage(
+        &self,
+        _renderer: &mut KmsRenderer<'render>,
+    ) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}

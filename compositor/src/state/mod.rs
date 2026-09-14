@@ -4,6 +4,7 @@ mod client;
 mod common;
 mod config;
 mod input;
+pub mod outputs;
 mod wayland;
 
 use calloop::EventLoop;

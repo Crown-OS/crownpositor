@@ -13,6 +13,12 @@
 //! would feed the effect its own output; what the cache keeps instead is the
 //! scene from the frames that did own those pixels.
 //!
+//! A pass spreads a changed pixel further than the rectangle it arrived in, so
+//! a draw leaves a stale band around its own damage. The cache offers that band
+//! back as the next frame's damage, and the backend is asked for that frame
+//! through [`BlurCache::wants_redraw`]. An offer nobody claims — a backdrop the
+//! tracker has since hidden behind an opaque window — expires with the frame.
+//!
 //! It degrades: no shaders, no blit capability, an allocation failure — the
 //! backdrop element simply isn't emitted and windows draw as before.
 //!
@@ -102,11 +108,15 @@ impl BlurConfig {
     /// applied at composite time, so a change to any of it repaints.
     pub fn fingerprint(&self) -> u64 {
         const PRIME: u64 = 0x0000_0100_0000_01b3;
-        [self.passes() as u32, self.offset.to_bits(), self.noise.to_bits()]
-            .into_iter()
-            .fold(0xcbf2_9ce4_8422_2325, |hash, field| {
-                (hash ^ u64::from(field)).wrapping_mul(PRIME)
-            })
+        [
+            self.passes() as u32,
+            self.offset.to_bits(),
+            self.noise.to_bits(),
+        ]
+        .into_iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, field| {
+            (hash ^ u64::from(field)).wrapping_mul(PRIME)
+        })
     }
 }
 

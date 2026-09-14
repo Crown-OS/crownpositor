@@ -9,7 +9,7 @@ use smithay::{
     },
     desktop::layer_map_for_output,
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    utils::{Scale, Transform},
+    utils::{Physical, Rectangle, Scale, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
 };
 
@@ -17,7 +17,7 @@ use crate::{
     backend::render::CrownRenderer as _,
     rendering::{
         self, FrameStyle,
-        blur::{self, BlurBuffers, BlurConfig},
+        blur::{BlurCache, BlurConfig, BlurSession},
         rounded::GlesDecorator,
     },
     shell::monitor::OutputDescriptor,
@@ -33,8 +33,8 @@ pub struct WinitState {
     pub damage_tracker: OutputDamageTracker,
     pub dmabuf_global: DmabufGlobal,
     pub dmabuf_feedback: Option<DmabufFeedback>,
-    /// The cached blurred-background pipeline for this output.
-    pub blur: BlurBuffers,
+    /// Every backdrop's blur pyramid on this output, kept across frames.
+    pub blur: BlurCache,
 }
 
 pub fn init(state: &mut State) -> anyhow::Result<()> {
@@ -68,8 +68,11 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                 1_000_000_000_000 / REFRESH_RATE as u64,
             )),
             serial: None,
+            edid: None,
         },
     );
+
+    state.refresh_output_heads();
 
     if let Err(err) = backend.renderer().compile_shaders() {
         // Cosmetic, so a compile failure degrades to square corners / no blur.
@@ -85,7 +88,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         damage_tracker,
         dmabuf_global,
         dmabuf_feedback,
-        blur: BlurBuffers::default(),
+        blur: BlurCache::default(),
     }));
 
     state
@@ -205,34 +208,8 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         shell.settle_animations();
     }
 
-    // The blur pre-pass renders offscreen, so it has to run before the main
-    // framebuffer is bound. Skipped — a cheap scan — while no visible window
-    // has a blur region committed.
     let blur_config = BlurConfig::from(&config.current.appearance);
-    let backdrop = {
-        let Some(monitor) = shell.monitor(&winit.output) else {
-            return Ok(());
-        };
-        let wants_blur = blur_config.enabled && blur::output_wants_blur(shell, monitor);
-        if wants_blur {
-            let size: smithay::utils::Size<i32, smithay::utils::Physical> =
-                monitor.geometry().size.to_physical_precise_round(scale);
-            let renderer = winit.backend.renderer();
-            let sources = blur::source_elements(monitor, renderer, scale);
-            match winit
-                .blur
-                .update(renderer, size, scale, &sources, CLEAR_COLOR, &blur_config)
-            {
-                Ok(()) => winit.blur.source(blur_config.noise),
-                Err(err) => {
-                    tracing::warn!(%err, "blur pre-pass failed; drawing without blur");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    };
+    let transform = winit.output.current_transform();
 
     let submitted = {
         let (renderer, mut framebuffer) = winit
@@ -243,11 +220,25 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         let Some(monitor) = shell.monitor(&winit.output) else {
             return Ok(());
         };
+
+        // Backdrops blur the framebuffer as they are drawn, so all the frame
+        // owes them is the pyramids they cached last time and the bounds to
+        // clip to.
+        let bounds: Rectangle<i32, Physical> =
+            Rectangle::from_size(monitor.geometry().size.to_physical_precise_round(scale));
+        winit.blur.begin_frame();
+        let blur = blur_config.enabled.then_some(BlurSession {
+            cache: &mut winit.blur,
+            config: blur_config,
+            transform,
+            output: bounds,
+        });
+
         let elements = rendering::output_elements(
             shell,
             monitor,
             renderer,
-            &mut GlesDecorator::new(backdrop),
+            &mut GlesDecorator::new(blur),
             &mut input.cursor,
             input.pointer_location,
             scale,
@@ -299,8 +290,9 @@ fn render(state: &mut State) -> anyhow::Result<()> {
 
     // Winit only redraws on demand. Scheduling only while something is moving is
     // what takes an idle desktop from a permanent 60 Hz loop to ~0% CPU; a client
-    // that damages its surface wakes us through its own commit.
-    if animating {
+    // that damages its surface wakes us through its own commit — except for a
+    // backdrop's owed halo, which nothing else would schedule a frame for.
+    if animating || winit.blur.wants_redraw() {
         winit.backend.window().request_redraw();
     }
 

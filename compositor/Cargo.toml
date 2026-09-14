@@ -46,3 +46,16 @@ xcursor = "0.3.11"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash", "fontconfig", "sys-locale"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }
+
+# A `wlr-randr` stand-in for developing the output-management protocol, built
+# only for `examples/`. See `examples/wlr_outputs.rs`.
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
+wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "client"] }
+
+[[example]]
+name = "wlr_outputs"
+
+[[example]]
+name = "color_info"

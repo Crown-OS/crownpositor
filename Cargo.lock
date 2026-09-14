@@ -330,7 +330,10 @@ dependencies = [
  "tracing",
  "tracing-journald",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-plasma",
+ "wayland-protocols-wlr",
  "wayland-server",
  "xcursor",
  "zbus",
@@ -1776,7 +1779,9 @@ version = "0.1.0"
 dependencies = [
  "smithay",
  "tracing",
+ "wayland-protocols",
  "wayland-protocols-plasma",
+ "wayland-protocols-wlr",
  "wayland-server",
 ]
 

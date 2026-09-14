@@ -24,7 +24,7 @@ use smithay::{
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
-        blur::{BackdropSource, BlurBackdrop},
+        blur::{BlurBackdrop, BlurSession},
         decorate::{Backdrop, Cropped, TileDecorator},
         decoration::{Border, TitleBar, TitleBarParams, WindowDecoration},
     },
@@ -390,23 +390,23 @@ where
 }
 
 /// Rounds corners with the GLES texture-program override, and materialises
-/// blur backdrops when the backend handed it a blurred texture this frame.
+/// blur backdrops when the backend opened a blur session for this frame.
 ///
 /// The programs are resolved at construction/decoration time, because
 /// `GlesFrame` does not expose its renderer — so nothing can be looked up
 /// from inside `draw`.
-#[derive(Debug, Default, Clone)]
-pub struct GlesDecorator {
-    backdrop: Option<BackdropSource>,
+#[derive(Debug)]
+pub struct GlesDecorator<'a> {
+    blur: Option<BlurSession<'a>>,
 }
 
-impl GlesDecorator {
-    pub fn new(backdrop: Option<BackdropSource>) -> Self {
-        Self { backdrop }
+impl<'a> GlesDecorator<'a> {
+    pub fn new(blur: Option<BlurSession<'a>>) -> Self {
+        Self { blur }
     }
 }
 
-impl TileDecorator<GlesRenderer> for GlesDecorator {
+impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
     type Element = Decorated<Cropped<GlesRenderer>>;
 
     fn decorate(
@@ -424,8 +424,8 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
         )))
     }
 
-    fn backdrop_source(&self) -> Option<u64> {
-        self.backdrop.as_ref().map(BackdropSource::serial)
+    fn blur_fingerprint(&self) -> Option<u64> {
+        self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }
 
     fn backdrop(
@@ -433,8 +433,8 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
         renderer: &mut GlesRenderer,
         backdrop: Backdrop,
     ) -> Option<Self::Element> {
-        let source = self.backdrop.as_ref()?;
-        BlurBackdrop::new(renderer, source, backdrop).map(Decorated::Backdrop)
+        let session = self.blur.as_mut()?;
+        BlurBackdrop::new(renderer, session, backdrop).map(Decorated::Backdrop)
     }
 
     fn title_bar(
@@ -451,18 +451,18 @@ impl TileDecorator<GlesRenderer> for GlesDecorator {
 }
 
 /// [`GlesDecorator`], but for the multi-GPU renderer the KMS backend uses.
-#[derive(Debug, Default, Clone)]
-pub struct MultiDecorator {
-    backdrop: Option<BackdropSource>,
+#[derive(Debug)]
+pub struct MultiDecorator<'a> {
+    blur: Option<BlurSession<'a>>,
 }
 
-impl MultiDecorator {
-    pub fn new(backdrop: Option<BackdropSource>) -> Self {
-        Self { backdrop }
+impl<'a> MultiDecorator<'a> {
+    pub fn new(blur: Option<BlurSession<'a>>) -> Self {
+        Self { blur }
     }
 }
 
-impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
+impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
     type Element = Decorated<Cropped<KmsRenderer<'render>>>;
 
     fn decorate(
@@ -478,8 +478,8 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
         )))
     }
 
-    fn backdrop_source(&self) -> Option<u64> {
-        self.backdrop.as_ref().map(BackdropSource::serial)
+    fn blur_fingerprint(&self) -> Option<u64> {
+        self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }
 
     fn backdrop(
@@ -487,8 +487,8 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator {
         renderer: &mut KmsRenderer<'render>,
         backdrop: Backdrop,
     ) -> Option<Self::Element> {
-        let source = self.backdrop.as_ref()?;
-        BlurBackdrop::new(renderer.as_mut(), source, backdrop).map(Decorated::Backdrop)
+        let session = self.blur.as_mut()?;
+        BlurBackdrop::new(renderer.as_mut(), session, backdrop).map(Decorated::Backdrop)
     }
 
     fn title_bar(

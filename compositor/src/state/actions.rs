@@ -159,6 +159,7 @@ impl State {
 
         self.config.current = new;
         self.shell.apply_output_settings(&self.config.current);
+        self.refresh_output_heads();
         self.sync_background_effect_capabilities();
         // The next refresh turns the dirty bits above into one relayout.
     }
@@ -197,10 +198,12 @@ impl State {
             Update::Outputs(outputs) => {
                 config.compositor.outputs = outputs;
                 self.shell.apply_output_settings(&self.config.current);
+                self.refresh_output_heads();
             }
-            Update::Scale(scale) => {
-                config.display.scale = scale;
+            Update::OutputLayouts(layouts) => {
+                config.compositor.output_layouts = layouts;
                 self.shell.apply_output_settings(&self.config.current);
+                self.refresh_output_heads();
             }
 
             Update::CustomKeybinds(custom) => {

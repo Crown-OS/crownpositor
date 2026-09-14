@@ -11,14 +11,22 @@
 //! scanout buffers (GBM vs Vulkan); see [`crate::backend::render`] for the
 //! shape of that seam.
 
+pub mod crtc_pool;
 pub mod device;
+pub mod head;
+pub mod props;
+pub mod reconfigure;
 pub mod surface;
 pub mod vulkan;
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use anyhow::Context as _;
 use smithay::{
+    wayland::drm_lease::DrmLeaseState,
     backend::{
         allocator::gbm::GbmDevice,
         drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType},
@@ -36,6 +44,7 @@ use smithay::{
 };
 
 pub use crate::backend::kms::surface::redraw_queued_outputs;
+use smithay::reexports::drm::control::{connector, crtc};
 pub use crate::backend::kms::{device::Device, vulkan::VulkanContext};
 use crate::{
     backend::render::{CrownRenderer, GraphicsApi, KmsGpuManager, KmsRenderer},
@@ -230,6 +239,11 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                     kms.libinput.suspend();
                     for device in kms.devices.values_mut() {
                         device.drm.pause();
+                        // A leased client must not keep driving hardware that
+                        // now belongs to another VT.
+                        if let Some(lease_state) = device.lease_state.as_mut() {
+                            lease_state.suspend();
+                        }
                     }
                 }
                 SessionEvent::ActivateSession => {
@@ -245,6 +259,13 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                             // The other VT scribbled over the planes; buffer
                             // ages are meaningless now, so force full redraws.
                             surface.compositor.reset_buffers();
+                            // A panel blanked before the switch stays blanked,
+                            // but its CRTC was reset, so the state has to be
+                            // re-asserted rather than assumed.
+                            surface.powered = true;
+                        }
+                        if let Some(lease_state) = device.lease_state.as_mut() {
+                            lease_state.resume::<State>();
                         }
                     }
                     // Everything on screen is stale after a VT switch.
@@ -290,6 +311,7 @@ fn render_node_for(node: DrmNode) -> DrmNode {
 
 fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), KmsError> {
     let handle = state.common.event_loop_handle.clone();
+    let display_handle = state.common.display_handle.clone();
     let Some(kms) = state.backend.kms() else {
         return Ok(());
     };
@@ -359,8 +381,20 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
             drm,
             gbm,
             scanner: smithay_drm_extras::drm_scanner::DrmScanner::new(),
+            heads: HashMap::new(),
             surfaces: HashMap::new(),
             drm_token,
+            // A GPU with no lease global is still perfectly usable; only VR
+            // headsets and the like go without.
+            lease_state: match DrmLeaseState::new::<State>(&display_handle, &node) {
+                Ok(state) => Some(state),
+                Err(err) => {
+                    tracing::debug!(%err, %node, "no DRM lease global for this GPU");
+                    None
+                }
+            },
+            active_leases: HashMap::new(),
+            leased_crtcs: HashSet::new(),
         },
     );
 
@@ -369,11 +403,19 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
     Ok(())
 }
 
+/// Reconciles the device's head registry with what is physically plugged in,
+/// then lights up whatever the config says should be on.
+///
+/// The scanner is still used to *detect* plug and unplug, but its CRTC
+/// assignment is deliberately ignored: it reserves one for every connected
+/// connector, including ones the user has switched off, so it cannot answer
+/// "is there a CRTC free for this monitor?" — which is the question `test`
+/// exists to answer. `crtc::assign` does that instead.
 fn device_changed(state: &mut State, node: DrmNode) {
     use smithay_drm_extras::drm_scanner::DrmScanEvent;
 
-    // Scan first, act second: `connector_*` need the whole `State`, so the
-    // device borrow must not outlive the scan.
+    // Scan first, act second: the `head_*` functions need the whole `State`,
+    // so the device borrow must not outlive the scan.
     let events: Vec<DrmScanEvent> = {
         let Some(device) = state
             .backend
@@ -391,31 +433,201 @@ fn device_changed(state: &mut State, node: DrmNode) {
         }
     };
 
+    let mut appeared = Vec::new();
     for event in events {
         match event {
-            DrmScanEvent::Connected {
-                connector,
-                crtc: Some(crtc),
-            } => {
-                if let Err(err) = surface::connector_connected(state, node, connector, crtc) {
-                    tracing::error!(%err, "failed to bring up connector");
+            DrmScanEvent::Connected { connector, .. } => {
+                let handle = connector.handle();
+                let probed = state
+                    .backend
+                    .kms()
+                    .and_then(|kms| kms.devices.get(&node))
+                    .map(|device| &device.drm)
+                    .and_then(|drm| head::Head::probe(drm, handle));
+
+                let Some(probed) = probed else {
+                    tracing::warn!(
+                        connector = connector.interface_id(),
+                        "connector has no usable modes, ignoring"
+                    );
+                    continue;
+                };
+
+                // A VR headset and friends: the kernel says this is not part
+                // of the desktop, so it must never be lit as an output. It is
+                // offered for leasing instead, which is how its runtime gets
+                // to drive it directly.
+                let non_desktop = state
+                    .backend
+                    .kms()
+                    .and_then(|kms| kms.devices.get(&node))
+                    .is_some_and(|device| props::non_desktop(&device.drm, handle));
+
+                if non_desktop {
+                    offer_for_lease(state, node, handle, &probed);
+                    continue;
                 }
+
+                if let Some(device) = state
+                    .backend
+                    .kms()
+                    .and_then(|kms| kms.devices.get_mut(&node))
+                {
+                    device.heads.insert(handle, probed);
+                }
+                appeared.push(handle);
             }
-            DrmScanEvent::Connected {
-                connector,
-                crtc: None,
-            } => {
-                tracing::warn!(
-                    connector = connector.interface_id(),
-                    "connector has no free CRTC, monitor stays dark"
-                );
+            DrmScanEvent::Disconnected { connector, .. } => {
+                let handle = connector.handle();
+                if let Some(device) = state
+                    .backend
+                    .kms()
+                    .and_then(|kms| kms.devices.get_mut(&node))
+                    && let Some(lease_state) = device.lease_state.as_mut()
+                {
+                    lease_state.withdraw_connector(handle);
+                }
+                surface::connector_disconnected(state, node, handle);
             }
-            DrmScanEvent::Disconnected {
-                crtc: Some(crtc), ..
-            } => {
-                surface::connector_disconnected(state, node, crtc);
-            }
-            DrmScanEvent::Disconnected { crtc: None, .. } => {}
+        }
+    }
+
+    for connector in appeared {
+        bring_up_head(state, node, connector);
+    }
+}
+
+/// Hands a non-desktop connector to `wp_drm_lease_v1` rather than lighting it.
+fn offer_for_lease(
+    state: &mut State,
+    node: DrmNode,
+    connector: connector::Handle,
+    head: &head::Head,
+) {
+    let Some(device) = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get_mut(&node))
+    else {
+        return;
+    };
+    let Some(lease_state) = device.lease_state.as_mut() else {
+        return;
+    };
+
+    tracing::info!(output = head.name, "connector is non-desktop, offering it for lease");
+    lease_state.add_connector::<State>(
+        connector,
+        head.name.clone(),
+        head.identity.as_str().to_owned(),
+    );
+}
+
+/// Lights a head that is currently off, using the config's mode.
+///
+/// The public door for "turn this monitor on"; hotplug reaches the same code
+/// through [`bring_up_head`], so a monitor appearing and a monitor being
+/// switched on take the same path and cannot drift apart.
+pub fn enable_configured_head(
+    state: &mut State,
+    node: DrmNode,
+    connector: connector::Handle,
+) -> anyhow::Result<()> {
+    bring_up_head(state, node, connector);
+
+    let enabled = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get(&node))
+        .and_then(|device| device.heads.get(&connector))
+        .is_some_and(|head| head.state.is_enabled());
+
+    anyhow::ensure!(enabled, "the monitor could not be brought up");
+    Ok(())
+}
+
+/// Lights a newly appeared head up, unless the config says it is off.
+fn bring_up_head(state: &mut State, node: DrmNode, connector: connector::Handle) {
+    // Cloned out so the device borrow ends before `assign_crtc` needs its own.
+    let head = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get(&node))
+        .and_then(|device| device.heads.get(&connector))
+        .cloned();
+    let Some(head) = head else {
+        return;
+    };
+
+    let setting = state
+        .config
+        .current
+        .output_setting(&head.name, head.identity.as_str())
+        .cloned();
+
+    if setting.as_ref().and_then(|setting| setting.enabled) == Some(false) {
+        tracing::info!(output = head.name, "monitor stays off; the config disables it");
+        state.refresh_output_heads();
+        return;
+    }
+
+    if let Some(bpc) = setting.as_ref().and_then(|setting| setting.max_bpc)
+        && !head.accepts_max_bpc(bpc)
+    {
+        tracing::warn!(
+            output = head.name,
+            bpc,
+            supported = ?head.max_bpc,
+            "the configured colour depth is outside what this connector accepts"
+        );
+    }
+
+    let Some(drm_mode) = head.mode_for(setting.as_ref().and_then(|s| s.mode.as_deref())) else {
+        return;
+    };
+
+    // Ask for a CRTC against the heads that are meant to be on, rather than
+    // taking whatever the scanner reserved.
+    let Some(crtc) = assign_crtc(state, node, connector) else {
+        tracing::warn!(
+            output = head.name,
+            "no CRTC is free for this monitor; it stays dark"
+        );
+        state.refresh_output_heads();
+        return;
+    };
+
+    if let Err(err) = surface::enable_head(state, node, connector, crtc, drm_mode) {
+        tracing::error!(%err, "failed to bring up connector");
+    }
+}
+
+/// A CRTC for `connector`, keeping every already-lit head on the one it has.
+fn assign_crtc(
+    state: &mut State,
+    node: DrmNode,
+    connector: connector::Handle,
+) -> Option<crtc::Handle> {
+    let device = state.backend.kms()?.devices.get(&node)?;
+
+    let mut wanted: Vec<connector::Handle> = device
+        .heads
+        .values()
+        .filter(|head| head.state.is_enabled())
+        .map(|head| head.connector)
+        .collect();
+    let pinned: crtc_pool::Assignment = device
+        .heads
+        .values()
+        .filter_map(|head| head.state.crtc().map(|crtc| (head.connector, crtc)))
+        .collect();
+    wanted.push(connector);
+
+    match crtc_pool::assign(&device.drm, &wanted, &pinned, &device.leased_crtcs) {
+        Ok(assignment) => assignment.get(&connector).copied(),
+        Err(err) => {
+            tracing::debug!(%err, "CRTC assignment failed");
+            None
         }
     }
 }
@@ -425,14 +637,14 @@ fn device_removed(state: &mut State, node: DrmNode) {
 
     // Tear down every monitor on this GPU first — that path also detaches
     // the outputs from the shell.
-    let crtcs: Vec<_> = state
+    let connectors: Vec<connector::Handle> = state
         .backend
         .kms()
         .and_then(|kms| kms.devices.get(&node))
-        .map(|device| device.surfaces.keys().copied().collect())
+        .map(|device| device.heads.keys().copied().collect())
         .unwrap_or_default();
-    for crtc in crtcs {
-        surface::connector_disconnected(state, node, crtc);
+    for connector in connectors {
+        surface::connector_disconnected(state, node, connector);
     }
 
     let Some(kms) = state.backend.kms() else {

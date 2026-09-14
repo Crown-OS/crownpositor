@@ -2,7 +2,10 @@ use smithay::backend::renderer::gles::{
     GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
 };
 
-pub static CLIPPING_SHADER: &str = include_str!("./rounded_corner.frag");
+pub static CLIPPING_SHADER: &str = concat!(
+    include_str!("./rounded_corner.frag"),
+    include_str!("../common/rounded_box.glsl"),
+);
 pub struct RoundedCornerShader(pub GlesTexProgram);
 
 impl RoundedCornerShader {

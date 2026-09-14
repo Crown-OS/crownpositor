@@ -5,7 +5,7 @@
 //! `&mut State`.
 
 use anyhow::anyhow;
-use calloop::{LoopHandle, channel};
+use calloop::{LoopHandle, RegistrationToken, channel};
 use config::{Config, Update, Watch};
 
 use crate::state::State;
@@ -14,6 +14,8 @@ pub struct ConfigState {
     pub current: Config,
     /// Dropping this unregisters the watches, so it has to be owned here.
     _watch: Watch,
+    /// A pending write-back. See [`State::persist_output_config`].
+    pub(crate) persist: Option<RegistrationToken>,
 }
 
 impl ConfigState {
@@ -40,6 +42,7 @@ impl ConfigState {
         Ok(Self {
             current: Config::load(),
             _watch: watch,
+            persist: None,
         })
     }
 }

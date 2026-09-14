@@ -31,22 +31,29 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-// The blurred scene texture's size in pixels. `v_coords` is a *texture*
-// coordinate, not an element-local one, so this is what turns it back into a
-// position — and because the texture is the output at 1:1, that position is
-// output-local physical pixels.
-uniform vec2 tex_size;
-// The rectangle the corners are cut from, in those same output-local pixels:
-// the whole window, not the piece being drawn. A committed blur region is not
-// always the whole surface, so one window's backdrop can be several
-// rectangles, and each has to be cut by the window's corners rather than its
-// own.
-uniform vec2 mask_offset;
+// Where this backdrop sits in the framebuffer, in pixels. Every position below
+// comes from `gl_FragCoord`, so a rotated or flipped output needs no special
+// case: the framebuffer is the one space all of them agree on.
+uniform vec2 backdrop_origin;
+uniform vec2 backdrop_size;
+// The rectangle the corners are cut from, in those same framebuffer pixels: the
+// whole window, not the piece being drawn. A committed blur region is not
+// always the whole surface, so one window's backdrop can be several rectangles,
+// and each has to be cut by the window's corners rather than its own.
+uniform vec2 mask_origin;
 uniform vec2 mask_size;
+// Half a pixel of the pyramid's top level in UV space, and the kawase spread:
+// this pass *is* the last upsample, straight into the frame.
+uniform vec2 half_pixel;
+uniform float offset;
 // Corner radius in pixels — must match the window drawn on top.
 uniform float corner_radius;
 // Dither strength; hides the banding a strong blur produces on gradients.
 uniform float noise;
+
+vec2 cl(vec2 uv) {
+    return clamp(uv, half_pixel, vec2(1.0) - half_pixel);
+}
 
 // Signed distance to a rounded box, after Inigo Quilez.
 float rounded_box(vec2 p, vec2 b, float r) {
@@ -62,15 +69,27 @@ float hash(vec2 p) {
 }
 
 void main() {
-    vec4 color = texture2D(tex, v_coords);
+    vec2 uv = (gl_FragCoord.xy - backdrop_origin) / backdrop_size;
+    vec2 o = half_pixel * offset;
 
-    // The blurred scene is opaque; make that explicit so stale alpha from the
-    // offscreen chain can never punch holes in the backdrop.
-    color = vec4(color.rgb, 1.0);
+    // Dual-kawase upsample: 8 taps, diagonals weighted 2, edges 1.
+    vec4 sum = vec4(0.0);
+    sum += texture2D(tex, cl(uv + vec2(-o.x * 2.0, 0.0)));
+    sum += texture2D(tex, cl(uv + vec2( o.x * 2.0, 0.0)));
+    sum += texture2D(tex, cl(uv + vec2(0.0, -o.y * 2.0)));
+    sum += texture2D(tex, cl(uv + vec2(0.0,  o.y * 2.0)));
+    sum += texture2D(tex, cl(uv + vec2(-o.x,  o.y))) * 2.0;
+    sum += texture2D(tex, cl(uv + vec2( o.x,  o.y))) * 2.0;
+    sum += texture2D(tex, cl(uv + vec2(-o.x, -o.y))) * 2.0;
+    sum += texture2D(tex, cl(uv + vec2( o.x, -o.y))) * 2.0;
 
-    // Everything below is measured in the masked rectangle's own space, so
-    // that a backdrop split into pieces dithers and rounds as one surface.
-    vec2 p = v_coords * tex_size - mask_offset;
+    // What was copied out of the framebuffer was opaque; make that explicit so
+    // stale alpha from the pyramid can never punch a hole in the backdrop.
+    vec4 color = vec4((sum / 12.0).rgb, 1.0);
+
+    // Everything below is measured in the masked rectangle's own space, so that
+    // a backdrop split into pieces dithers and rounds as one surface.
+    vec2 p = gl_FragCoord.xy - mask_origin;
 
     if (noise > 0.0) {
         float dither = (hash(p) - 0.5) * noise;

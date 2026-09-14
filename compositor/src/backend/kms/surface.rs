@@ -38,22 +38,25 @@ use smithay::{
             self, RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
-        drm::control::{ModeTypeFlags, connector, crtc},
+        drm::control::{Mode as DrmMode, connector, crtc},
         wayland_protocols::wp::presentation_time::server::wp_presentation_feedback,
     },
-    utils::{Scale, Transform},
+    utils::{Physical, Rectangle, Scale, Transform},
     wayland::presentation::Refresh,
 };
 
 use crate::{
     backend::{
         frame_clock::FrameClock,
-        kms::KmsState,
+        kms::{
+            KmsState,
+            head::HeadState,
+        },
         render::{CrownAllocator, DmabufExporter},
     },
     rendering::{
         self, FrameStyle,
-        blur::{self, BlurBuffers, BlurConfig},
+        blur::{BlurCache, BlurConfig, BlurSession},
         rounded::MultiDecorator,
     },
     shell::{Shell, monitor::OutputDescriptor},
@@ -129,17 +132,27 @@ pub struct Surface {
     pub compositor: SurfaceCompositor,
     pub frame_clock: FrameClock,
     pub redraw_state: RedrawState,
-    /// The cached blurred-background pipeline for this output. Empty until a
-    /// visible window commits a blur region.
-    pub blur: BlurBuffers,
+    /// Every backdrop's blur pyramid on this output, kept across frames.
+    pub blur: BlurCache,
+    /// Whether the panel is powered.
+    ///
+    /// A blanked output keeps its `Output`, its workspaces and its windows —
+    /// only scanout stops — which is what separates this from disabling the
+    /// output altogether.
+    pub powered: bool,
 }
 
-/// Brings up a monitor that appeared on `crtc`.
-pub fn connector_connected(
+/// Brings a head up on `crtc`, creating its surface and its `Output`.
+///
+/// The head must already be in the device's registry — discovering a connector
+/// and lighting it are separate steps, because a head the config switches off
+/// still has to exist to be switched back on.
+pub fn enable_head(
     state: &mut State,
     node: DrmNode,
-    connector: connector::Info,
+    connector: connector::Handle,
     crtc: crtc::Handle,
+    drm_mode: DrmMode,
 ) -> anyhow::Result<()> {
     let State {
         backend,
@@ -152,16 +165,19 @@ pub fn connector_connected(
         return Ok(());
     };
 
-    let output_name = format!(
-        "{}-{}",
-        connector.interface().as_str(),
-        connector.interface_id()
-    );
+    let Some(head) = kms
+        .devices
+        .get(&node)
+        .and_then(|device| device.heads.get(&connector))
+        .cloned()
+    else {
+        anyhow::bail!("connector {connector:?} is not a known head on {node}");
+    };
 
     // Renderer formats have to come out of the GPU that will render, before
     // the device map is mutably borrowed below.
     let Some(render_node) = kms.devices.get(&node).map(|device| device.render_node) else {
-        anyhow::bail!("connector {output_name} appeared on unknown GPU {node}");
+        anyhow::bail!("connector {} appeared on unknown GPU {node}", head.name);
     };
     let renderer_formats = {
         let mut renderer = kms
@@ -178,20 +194,10 @@ pub fn connector_connected(
         return Ok(());
     };
 
-    // The panel's preferred mode, or whatever comes first — a monitor with an
-    // empty mode list is broken enough to skip.
-    let drm_mode = connector
-        .modes()
-        .iter()
-        .find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED))
-        .or_else(|| connector.modes().first())
-        .copied()
-        .with_context(|| format!("connector {output_name} has no modes"))?;
-
     let drm_surface = device
         .drm
-        .create_surface(crtc, drm_mode, &[connector.handle()])
-        .with_context(|| format!("failed to create a DRM surface for {output_name}"))?;
+        .create_surface(crtc, drm_mode, &[connector])
+        .with_context(|| format!("failed to create a DRM surface for {}", head.name))?;
 
     let mode = smithay::output::Mode::from(drm_mode);
     let refresh_interval = (mode.refresh > 0).then(|| {
@@ -199,26 +205,30 @@ pub fn connector_connected(
         Duration::from_nanos(1_000_000_000_000 / mode.refresh as u64)
     });
 
-    let (physical_width, physical_height) = connector.size().unwrap_or((0, 0));
     let output = shell.add_output(
         &common.display_handle,
         &config.current,
         OutputDescriptor {
-            name: output_name.clone(),
+            name: head.name.clone(),
             physical: PhysicalProperties {
-                size: (physical_width as i32, physical_height as i32).into(),
-                subpixel: connector.subpixel().into(),
-                // EDID parsing needs libdisplay-info; see the workspace
-                // Cargo.toml for why it is off right now.
-                make: "Unknown".into(),
-                model: "Unknown".into(),
+                size: (head.physical_mm.0 as i32, head.physical_mm.1 as i32).into(),
+                subpixel: head.subpixel,
+                // smithay has no null here, so an unidentified panel keeps the
+                // "Unknown" placeholder; the protocol layer filters it out
+                // rather than telling clients that is the make.
+                make: head.edid.as_ref().map_or("Unknown".into(), |edid| edid.make.clone()),
+                model: head.edid.as_ref().map_or("Unknown".into(), |edid| edid.model.clone()),
             },
-            modes: connector.modes().iter().copied().map(Into::into).collect(),
-            preferred: Some(mode),
+            modes: head.modes.iter().copied().map(Into::into).collect(),
+            preferred: head
+                .preferred
+                .and_then(|index| head.modes.get(index))
+                .map(|mode| smithay::output::Mode::from(*mode)),
             current: mode,
             native_transform: Transform::Normal,
             refresh_interval,
-            serial: None,
+            serial: head.edid.as_ref().and_then(|edid| edid.serial.clone()),
+            edid: head.edid.clone(),
         },
     );
 
@@ -236,14 +246,9 @@ pub fn connector_connected(
         device.drm.cursor_size(),
         Some(device.gbm.clone()),
     )
-    .with_context(|| format!("failed to create the DRM compositor for {output_name}"))?;
+    .with_context(|| format!("failed to create the DRM compositor for {}", head.name))?;
 
-    tracing::info!(
-        output = output_name,
-        ?mode,
-        %node,
-        "monitor connected"
-    );
+    tracing::info!(output = head.name, ?mode, %node, "monitor enabled");
 
     device.surfaces.insert(
         crtc,
@@ -255,15 +260,57 @@ pub fn connector_connected(
             frame_clock: FrameClock::new(refresh_interval, false),
             // First frame right away.
             redraw_state: RedrawState::Queued,
-            blur: BlurBuffers::default(),
+            blur: BlurCache::default(),
+            powered: true,
         },
     );
+    if let Some(head) = device.heads.get_mut(&connector) {
+        head.state = HeadState::Enabled { crtc };
+    }
+
+    state.refresh_output_heads();
 
     Ok(())
 }
 
-/// Tears down the monitor on `crtc`, if any.
-pub fn connector_disconnected(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
+/// Switches a head off without forgetting it exists.
+///
+/// The `Output` goes — which migrates its workspaces and closes its layer
+/// surfaces — and dropping the `Surface` is what actually frees the hardware:
+/// `AtomicDrmSurface`'s `Drop` resets the planes, connector and CRTC in one
+/// modeset, and releases the primary-plane claim that `create_surface` took.
+/// Nothing else can free the CRTC for another connector to use.
+pub fn disable_head(state: &mut State, node: DrmNode, connector: connector::Handle) {
+    let Some(crtc) = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get(&node))
+        .and_then(|device| device.heads.get(&connector))
+        .and_then(|head| head.state.crtc())
+    else {
+        return;
+    };
+
+    remove_surface(state, node, crtc);
+
+    if let Some(head) = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get_mut(&node))
+        .and_then(|device| device.heads.get_mut(&connector))
+    {
+        head.state = HeadState::Disabled;
+        tracing::info!(output = head.name, %node, "monitor disabled");
+    }
+
+    state.refresh_output_heads();
+}
+
+/// Takes down the surface on `crtc`, detaching its output from the shell.
+///
+/// Shared by disabling a head and unplugging one; the difference is only
+/// whether the head stays in the registry afterwards.
+fn remove_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     let handle = state.common.event_loop_handle.clone();
     let display_handle = state.common.display_handle.clone();
     let State { backend, shell, .. } = state;
@@ -285,7 +332,34 @@ pub fn connector_disconnected(state: &mut State, node: DrmNode, crtc: crtc::Hand
     }
 
     shell.remove_output(&display_handle, &surface.output);
-    tracing::info!(output = surface.output.name(), "monitor disconnected");
+}
+
+/// Forgets a connector that has been unplugged.
+pub fn connector_disconnected(state: &mut State, node: DrmNode, connector: connector::Handle) {
+    let head = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get(&node))
+        .and_then(|device| device.heads.get(&connector))
+        .cloned();
+    let Some(head) = head else {
+        return;
+    };
+
+    if let Some(crtc) = head.state.crtc() {
+        remove_surface(state, node, crtc);
+    }
+
+    if let Some(device) = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get_mut(&node))
+    {
+        device.heads.remove(&connector);
+    }
+
+    tracing::info!(output = head.name, %node, "monitor disconnected");
+    state.refresh_output_heads();
 }
 
 /// Renders every output whose state machine says "queued". Called once per
@@ -357,6 +431,13 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         return;
     };
 
+    // A blanked panel has no CRTC to commit to. The request is dropped rather
+    // than parked, because waking up queues its own redraw.
+    if !surface.powered {
+        surface.redraw_state = RedrawState::Idle;
+        return;
+    }
+
     // Consume the render request, keeping hold of a still-pending estimated
     // vblank timer: whether it is kept, cancelled or replaced depends on how
     // this frame goes.
@@ -418,36 +499,24 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     };
     let scale = Scale::from(surface.output.current_scale().fractional_scale());
 
-    // The blur pre-pass runs before the element list is built, so backdrops
-    // constructed below sample this frame's texture and carry its commit.
-    // Skipped entirely — a cheap iterator scan — while no visible window has
-    // a blur region committed.
-    let wants_blur = blur_config.enabled && blur::output_wants_blur(shell, monitor);
-    let backdrop = if wants_blur {
-        let size: smithay::utils::Size<i32, smithay::utils::Physical> =
-            monitor.geometry().size.to_physical_precise_round(scale);
-        let gles: &mut smithay::backend::renderer::gles::GlesRenderer = renderer.as_mut();
-        let sources = blur::source_elements(monitor, gles, scale);
-        match surface
-            .blur
-            .update(gles, size, scale, &sources, CLEAR_COLOR, &blur_config)
-        {
-            Ok(()) => surface.blur.source(blur_config.noise),
-            Err(err) => {
-                // Cosmetic: the frame still renders, just without glass.
-                tracing::warn!(%err, "blur pre-pass failed; drawing without blur");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Backdrops blur the framebuffer as they are drawn, so all the frame owes
+    // them is the pyramids they cached last time and the bounds to clip to.
+    let transform = surface.output.current_transform();
+    let bounds: Rectangle<i32, Physical> =
+        Rectangle::from_size(monitor.geometry().size.to_physical_precise_round(scale));
+    surface.blur.begin_frame();
+    let blur = blur_config.enabled.then_some(BlurSession {
+        cache: &mut surface.blur,
+        config: blur_config,
+        transform,
+        output: bounds,
+    });
 
     let elements = rendering::output_elements(
         shell,
         monitor,
         &mut renderer,
-        &mut MultiDecorator::new(backdrop),
+        &mut MultiDecorator::new(blur),
         &mut input.cursor,
         input.pointer_location,
         scale,
@@ -540,6 +609,12 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
             target_presentation_time,
             animating,
         );
+    }
+
+    // A backdrop that owes a halo has to be asked for the frame that pays it;
+    // nothing else on screen changed, so no other source would schedule one.
+    if surface.blur.wants_redraw() {
+        surface.redraw_state = std::mem::take(&mut surface.redraw_state).queue();
     }
 }
 

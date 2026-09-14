@@ -38,7 +38,11 @@ use smithay::{
 
 use protocols::{
     appmenu::AppmenuState,
+    color_management::ColorManagementState,
     background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
+    gamma_control::GammaControlState,
+    output_management::OutputManagementState,
+    output_power::OutputPowerState,
 };
 
 use crate::state::State;
@@ -46,6 +50,9 @@ use crate::state::State;
 pub struct WaylandState {
     pub appmenu_state: AppmenuState,
     pub background_effect_state: BackgroundEffectState,
+    /// `wp_color_management_v1`. Unprivileged: any client may describe its own
+    /// colours, and reading an output's is not sensitive.
+    pub color_management_state: ColorManagementState,
     pub compositor_state: CompositorState,
     // pub corner_radius_state: CornerRadiusState,
     pub data_device_state: DataDeviceState,
@@ -53,8 +60,13 @@ pub struct WaylandState {
     pub fractional_scale_state: FractionalScaleManagerState,
     pub keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     pub output_state: OutputManagerState,
-    // pub output_configuration_state: OutputConfigurationState<State>,
-    // pub output_power_state: OutputPowerState,
+    /// `zwlr_gamma_control_v1`. Privileged: a client holding it can make the
+    /// screen unreadable.
+    pub gamma_control_state: GammaControlState,
+    /// `zwlr_output_management_v1`. Privileged: it can turn every monitor off.
+    pub output_management_state: OutputManagementState,
+    /// `zwlr_output_power_management_v1`. Privileged: it can blank the screen.
+    pub output_power_state: OutputPowerState,
     /// `zwp_pointer_gestures_v1`. Held only to keep the global alive — the
     /// events themselves go out through the seat's pointer.
     pub pointer_gestures_state: PointerGesturesState,
@@ -129,6 +141,7 @@ impl WaylandState {
                 display,
                 BackgroundEffectCapability::Blur,
             ),
+            color_management_state: ColorManagementState::new::<State, _>(display, |_| true),
             compositor_state: CompositorState::new_v6::<State>(display),
             data_device_state: DataDeviceState::new::<State>(display),
             // TODO: `create_global` once the render node's formats are known.
@@ -136,6 +149,18 @@ impl WaylandState {
             fractional_scale_state: FractionalScaleManagerState::new::<State>(display),
             keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState::new::<State>(display),
             output_state: OutputManagerState::new_with_xdg_output::<State>(display),
+            gamma_control_state: GammaControlState::new::<State, _>(
+                display,
+                privileged_client_filter,
+            ),
+            output_management_state: OutputManagementState::new::<State, _>(
+                display,
+                privileged_client_filter,
+            ),
+            output_power_state: OutputPowerState::new::<State, _>(
+                display,
+                privileged_client_filter,
+            ),
             pointer_gestures_state: PointerGesturesState::new::<State>(display),
             presentation_state: PresentationState::new::<State>(display, clock.id() as u32),
             ext_data_control_state: ExtDataControlState::new::<State, _>(

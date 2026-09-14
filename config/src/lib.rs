@@ -3,10 +3,10 @@ pub mod startup;
 pub mod watch;
 
 pub use crownos_config::schema::{
-    AnimationProfile, Binding, Compositor, OutputSetting, OutputTransform, WindowRule,
-    WorkspaceMode,
+    AnimationProfile, Binding, Compositor, OutputLayout, OutputSetting, OutputTransform, Vrr,
+    WindowRule, WorkspaceMode,
 };
-pub use crownos_config::{Appearance, Display, DisplayScale, Keybinds};
+pub use crownos_config::{Appearance, Display, Keybinds};
 pub use rules::{ResolvedRule, WindowRules};
 pub use startup::split_argv;
 pub use watch::{Update, Watch};

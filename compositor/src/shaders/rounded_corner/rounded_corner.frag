@@ -41,14 +41,9 @@ uniform vec2 size;
 // window squares its top pair, because its titlebar rounds those instead.
 uniform vec4 radius;
 
-// Signed distance to a box with per-corner radii, after Inigo Quilez.
-// `r` holds the radii of the (+x, +y), (+x, -y), (-x, +y) and (-x, -y) corners.
-float rounded_box(in vec2 p, in vec2 b, in vec4 r) {
-    r.xy = (p.x > 0.0) ? r.xy : r.zw;
-    r.x = (p.y > 0.0) ? r.x : r.y;
-    vec2 q = abs(p) - b + r.x;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r.x;
-}
+// Defined in `shaders/common/rounded_box.glsl`, concatenated after this file
+// so the colour-managed variant of this shader can share the one copy.
+float rounded_box(in vec2 p, in vec2 b, in vec4 r);
 
 void main() {
     vec4 color = texture2D(tex, v_coords);

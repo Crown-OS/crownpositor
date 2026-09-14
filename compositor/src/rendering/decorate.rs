@@ -33,8 +33,8 @@ pub struct Backdrop {
     /// damage tracker treats every frame's backdrop as a brand new element and
     /// repaints the window's area continuously.
     pub id: Id,
-    /// Changes exactly when this backdrop's pixels do — a re-blur underneath
-    /// it, or the client committing a different region.
+    /// Changes when the blur settings or the client's region do — everything
+    /// else about this backdrop's pixels the damage tracker already sees.
     pub commit: CommitCounter,
     /// The rectangle to fill, in output-local physical coordinates.
     pub geometry: Rectangle<i32, Physical>,
@@ -90,12 +90,12 @@ where
         None
     }
 
-    /// Identifies the blurred texture this decorator would draw backdrops
-    /// from, changing whenever that texture is re-blurred.
+    /// Identifies the settings this decorator would draw backdrops with,
+    /// changing whenever one of them does.
     ///
-    /// `None` — the default — means there is none this frame, and the caller
+    /// `None` — the default — means it draws none this frame, and the caller
     /// can skip working out where backdrops would go at all.
-    fn backdrop_source(&self) -> Option<u64> {
+    fn blur_fingerprint(&self) -> Option<u64> {
         None
     }
 }
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn both_decorators_satisfy_the_seam() {
         assert_usable::<GlesRenderer, PassThrough>();
-        assert_usable::<GlesRenderer, GlesDecorator>();
+        assert_usable::<GlesRenderer, GlesDecorator<'static>>();
     }
 
     #[test]
@@ -157,6 +157,6 @@ mod tests {
         {
         }
         accepts::<GlesRenderer, PassThrough>(Vec::new());
-        accepts::<GlesRenderer, GlesDecorator>(Vec::new());
+        accepts::<GlesRenderer, GlesDecorator<'static>>(Vec::new());
     }
 }

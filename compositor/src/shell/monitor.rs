@@ -10,6 +10,7 @@ use config::{OutputSetting, OutputTransform};
 
 use crate::{
     animations::spring::SpringProfile,
+    utils::edid::EdidInfo,
     layout::{Gaps, WorkspaceMode},
     shell::{
         workspace::{Workspace, WorkspaceRef},
@@ -53,6 +54,10 @@ pub struct OutputDescriptor {
     pub native_transform: Transform,
     pub refresh_interval: Option<Duration>,
     pub serial: Option<String>,
+    /// Present on KMS when the panel returned a parsable EDID. Carries the
+    /// colorimetry and HDR capability that colour management needs, and the
+    /// VRR floor below which refresh may not be stretched.
+    pub edid: Option<EdidInfo>,
 }
 
 /// The live state of one output.
@@ -67,22 +72,26 @@ pub struct OutputConfig {
     pub transform: Transform,
     pub position: smithay::utils::Point<i32, Logical>,
     pub refresh_interval: Option<Duration>,
-    pub enabled: bool,
     /// Overrides the compositor-wide default for workspaces created here.
     pub default_mode: Option<WorkspaceMode>,
+    /// What the panel said about itself. See [`OutputDescriptor::edid`].
+    pub edid: Option<EdidInfo>,
+}
+
+/// Logical size after scale and transform. The one place this arithmetic
+/// lives, so validating a configuration that has not been applied yet cannot
+/// disagree with the monitor that eventually holds it.
+pub fn logical_size(
+    mode: Size<i32, smithay::utils::Physical>,
+    scale: f64,
+    transform: Transform,
+) -> Size<i32, Logical> {
+    transform.transform_size(mode.to_f64().to_logical(scale).to_i32_round())
 }
 
 impl OutputConfig {
-    /// Logical size after scale and transform. The one place this arithmetic
-    /// lives.
     pub fn logical_size(&self) -> Size<i32, Logical> {
-        let logical = self
-            .mode
-            .size
-            .to_f64()
-            .to_logical(self.scale.fractional_scale())
-            .to_i32_round();
-        self.transform.transform_size(logical)
+        logical_size(self.mode.size, self.scale.fractional_scale(), self.transform)
     }
 
     pub fn logical_geometry(&self) -> Rectangle<i32, Logical> {
@@ -377,13 +386,15 @@ impl Monitor {
 
     /// Applies the per-output half of the config.
     ///
-    /// `fallback_scale` is the system `display.scale`, used when the output has
-    /// no override of its own. Returns whether anything moved, so the caller can
-    /// skip an arrange.
-    pub fn apply_settings(&mut self, setting: Option<&OutputSetting>, fallback_scale: f64) -> bool {
+    /// An output with no scale of its own gets one guessed from its physical
+    /// size, so a docked laptop and its monitor can differ. Returns whether
+    /// anything moved, so the caller can skip an arrange.
+    pub fn apply_settings(&mut self, setting: Option<&OutputSetting>) -> bool {
         let mut changed = false;
 
-        let scale = setting.and_then(|s| s.scale).unwrap_or(fallback_scale);
+        let scale = setting
+            .and_then(|s| s.scale)
+            .unwrap_or_else(|| self.guessed_scale());
         changed |= self.set_scale(scale);
 
         if let Some(transform) = setting.and_then(|s| s.transform) {
@@ -416,9 +427,25 @@ impl Monitor {
         if let Some(mode) = self.config.default_mode {
             self.default_mode = mode;
         }
-        self.config.enabled = setting.and_then(|s| s.enabled).unwrap_or(true);
-
         changed
+    }
+
+    /// Places the output and remembers that it was placed deliberately.
+    ///
+    /// `set_position` alone is undone by the next `arrange_outputs`, which
+    /// re-packs everything that is not pinned; this is what a user dragging a
+    /// monitor in the settings panel means.
+    pub fn pin_position(&mut self, position: smithay::utils::Point<i32, Logical>) -> bool {
+        self.fixed_position = Some(position);
+        self.set_position(position)
+    }
+
+    /// The scale this output should use when nothing configures it.
+    pub fn guessed_scale(&self) -> f64 {
+        crate::utils::scale::guess_monitor_scale(
+            self.output.physical_properties().size,
+            self.config.mode.size,
+        )
     }
 
     pub fn set_position(&mut self, position: smithay::utils::Point<i32, Logical>) -> bool {
@@ -629,8 +656,8 @@ mod tests {
                 transform: Transform::Normal,
                 position: (0, 0).into(),
                 refresh_interval: None,
-                enabled: true,
                 default_mode: None,
+                edid: None,
             },
             workspaces: Vec::new(),
             active: 0,
