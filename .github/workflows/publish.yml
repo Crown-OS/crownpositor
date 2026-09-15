@@ -1,0 +1,16 @@
+# Publish to crates.io on a v* tag. Logic lives in Crown-OS/.github.
+# See docs/40-contributing/releasing.md for the publish order.
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    uses: Crown-OS/.github/.github/workflows/publish.yml@main
+    with:
+      packages: crownpositor-config crownpositor
+      packages_apt: libdrm-dev libinput-dev libpixman-1-dev libseat-dev libudev-dev xwayland
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

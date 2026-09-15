@@ -1,6 +1,8 @@
 use smithay::backend::renderer::{
     ImportAll, ImportMem,
-    element::{memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement, Wrap},
+    element::{
+        Wrap, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
+    },
 };
 
 smithay::backend::renderer::element::render_elements! {

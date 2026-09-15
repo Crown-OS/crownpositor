@@ -16,11 +16,11 @@ pub mod rounded;
 
 use smithay::{
     backend::renderer::{
-        element::{
-            surface::WaylandSurfaceRenderElement, utils::CropRenderElement, AsRenderElements,
-            RenderElement, Wrap,
-        },
         ImportAll, ImportMem, Renderer,
+        element::{
+            AsRenderElements, RenderElement, Wrap, surface::WaylandSurfaceRenderElement,
+            utils::CropRenderElement,
+        },
     },
     desktop::layer_map_for_output,
     utils::{Logical, Physical, Point, Rectangle, Scale},
@@ -29,7 +29,7 @@ use smithay::{
 
 use crate::{
     rendering::{cursor::Cursor, decorate::TileDecorator, element::CrownElement},
-    shell::{monitor::Monitor, tile::Tile, Shell},
+    shell::{Shell, monitor::Monitor, tile::Tile},
 };
 
 /// One output's scene graph, for a given renderer and decorator.
@@ -88,7 +88,15 @@ where
             }
             None => {
                 for tile in workspace.stacking_order() {
-                    tile_elements(&mut elements, tile, renderer, decorator, scale, offset, radius);
+                    tile_elements(
+                        &mut elements,
+                        tile,
+                        renderer,
+                        decorator,
+                        scale,
+                        offset,
+                        radius,
+                    );
                 }
             }
         }

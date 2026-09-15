@@ -56,7 +56,9 @@ impl TaskSender {
                     task(state);
                 }
             })
-            .map_err(|err| anyhow::anyhow!("failed to insert the async completion source: {err}"))?;
+            .map_err(|err| {
+                anyhow::anyhow!("failed to insert the async completion source: {err}")
+            })?;
 
         Ok(Self {
             runtime: Arc::new(runtime),

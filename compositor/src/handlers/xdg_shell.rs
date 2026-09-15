@@ -167,9 +167,7 @@ impl XdgShellHandler for State {
 
 impl State {
     fn window_for(&self, surface: &ToplevelSurface) -> Option<Window> {
-        self.shell
-            .window_for_surface(surface.wl_surface())
-            .cloned()
+        self.shell.window_for_surface(surface.wl_surface()).cloned()
     }
 
     /// A client asking to enter a state, or `None` to leave the one it is in.
@@ -212,9 +210,9 @@ impl State {
             (data.app_id.clone(), data.title.clone())
         });
 
-        let rules = self
-            .shell
-            .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
+        let rules =
+            self.shell
+                .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         let opacity = self.config.current.opacity_for(&rules);
 
         if let Some(tile) = self.shell.tile_mut(id) {
@@ -249,9 +247,9 @@ impl State {
             .map(|workspace| workspace.area())
             .unwrap_or_default();
 
-        let mut rules = self
-            .shell
-            .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
+        let mut rules =
+            self.shell
+                .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         // Structural heuristics apply only where the config is silent, so a rule
         // can always force a dialog back into the tiling.
         if rules.floating.is_none() && auto_float(parent.is_some(), min_size, max_size, area.size) {

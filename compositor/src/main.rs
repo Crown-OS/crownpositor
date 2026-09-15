@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    compositor::run()
+    crownpositor::run()
 }

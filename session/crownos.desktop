@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=CrownOS
+Comment=Wayland desktop built on crownpositor
+Exec=crownos-session
+TryExec=crownos-session
+Type=Application
+DesktopNames=CrownOS
+Keywords=wayland;compositor;tiling;

@@ -1,6 +1,6 @@
 use smithay::{
     backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent},
-    input::keyboard::{keysyms, FilterResult, KeysymHandle},
+    input::keyboard::{FilterResult, KeysymHandle, keysyms},
     utils::SERIAL_COUNTER,
 };
 

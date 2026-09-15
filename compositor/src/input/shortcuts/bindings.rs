@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, fmt, str::FromStr};
 
-use smithay::input::keyboard::{keysyms, Keysym, KeysymHandle, ModifiersState};
+use smithay::input::keyboard::{Keysym, KeysymHandle, ModifiersState, keysyms};
 
 use config::{Binding, Compositor};
 

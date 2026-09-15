@@ -1,6 +1,4 @@
-use crownos_config::schema::{
-    AccentColor, AnimationProfile, Appearance, Display, DisplayScale,
-};
+use crownos_config::schema::{AccentColor, AnimationProfile, Appearance, Display, DisplayScale};
 
 /// The slice of system settings that changes how the compositor draws or places
 /// things.

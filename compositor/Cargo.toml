@@ -1,7 +1,17 @@
 [package]
-name = "compositor"
+name = "crownpositor"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+authors = ["marvelxcodes <ramakrishnan0046@gmail.com>"]
+repository = "https://github.com/Crown-OS/crownpositor"
+homepage = "https://github.com/Crown-OS/crownpositor"
+description = "Wayland compositor for CrownOS, built on Smithay."
+keywords = ["crownos", "wayland", "compositor", "smithay", "tiling"]
+categories = ["gui", "os::linux-apis"]
+readme = "../README.md"
+documentation = "https://docs.rs/crownpositor"
 
 [dependencies.smithay]
 version = "0.7.0"
@@ -25,18 +35,15 @@ features = [
 ]
 
 [dependencies]
-config = { path = "../config" }
+config = { package = "crownpositor-config", path = "../config", version = "0.1.0" }
 crownos-config = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 calloop = { workspace = true }
 parking_lot = { workspace = true }
-regex = { workspace = true }
-serde = { workspace = true }
 smithay-drm-extras = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-journald = { workspace = true }
 tracing-subscriber = { workspace = true }
 wayland-server = { workspace = true }
 tiny-skia = "0.12.0"

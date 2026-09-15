@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# The CrownOS session entry point. A display manager runs this, not
+# `crownpositor` directly, because a session needs three things the compositor
+# binary does not do for you:
+#
+#   1. XDG_CURRENT_DESKTOP set before anything starts, so portals and toolkits
+#      resolve the right backends.
+#   2. dbus-run-session if there is no session bus yet -- crownotify registers
+#      org.freedesktop.Notifications on it, and greetd-style launches do not
+#      always provide one.
+#   3. A place to hand the environment to systemd --user and the portal, for
+#      anything started later rather than by compositor.startup.
+#
+# Run it from a TTY too; it behaves the same.
+
+set -euo pipefail
+
+export XDG_CURRENT_DESKTOP=CrownOS
+export XDG_SESSION_DESKTOP=crownos
+export XDG_SESSION_TYPE=wayland
+
+# Toolkits that still default to X11 under a bare compositor.
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland}"
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+command -v crownpositor >/dev/null 2>&1 || {
+  echo "crownos-session: crownpositor is not on PATH" >&2
+  exit 127
+}
+
+# On a real seat the compositor needs DRM master. seatd or logind provides it;
+# without either, KMS init fails with a message that does not mention seats.
+if [ "${CROWN_BACKEND:-}" != winit ] && [ -z "${XDG_SESSION_ID:-}" ] &&
+   ! pgrep -x seatd >/dev/null 2>&1; then
+  echo "crownos-session: no logind session and seatd is not running." >&2
+  echo "  start it first:  sudo systemctl start seatd" >&2
+  echo "  or run nested:   CROWN_BACKEND=winit crownos-session" >&2
+fi
+
+if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+  exec crownpositor "$@"
+elif command -v dbus-run-session >/dev/null 2>&1; then
+  exec dbus-run-session -- crownpositor "$@"
+else
+  echo "crownos-session: no session bus and dbus-run-session is missing;" >&2
+  echo "  crownotify will not be able to register on D-Bus." >&2
+  exec crownpositor "$@"
+fi

@@ -5,11 +5,11 @@ use smithay::{
     delegate_cursor_shape, delegate_seat,
     desktop::{LayerSurface, PopupKind, Window},
     input::{
+        Seat, SeatHandler, SeatState,
         keyboard::{KeyboardTarget, KeysymHandle, LedState, ModifiersState},
         pointer::CursorImageStatus,
-        Seat, SeatHandler, SeatState,
     },
-    reexports::wayland_server::{backend::ObjectId, protocol::wl_surface::WlSurface, Resource},
+    reexports::wayland_server::{Resource, backend::ObjectId, protocol::wl_surface::WlSurface},
     utils::{IsAlive, Serial},
     wayland::{seat::WaylandFocus, session_lock::LockSurface, tablet_manager::TabletSeatHandler},
 };

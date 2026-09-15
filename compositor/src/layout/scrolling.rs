@@ -203,7 +203,7 @@ impl LayoutAlgorithm for ScrollingColumns {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{testing::*, Gaps};
+    use crate::layout::{Gaps, testing::*};
 
     const NO_GAPS: Gaps = Gaps { inner: 0, outer: 0 };
 
@@ -258,7 +258,10 @@ mod tests {
         let rect = out.rects[3];
         let left = rect.loc.x as f64 + out.view_offset.x;
         let right = left + rect.size.w as f64;
-        assert!(left >= 0.0 && right <= 800.0, "column {left}..{right} not in view");
+        assert!(
+            left >= 0.0 && right <= 800.0,
+            "column {left}..{right} not in view"
+        );
     }
 
     #[test]

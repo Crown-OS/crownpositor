@@ -29,8 +29,7 @@ impl LayoutAlgorithm for NoTiling {
     /// these with each window's own `floating_rect`.
     fn layout(&mut self, input: &LayoutInput<'_>, out: &mut LayoutOutput) {
         out.clear();
-        out.rects
-            .extend(input.tiles.iter().map(|_| input.area));
+        out.rects.extend(input.tiles.iter().map(|_| input.area));
     }
 
     fn apply(&mut self, _op: LayoutOp, _input: &LayoutInput<'_>) -> bool {

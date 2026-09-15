@@ -1,0 +1,14 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    uses: Crown-OS/.github/.github/workflows/rust.yml@main
+    with:
+      siblings: crownos-config
+      packages: libdrm-dev libinput-dev libpixman-1-dev libseat-dev libudev-dev xwayland

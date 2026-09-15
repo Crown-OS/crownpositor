@@ -493,8 +493,9 @@ impl Monitor {
         let last = self.workspaces.len().saturating_sub(1);
         match target {
             WorkspaceRef::Index(index) => index.min(last),
-            WorkspaceRef::Relative(delta) => (self.active as i64 + delta as i64)
-                .clamp(0, last as i64) as usize,
+            WorkspaceRef::Relative(delta) => {
+                (self.active as i64 + delta as i64).clamp(0, last as i64) as usize
+            }
             WorkspaceRef::Previous => self.previous.min(last),
         }
     }
@@ -536,7 +537,10 @@ pub fn shrink(rect: Rectangle<i32, Logical>, by: i32) -> Rectangle<i32, Logical>
     // leave no area to lay anything out in.
     let width = (rect.size.w - by * 2).max(1);
     let height = (rect.size.h - by * 2).max(1);
-    Rectangle::new((rect.loc.x + by, rect.loc.y + by).into(), (width, height).into())
+    Rectangle::new(
+        (rect.loc.x + by, rect.loc.y + by).into(),
+        (width, height).into(),
+    )
 }
 
 /// Builds the smithay `Output` a descriptor describes.
@@ -574,10 +578,7 @@ pub fn output_id(output: &Output) -> OutputId {
     output
         .user_data()
         .insert_if_missing_threadsafe(OutputId::next);
-    *output
-        .user_data()
-        .get::<OutputId>()
-        .expect("just inserted")
+    *output.user_data().get::<OutputId>().expect("just inserted")
 }
 
 #[cfg(test)]
@@ -627,9 +628,11 @@ mod tests {
             fixed_position: None,
         };
         for _ in 0..workspaces {
-            monitor
-                .workspaces
-                .push(Workspace::new(monitor.id, LayoutKind::MasterStack, Gaps::default()));
+            monitor.workspaces.push(Workspace::new(
+                monitor.id,
+                LayoutKind::MasterStack,
+                Gaps::default(),
+            ));
         }
         monitor
     }

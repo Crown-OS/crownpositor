@@ -54,11 +54,7 @@ impl BackendState {
     pub fn can_import_dmabuf(&mut self, dmabuf: &Dmabuf) -> bool {
         match self {
             Self::Unset => false,
-            Self::Winit(winit) => winit
-                .backend
-                .renderer()
-                .import_dmabuf(dmabuf, None)
-                .is_ok(),
+            Self::Winit(winit) => winit.backend.renderer().import_dmabuf(dmabuf, None).is_ok(),
             Self::Kms(kms) => kms.can_import_dmabuf(dmabuf),
         }
     }

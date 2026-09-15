@@ -1,6 +1,6 @@
 use smithay::{
     delegate_layer_shell,
-    desktop::{layer_map_for_output, LayerSurface, WindowSurfaceType},
+    desktop::{LayerSurface, WindowSurfaceType, layer_map_for_output},
     output::Output,
     reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
     wayland::shell::wlr_layer::{
@@ -30,7 +30,10 @@ impl WlrLayerShellHandler for State {
             .or_else(|| self.shell.focused_output().cloned());
 
         let Some(output) = output else {
-            tracing::warn!(namespace, "no output available for a layer surface, closing");
+            tracing::warn!(
+                namespace,
+                "no output available for a layer surface, closing"
+            );
             surface.send_close();
             return;
         };

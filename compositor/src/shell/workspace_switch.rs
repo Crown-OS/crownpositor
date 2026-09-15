@@ -256,12 +256,20 @@ mod tests {
         // Fingers to the left pull the next workspace in.
         switch.drag_to(-0.4, 3);
         follow(&mut switch, 60);
-        assert!((switch.position() - 1.4).abs() < 0.01, "{}", switch.position());
+        assert!(
+            (switch.position() - 1.4).abs() < 0.01,
+            "{}",
+            switch.position()
+        );
 
         // And to the right, the previous one.
         switch.drag_to(0.4, 3);
         follow(&mut switch, 60);
-        assert!((switch.position() - 0.6).abs() < 0.01, "{}", switch.position());
+        assert!(
+            (switch.position() - 0.6).abs() < 0.01,
+            "{}",
+            switch.position()
+        );
     }
 
     #[test]

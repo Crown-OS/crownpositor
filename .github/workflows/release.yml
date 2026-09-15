@@ -1,0 +1,18 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    # The reusable workflow asks for contents:write, but a called workflow's
+    # token can only be as broad as its caller's. Without this the release
+    # upload gets 403 under the default read-only token.
+    permissions:
+      contents: write
+    uses: Crown-OS/.github/.github/workflows/release.yml@main
+    with:
+      binary: crownpositor
+      packages: libdrm-dev libinput-dev libpixman-1-dev libseat-dev libudev-dev xwayland

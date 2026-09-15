@@ -1,0 +1,50 @@
+// Example ~/.config/crownos/compositor.ron
+//
+// Copy it there and edit. Every field has a default, so you can delete
+// anything you do not want to change -- an empty `()` is a valid file.
+//
+// Watched live: a save takes effect without a restart. A row that does not
+// parse is skipped with a log line; a FILE that does not parse silently falls
+// back to defaults for the whole section, so check `journalctl --user -f` if a
+// change appears to do nothing.
+(
+    // MasterStack (dwm/xmonad) | ScrollingColumns (niri/PaperWM) | Floating
+    layout: MasterStack,
+    focus_follows_mouse: true,
+
+    // The desktop. crownpositor spawns these once, after the socket is live and
+    // the outputs exist, with WAYLAND_DISPLAY already pointing at itself.
+    //
+    // This is how CrownOS becomes a desktop rather than a bare compositor.
+    // Leave it empty and you get a compositor with no bar, dock or
+    // notifications -- which is the default, and surprises people.
+    //
+    // Anything on PATH works. Order is file order.
+    startup: [
+        "crownbar",
+        "crowndock",
+        "crownotify",
+        // "crowndictator",
+    ],
+
+    // Chord spellings: Super (logo, mod4), Alt (mod1), Ctrl, Shift.
+    // Key names are labels -- "A", "1", "Left", "Space", "F5" -- NOT the
+    // W3C code spellings ("KeyA", "Digit1", "ArrowLeft"), which do not parse.
+    keybinds: [
+        (keys: "Super+Return",   action: "spawn foot"),
+        (keys: "Super+D",        action: "spawn crownlauncher"),
+        (keys: "Super+Q",        action: "close-window"),
+        (keys: "Super+Shift+E",  action: "quit"),
+        (keys: "Super+Space",    action: "cycle-layout"),
+        (keys: "Super+1",        action: "workspace 1"),
+        (keys: "Super+2",        action: "workspace 2"),
+    ],
+
+    window_rules: [
+        (app_id: "pavucontrol", floating: true),
+    ],
+
+    outputs: [
+        // (name: "eDP-1", scale: 2.0, position: (0, 0)),
+    ],
+)

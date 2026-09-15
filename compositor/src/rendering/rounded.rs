@@ -91,7 +91,11 @@ impl<E: Element> Element for Rounded<E> {
         self.inner.transform()
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         self.inner.damage_since(scale, commit)
     }
 

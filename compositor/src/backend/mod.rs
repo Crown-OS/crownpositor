@@ -60,8 +60,8 @@ impl Preference {
             }
         }
 
-        let nested = std::env::var_os("WAYLAND_DISPLAY").is_some()
-            || std::env::var_os("DISPLAY").is_some();
+        let nested =
+            std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
 
         if nested { Self::Winit } else { Self::Kms }
     }

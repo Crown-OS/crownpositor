@@ -9,11 +9,11 @@ mod wayland;
 use calloop::EventLoop;
 use smithay::utils::{Logical, Point};
 
-use crate::{animations::spring::Clock, shell::Shell};
 pub use crate::state::{
     backend::BackendState, client::ClientState, common::CommonState, config::ConfigState,
     input::InputState, wayland::WaylandState,
 };
+use crate::{animations::spring::Clock, shell::Shell};
 
 pub struct State {
     pub common: CommonState,

@@ -422,7 +422,10 @@ mod tests {
         // The spring's epsilon stops it near, not on, the target.
         anim.settle();
 
-        assert_eq!(anim.rect(), Rectangle::new((37.0, 91.0).into(), (640.0, 480.0).into()));
+        assert_eq!(
+            anim.rect(),
+            Rectangle::new((37.0, 91.0).into(), (640.0, 480.0).into())
+        );
     }
 
     #[test]
@@ -431,7 +434,10 @@ mod tests {
         anim.snap(rect(0, 0, 100, 100));
         anim.fade_in();
         settle(&mut anim);
-        assert!(anim.at_rest(), "this is what gates scheduling the next frame");
+        assert!(
+            anim.at_rest(),
+            "this is what gates scheduling the next frame"
+        );
     }
 
     #[test]

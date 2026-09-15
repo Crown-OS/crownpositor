@@ -233,9 +233,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.3"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -276,45 +276,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "compositor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "calloop 0.14.4",
- "config",
- "crownos-config",
- "parking_lot",
- "regex",
- "serde",
- "smithay",
- "smithay-drm-extras",
- "thiserror 2.0.20",
- "tiny-skia",
- "tokio",
- "tracing",
- "tracing-journald",
- "tracing-subscriber",
- "wayland-server",
- "xcursor",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
-]
-
-[[package]]
-name = "config"
-version = "0.1.0"
-dependencies = [
- "crownos-config",
- "regex",
- "serde",
- "tracing",
 ]
 
 [[package]]
@@ -383,12 +350,41 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "crownos-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "notify",
  "ron",
  "serde",
+]
+
+[[package]]
+name = "crownpositor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "calloop 0.14.4",
+ "crownos-config",
+ "crownpositor-config",
+ "parking_lot",
+ "smithay",
+ "smithay-drm-extras",
+ "thiserror 2.0.20",
+ "tiny-skia",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-server",
+ "xcursor",
+]
+
+[[package]]
+name = "crownpositor-config"
+version = "0.1.0"
+dependencies = [
+ "crownos-config",
+ "regex",
+ "tracing",
 ]
 
 [[package]]
@@ -2129,17 +2125,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-journald"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d3a81ed245bfb62592b1e2bc153e77656d94ee6a0497683a65a12ccaf2438d0"
-dependencies = [
- "libc",
- "tracing-core",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "tracing-log"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2868,3 +2853,7 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[patch.unused]]
+name = "crownshell"
+version = "0.3.0"

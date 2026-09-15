@@ -170,7 +170,10 @@ mod tests {
 
         let moving = tracker.velocity(ms(100)).0;
         let rested = tracker.velocity(ms(600)).0;
-        assert!(rested < moving * 0.5, "{rested} is not much slower than {moving}");
+        assert!(
+            rested < moving * 0.5,
+            "{rested} is not much slower than {moving}"
+        );
     }
 
     #[test]

@@ -46,7 +46,11 @@ impl Transaction {
     /// waiting on — it configured again in between — so anything at or past the
     /// expected serial counts.
     pub fn ack(&mut self, id: WindowId, serial: Serial) {
-        if self.pending.get(&id).is_some_and(|expected| serial >= *expected) {
+        if self
+            .pending
+            .get(&id)
+            .is_some_and(|expected| serial >= *expected)
+        {
             self.pending.remove(&id);
         }
     }

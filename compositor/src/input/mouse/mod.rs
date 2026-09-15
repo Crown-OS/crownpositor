@@ -4,7 +4,7 @@ use smithay::{
         PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
-    utils::{Logical, Point, Serial, SERIAL_COUNTER},
+    utils::{Logical, Point, SERIAL_COUNTER, Serial},
 };
 
 use crate::{handlers::seat::KeyboardFocusTarget, shell::monitor::Monitor, state::State};

@@ -7,8 +7,8 @@
 //! if none.
 
 use smithay::backend::renderer::{
-    element::{surface::WaylandSurfaceRenderElement, utils::CropRenderElement, RenderElement},
     ImportAll, Renderer,
+    element::{RenderElement, surface::WaylandSurfaceRenderElement, utils::CropRenderElement},
 };
 
 /// A tile's surfaces, already clipped to the window's animated rect.

@@ -4,7 +4,7 @@ use anyhow::{Context, anyhow};
 use smithay::{
     backend::{
         egl::EGLDevice,
-        renderer::{damage::OutputDamageTracker, gles::GlesRenderer, ImportDma},
+        renderer::{ImportDma, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
     desktop::layer_map_for_output,
@@ -225,9 +225,10 @@ fn render(state: &mut State) -> anyhow::Result<()> {
 
     if let Some(monitor) = shell.monitor(&winit.output) {
         for tile in shell.visible_windows(monitor) {
-            tile.window().send_frame(&winit.output, now, throttle, |_, _| {
-                Some(winit.output.clone())
-            });
+            tile.window()
+                .send_frame(&winit.output, now, throttle, |_, _| {
+                    Some(winit.output.clone())
+                });
         }
     }
 

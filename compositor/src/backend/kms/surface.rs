@@ -406,10 +406,12 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     );
 
     let mut submitted = false;
-    match surface
-        .compositor
-        .render_frame(&mut renderer, &elements, CLEAR_COLOR, FrameFlags::DEFAULT)
-    {
+    match surface.compositor.render_frame(
+        &mut renderer,
+        &elements,
+        CLEAR_COLOR,
+        FrameFlags::DEFAULT,
+    ) {
         Ok(result) => {
             if result.needs_sync() {
                 // The swapchain buffer is still being written by the GPU;
@@ -685,7 +687,9 @@ mod tests {
                 redraw_needed: false
             }
             .queue(),
-            RedrawState::WaitingForVBlank { redraw_needed: true }
+            RedrawState::WaitingForVBlank {
+                redraw_needed: true
+            }
         ));
     }
 

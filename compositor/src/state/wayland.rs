@@ -7,8 +7,8 @@ use smithay::{
     reexports::{
         wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDefaultMode,
         wayland_server::{
-            protocol::{wl_shm, wl_surface::WlSurface},
             Client, DisplayHandle,
+            protocol::{wl_shm, wl_surface::WlSurface},
         },
     },
     utils::{Clock, Monotonic},

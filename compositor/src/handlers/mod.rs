@@ -1,4 +1,3 @@
-mod background_effect;
 mod compositor;
 mod dmabuf;
 mod fractional_scale;
