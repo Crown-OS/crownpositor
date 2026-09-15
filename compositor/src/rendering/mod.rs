@@ -37,7 +37,7 @@ use config::Appearance;
 use crate::{
     rendering::{
         cursor::Cursor,
-        decorate::{Backdrop, TileDecorator},
+        decorate::{Backdrop, Shadow, TileDecorator},
         decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
         element::CrownElement,
     },
@@ -289,9 +289,22 @@ fn tile_elements<R, D>(
         );
     }
 
+    // A client that set its own corner radius through
+    // `crownos_background_effects` is asking to be clipped to it, so that wins
+    // for its surface — and for the glass behind it, which has to be cut from
+    // the same shape. The *frame's* radius is left alone: the titlebar is the
+    // compositor's, and a client does not get to restyle it.
+    let surface = blur::window_surface(tile.window());
+    let client_radius = surface
+        .as_ref()
+        .and_then(|surface| blur::surface_corner_radius(surface, scale.x));
+
     // Square where the titlebar covers them, so the two do not each round the
     // same corner and leave a notch between them.
-    let radii = corner_radii(radius, inset > 0);
+    let radii = match client_radius {
+        Some(radius) => [radius; 4],
+        None => corner_radii(radius, inset > 0),
+    };
 
     // `Window::render_elements` walks the surface tree and its popups, so popups
     // need no separate pass.
@@ -317,9 +330,17 @@ fn tile_elements<R, D>(
     // is where the surface's own origin lands, which is the space the client
     // expressed its blur region in; `clip` is both the mask the corners are cut
     // from and the bound the region is clipped to.
-    if let Some(surface) = blur::window_surface(tile.window()) {
+    if let Some(surface) = surface {
         backdrop_elements(
-            elements, renderer, decorator, &surface, clip.loc, scale, clip, radius, alpha,
+            elements,
+            renderer,
+            decorator,
+            &surface,
+            clip.loc,
+            scale,
+            clip,
+            client_radius.unwrap_or(radius),
+            alpha,
         );
     }
 
@@ -523,6 +544,7 @@ fn frame_backing<R, D>(
             geometry: sheet,
             mask: sheet,
             radius: outer,
+            glass: decorator.glass(style.scale),
             alpha,
         },
     ) {
@@ -730,6 +752,7 @@ fn menu_elements<R, D>(
                 geometry: frame,
                 mask: frame,
                 radius: style.radius,
+                glass: decorator.glass(style.scale),
                 alpha: 1.0,
             },
         )
@@ -803,6 +826,7 @@ fn snap_preview_elements<R, D>(
                 geometry,
                 mask: geometry,
                 radius: style.radius,
+                glass: decorator.glass(style.scale),
                 alpha: alpha * 0.85,
             },
         )
@@ -822,13 +846,19 @@ fn corner_radii(radius: f32, decorated: bool) -> [f32; 4] {
     [radius, top, radius, top]
 }
 
-/// Pushes the blurred glass a surface asked for through
-/// `ext-background-effect-v1`: one element per rectangle of its committed
-/// region, all masked by the same rounded rectangle.
+/// Pushes everything a surface asked the compositor to draw for it: the glass
+/// behind it and the shadow under it.
+///
+/// Two protocols land here. `crownos_background_effects` is the richer one —
+/// parametric shapes, tint, vibrancy, a refractive rim and a shadow — and wins
+/// where a surface has committed to it; `ext-background-effect-v1` is the
+/// portable one, a `wl_region` of blurred rectangles in the compositor's own
+/// material. A surface that uses neither costs the two lookups below.
 ///
 /// `origin` is where the surface's own `(0, 0)` lands, and `mask` is the
-/// rectangle the region is clipped to and the corners are cut from — a
-/// window's animated rect, or a layer surface's geometry.
+/// rectangle effects are clipped to and, for the portable protocol, the one the
+/// corners are cut from — a window's animated rect, or a layer surface's
+/// geometry.
 #[allow(clippy::too_many_arguments)]
 fn backdrop_elements<R, D>(
     elements: &mut Elements<R, D>,
@@ -851,11 +881,25 @@ fn backdrop_elements<R, D>(
         return;
     };
 
+    if let Some(effects) = blur::place_surface_effects(surface, origin, scale, mask) {
+        surface_effect_elements(
+            elements,
+            renderer,
+            decorator,
+            surface,
+            fingerprint,
+            effects,
+            alpha,
+        );
+        return;
+    }
+
     let mut rects = Vec::new();
     let Some(generation) = blur::place_blur_region(surface, origin, scale, mask, &mut rects) else {
         return;
     };
 
+    let glass = decorator.glass(scale.x);
     let (ids, commit) = blur::backdrop_slots(surface, rects.len(), fingerprint, generation);
     for (id, geometry) in std::iter::zip(ids, rects) {
         if let Some(backdrop) = decorator.backdrop(
@@ -866,10 +910,73 @@ fn backdrop_elements<R, D>(
                 geometry,
                 mask,
                 radius,
+                glass,
                 alpha,
             },
         ) {
             elements.push(CrownElement::Tile(Wrap::from(backdrop)));
+        }
+    }
+}
+
+/// The `crownos_background_effects` half of [`backdrop_elements`].
+///
+/// Glass first and shadows after: later in the list is further from the eye, so
+/// this is the order that puts the silhouette underneath the material it is
+/// cast by.
+fn surface_effect_elements<R, D>(
+    elements: &mut Elements<R, D>,
+    renderer: &mut R,
+    decorator: &mut D,
+    surface: &WlSurface,
+    fingerprint: u64,
+    effects: blur::SurfaceEffects,
+    alpha: f32,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Clone + 'static,
+    D: TileDecorator<R>,
+{
+    let (ids, commit) = blur::backdrop_slots(
+        surface,
+        effects.pieces.len(),
+        fingerprint,
+        effects.generation,
+    );
+    for (id, piece) in std::iter::zip(ids, &effects.pieces) {
+        if let Some(backdrop) = decorator.backdrop(
+            renderer,
+            Backdrop {
+                id,
+                commit,
+                geometry: piece.geometry,
+                mask: piece.mask,
+                radius: piece.radius,
+                glass: effects.glass,
+                alpha,
+            },
+        ) {
+            elements.push(CrownElement::Tile(Wrap::from(backdrop)));
+        }
+    }
+
+    let (ids, commit) = blur::shadow_slots(
+        surface,
+        effects.shadows.len(),
+        fingerprint,
+        effects.generation,
+    );
+    for (id, piece) in std::iter::zip(ids, effects.shadows) {
+        if let Some(shadow) = decorator.shadow(
+            renderer,
+            Shadow {
+                id,
+                commit,
+                piece,
+                alpha,
+            },
+        ) {
+            elements.push(CrownElement::Tile(Wrap::from(shadow)));
         }
     }
 }
@@ -895,15 +1002,35 @@ fn layer_elements<R, D>(
                 continue;
             };
             let location: Point<i32, Physical> = geometry.loc.to_physical_precise_round(scale);
+            let clip = Rectangle::new(location, geometry.size.to_physical_precise_round(scale));
+            let radius = blur::surface_corner_radius(surface.wl_surface(), scale.x);
             let layers: Vec<WaylandSurfaceRenderElement<R>> =
                 surface.render_elements(renderer, location, scale, 1.0);
-            elements.extend(layers.into_iter().map(CrownElement::Surface));
+
+            match radius {
+                // A panel that asked to be rounded is clipped to its own
+                // radius, which costs it the decorator's wrapper per element.
+                Some(radius) => {
+                    let size = (clip.size.w as f32, clip.size.h as f32);
+                    for layer in layers {
+                        let Some(cropped) = CropRenderElement::from_element(layer, scale, clip)
+                        else {
+                            continue;
+                        };
+                        if let Some(decorated) =
+                            decorator.decorate(renderer, cropped, size, [radius; 4])
+                        {
+                            elements.push(CrownElement::Tile(Wrap::from(decorated)));
+                        }
+                    }
+                }
+                // Nothing to round, so nothing to wrap: the surfaces go into
+                // the frame exactly as the client committed them.
+                None => elements.extend(layers.into_iter().map(CrownElement::Surface)),
+            }
 
             // Panels and notifications are what actually wants glass, so layer
-            // surfaces get the same treatment windows do. Square corners:
-            // nothing rounds a layer surface here, and the backdrop has to
-            // match what is drawn over it.
-            let clip = Rectangle::new(location, geometry.size.to_physical_precise_round(scale));
+            // surfaces get the same treatment windows do.
             backdrop_elements(
                 elements,
                 renderer,
@@ -912,7 +1039,7 @@ fn layer_elements<R, D>(
                 location,
                 scale,
                 clip,
-                0.0,
+                radius.unwrap_or(0.0),
                 1.0,
             );
         }

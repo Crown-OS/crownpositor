@@ -27,6 +27,7 @@ features = [
 config = { path = "../config" }
 protocols = { path = "../protocols" }
 crownos-config = { workspace = true }
+crownos-protocols = { workspace = true, features = ["server"] }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 calloop = { workspace = true }
@@ -53,9 +54,13 @@ wayland-protocols-plasma = { version = "0.3", default-features = false, features
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
 wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "client"] }
+crownos-protocols = { workspace = true, features = ["client"] }
 
 [[example]]
 name = "wlr_outputs"
 
 [[example]]
 name = "color_info"
+
+[[example]]
+name = "liquid_glass"

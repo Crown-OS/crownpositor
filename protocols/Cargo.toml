@@ -10,6 +10,7 @@ workspace = true
 features = ["wayland_frontend"]
 
 [dependencies]
+crownos-protocols = { workspace = true, features = ["server"] }
 tracing = { workspace = true }
 wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "server"] }
 wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }

@@ -5,10 +5,13 @@
 
 use std::{os::unix::process::CommandExt, process::Stdio};
 
-use smithay::utils::SERIAL_COUNTER;
+use smithay::{input::pointer::MotionEvent, utils::SERIAL_COUNTER};
 
 use config::{Config, Update};
-use protocols::background_effect::Capability as BackgroundEffectCapability;
+use protocols::{
+    background_effect::Capability as BackgroundEffectCapability,
+    crownos_background_effects::Capability as CrownosEffectCapability,
+};
 
 use crate::{
     animations::spring::SpringProfile,
@@ -142,6 +145,48 @@ impl State {
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
     }
 
+    /// The same reconcile for the pointer, for the changes no pointer event
+    /// comes with: a window mapping under a still cursor, a relayout, a
+    /// workspace switch. The surface under the cursor would otherwise never
+    /// hear `enter`, and everything addressed to the focus — scroll, and
+    /// gestures like pinch, which carry no motion of their own — would keep
+    /// going to whatever was under the cursor before.
+    ///
+    /// Compares the target first, so a dispatch that moved nothing sends
+    /// nothing. A grab owns the pointer outright and an open menu holds it for
+    /// as long as it is open, so neither is disturbed.
+    pub fn update_pointer_focus(&mut self) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+
+        let location = self.input.pointer_location;
+        if pointer.is_grabbed() || self.shell.menus.contains(location) {
+            return;
+        }
+
+        let under = self.shell.pointer_focus_under(location);
+        if pointer.current_focus().as_ref() == under.as_ref().map(|(target, _)| target) {
+            return;
+        }
+
+        self.track_frame_hover(
+            under
+                .as_ref()
+                .is_some_and(|(target, _)| target.is_decoration()),
+        );
+        pointer.motion(
+            self,
+            under,
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: self.wayland.clock.now().as_millis(),
+            },
+        );
+        pointer.frame(self);
+    }
+
     /// Window rules are deliberately not retro-applied: a window floated by hand
     /// must not be re-tiled because an unrelated rule was edited.
     pub fn apply_config(&mut self, new: Config) {
@@ -172,14 +217,28 @@ impl State {
     /// the config does — so clients are told, and a panel that was relying on
     /// glass can go back to painting its own background.
     pub fn sync_background_effect_capabilities(&mut self) {
-        let capabilities = if self.config.current.appearance.blur {
-            BackgroundEffectCapability::Blur
-        } else {
-            BackgroundEffectCapability::empty()
-        };
+        let blur = self.config.current.appearance.blur;
+
         self.wayland
             .background_effect_state
-            .set_capabilities(capabilities);
+            .set_capabilities(if blur {
+                BackgroundEffectCapability::Blur
+            } else {
+                BackgroundEffectCapability::empty()
+            });
+
+        // The corner radius, the rim and the shadow are geometry the renderer
+        // draws whether or not the blur pipeline exists, so only the blur
+        // itself follows the setting. The rim refracts the blurred backdrop, so
+        // it goes with it.
+        let mut crownos = CrownosEffectCapability::CornerRadius | CrownosEffectCapability::Shadow;
+        crownos.set(
+            CrownosEffectCapability::Blur | CrownosEffectCapability::Border,
+            blur,
+        );
+        self.wayland
+            .crownos_background_effects_state
+            .set_capabilities(crownos);
     }
 
     /// One watched key changed, so only the component that owns it re-runs.

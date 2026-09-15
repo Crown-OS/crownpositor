@@ -318,6 +318,7 @@ dependencies = [
  "config",
  "cosmic-text",
  "crownos-config",
+ "crownos-protocols",
  "parking_lot",
  "protocols",
  "regex",
@@ -464,6 +465,17 @@ dependencies = [
  "notify",
  "ron",
  "serde",
+]
+
+[[package]]
+name = "crownos-protocols"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]
@@ -1777,6 +1789,7 @@ dependencies = [
 name = "protocols"
 version = "0.1.0"
 dependencies = [
+ "crownos-protocols",
  "smithay",
  "tracing",
  "wayland-protocols",

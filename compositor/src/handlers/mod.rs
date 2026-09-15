@@ -2,6 +2,7 @@ mod appmenu;
 mod background_effect;
 mod color_management;
 mod compositor;
+mod crownos_background_effects;
 mod dmabuf;
 mod drm_lease;
 mod fractional_scale;

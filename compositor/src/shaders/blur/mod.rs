@@ -17,6 +17,8 @@ mod kawase;
 
 pub use kawase::KawaseProgram;
 
+use crate::rendering::blur::Glass;
+
 use smithay::{
     backend::renderer::gles::{
         Capability, GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, ffi,
@@ -39,7 +41,7 @@ pub struct BlurShaders {
 }
 
 impl BlurShaders {
-    fn finish_names() -> [UniformName<'static>; 8] {
+    fn finish_names() -> [UniformName<'static>; 12] {
         [
             UniformName::new("backdrop_origin", UniformType::_2f),
             UniformName::new("backdrop_size", UniformType::_2f),
@@ -49,6 +51,10 @@ impl BlurShaders {
             UniformName::new("offset", UniformType::_1f),
             UniformName::new("corner_radius", UniformType::_1f),
             UniformName::new("noise", UniformType::_1f),
+            UniformName::new("glass_tint", UniformType::_4f),
+            UniformName::new("saturation", UniformType::_1f),
+            UniformName::new("rim", UniformType::_1f),
+            UniformName::new("light", UniformType::_2f),
         ]
     }
 
@@ -104,11 +110,15 @@ impl BlurShaders {
             .cloned()
     }
 
-    /// Uniforms for one backdrop rectangle.
+    /// Uniforms for one piece of glass.
     ///
     /// `backdrop` and `mask` are both in framebuffer pixels, which is the space
     /// the shader reads `gl_FragCoord` in; `half_pixel` is half a pixel of the
-    /// pyramid's top level, the source of the upsample this pass performs.
+    /// pyramid's top level, the source of the upsample this pass performs; and
+    /// `light` is the framebuffer-space direction the screen's upper left lies
+    /// in, which is the only thing the material needs to know about the
+    /// output's transform.
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_uniforms(
         backdrop: Rectangle<i32, Physical>,
         mask: Rectangle<i32, Physical>,
@@ -116,7 +126,9 @@ impl BlurShaders {
         offset: f32,
         corner_radius: f32,
         noise: f32,
-    ) -> [Uniform<'static>; 8] {
+        glass: Glass,
+        light: (f32, f32),
+    ) -> [Uniform<'static>; 12] {
         [
             Uniform::new(
                 "backdrop_origin",
@@ -132,6 +144,10 @@ impl BlurShaders {
             Uniform::new("offset", offset),
             Uniform::new("corner_radius", corner_radius),
             Uniform::new("noise", noise),
+            Uniform::new("glass_tint", glass.tint),
+            Uniform::new("saturation", glass.saturation),
+            Uniform::new("rim", glass.rim),
+            Uniform::new("light", light),
         ]
     }
 }

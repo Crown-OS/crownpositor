@@ -9,10 +9,12 @@
 
 pub mod label;
 pub mod palette;
+pub mod shadow;
 pub mod title_bar;
 pub mod window;
 
 pub use label::TextRenderer;
 pub use palette::FramePalette;
+pub use shadow::GlassShadow;
 pub use title_bar::{TitleBar, TitleBarParams};
 pub use window::{Border, WindowDecoration};

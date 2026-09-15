@@ -47,6 +47,7 @@ pub fn run() -> anyhow::Result<()> {
             // goes away moves focus with no input event to hang the decision
             // off, so the reconcile belongs here rather than at every mutation.
             state.update_keyboard_focus();
+            state.update_pointer_focus();
             state.shell.popups.cleanup();
             // Frames queued during dispatch render here, after the burst of
             // events that requested them has been fully drained.

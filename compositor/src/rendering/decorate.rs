@@ -6,7 +6,10 @@
 //! decorator, and gets whatever effects its renderer supports — [`PassThrough`]
 //! if none.
 
-use crate::rendering::decoration::{Border, TitleBarParams};
+use crate::rendering::{
+    blur::{Glass, ShadowPiece},
+    decoration::{Border, TitleBarParams},
+};
 
 use smithay::{
     backend::renderer::{
@@ -22,11 +25,11 @@ use smithay::{
 /// A tile's surfaces, already clipped to the window's animated rect.
 pub type Cropped<R> = CropRenderElement<WaylandSurfaceRenderElement<R>>;
 
-/// One rectangle of blurred glass to draw behind a surface.
+/// One piece of blurred glass to draw behind a surface.
 ///
-/// A rectangle rather than a whole window because `ext-background-effect-v1`
-/// lets a client blur *part* of itself; a surface that asks for a region with
-/// a hole in it produces several of these, all sharing one mask.
+/// A piece rather than a whole window because both blur protocols let a client
+/// blur *part* of itself: a `wl_region` with a hole in it, or a shape built out
+/// of several primitives, produces several of these.
 #[derive(Debug, Clone)]
 pub struct Backdrop {
     /// Stable across frames for the same piece of the same surface, or the
@@ -43,6 +46,19 @@ pub struct Backdrop {
     /// growing its own four corners.
     pub mask: Rectangle<i32, Physical>,
     pub radius: f32,
+    /// What the glass is made of: its tint, its vibrancy and the width of the
+    /// refractive rim along its edge.
+    pub glass: Glass,
+    pub alpha: f32,
+}
+
+/// One blurred silhouette to draw underneath a surface, and the identity the
+/// damage tracker knows it by.
+#[derive(Debug, Clone)]
+pub struct Shadow {
+    pub id: Id,
+    pub commit: CommitCounter,
+    pub piece: ShadowPiece,
     pub alpha: f32,
 }
 
@@ -74,6 +90,13 @@ where
         None
     }
 
+    /// One blurred silhouette cast under a surface that asked for a shadow.
+    /// `None` — the default — leaves the surface without one.
+    fn shadow(&mut self, renderer: &mut R, shadow: Shadow) -> Option<Self::Element> {
+        let _ = (renderer, shadow);
+        None
+    }
+
     /// A floating window's titlebar: its tint, its highlight and its three
     /// controls, generated from geometry in one pass. `None` — the default —
     /// leaves the window undecorated, which is what a renderer with no custom
@@ -88,6 +111,15 @@ where
     fn border(&mut self, renderer: &mut R, border: Border) -> Option<Self::Element> {
         let _ = (renderer, border);
         None
+    }
+
+    /// The material this decorator makes the compositor's own glass out of —
+    /// window frames, menus, snap previews — at one output's scale. A surface
+    /// that asked for its own through `crownos_background_effects` gets that
+    /// instead, and never goes through here.
+    fn glass(&self, scale: f64) -> Glass {
+        let _ = scale;
+        Glass::default()
     }
 
     /// Identifies the settings this decorator would draw backdrops with,

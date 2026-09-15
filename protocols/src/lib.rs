@@ -12,6 +12,7 @@
 pub mod appmenu;
 pub mod background_effect;
 pub mod color_management;
+pub mod crownos_background_effects;
 pub mod gamma_control;
 pub mod output_management;
 pub mod output_power;

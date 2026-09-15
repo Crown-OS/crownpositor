@@ -17,7 +17,7 @@ use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
         blur::{
-            BlurConfig,
+            BlurConfig, Glass,
             cache::{BlurSession, Pyramid},
         },
         decorate::Backdrop,
@@ -37,6 +37,7 @@ pub struct BlurBackdrop {
     geometry: Rectangle<i32, Physical>,
     mask: Rectangle<i32, Physical>,
     radius: f32,
+    glass: Glass,
     alpha: f32,
     config: BlurConfig,
     pyramid: Rc<Pyramid>,
@@ -74,6 +75,7 @@ impl BlurBackdrop {
             geometry,
             mask: params.mask,
             radius: params.radius,
+            glass: params.glass,
             alpha: params.alpha,
             config: session.config,
             pyramid,
@@ -148,7 +150,7 @@ impl BlurBackdrop {
         projection: [f32; 9],
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-    ) -> Option<[Uniform<'static>; 8]> {
+    ) -> Option<[Uniform<'static>; 12]> {
         let (mut viewport, mut previous) = ([0; 4], 0);
         unsafe {
             gl.GetIntegerv(ffi::VIEWPORT, viewport.as_mut_ptr());
@@ -238,6 +240,11 @@ impl BlurBackdrop {
             offset,
             self.radius,
             self.config.noise,
+            self.glass,
+            // Where the screen's upper left lies, in the framebuffer's own
+            // axes. The material lights itself from there, and this is the one
+            // place a rotated or flipped output has to be accounted for.
+            space.direction((-1.0, -1.0)),
         ))
     }
 }
@@ -265,6 +272,21 @@ impl FramebufferSpace {
             ((ndc.0 + 1.0) * 0.5 * self.viewport.w as f32).round() as i32,
             ((ndc.1 + 1.0) * 0.5 * self.viewport.h as f32).round() as i32,
         ))
+    }
+
+    /// A direction in output-local coordinates, as a unit vector in
+    /// framebuffer pixels. Only the projection's linear part is involved: a
+    /// direction has no origin to translate.
+    fn direction(&self, delta: (f32, f32)) -> (f32, f32) {
+        let matrix = &self.projection;
+        let x = (matrix[0] * delta.0 + matrix[3] * delta.1) * self.viewport.w as f32;
+        let y = (matrix[1] * delta.0 + matrix[4] * delta.1) * self.viewport.h as f32;
+        let length = x.hypot(y);
+        if length > 0.0 {
+            (x / length, y / length)
+        } else {
+            (0.0, 0.0)
+        }
     }
 
     fn rect(&self, rect: Rectangle<i32, Physical>) -> Rectangle<i32, Physical> {

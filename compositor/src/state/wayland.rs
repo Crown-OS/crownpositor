@@ -38,8 +38,12 @@ use smithay::{
 
 use protocols::{
     appmenu::AppmenuState,
-    color_management::ColorManagementState,
     background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
+    color_management::ColorManagementState,
+    crownos_background_effects::{
+        BackgroundEffectsState as CrownosBackgroundEffectsState,
+        Capability as CrownosEffectCapability,
+    },
     gamma_control::GammaControlState,
     output_management::OutputManagementState,
     output_power::OutputPowerState,
@@ -54,6 +58,10 @@ pub struct WaylandState {
     /// colours, and reading an output's is not sensitive.
     pub color_management_state: ColorManagementState,
     pub compositor_state: CompositorState,
+    /// `crownos_background_effects`. The richer, CrownOS-only counterpart of
+    /// `ext-background-effect-v1`: parametric shapes, tint, vibrancy, a
+    /// refractive rim and a drop shadow, for the shell and the system apps.
+    pub crownos_background_effects_state: CrownosBackgroundEffectsState,
     // pub corner_radius_state: CornerRadiusState,
     pub data_device_state: DataDeviceState,
     pub dmabuf_state: DmabufState,
@@ -143,6 +151,10 @@ impl WaylandState {
             ),
             color_management_state: ColorManagementState::new::<State, _>(display, |_| true),
             compositor_state: CompositorState::new_v6::<State>(display),
+            crownos_background_effects_state: CrownosBackgroundEffectsState::new::<State>(
+                display,
+                CrownosEffectCapability::all(),
+            ),
             data_device_state: DataDeviceState::new::<State>(display),
             // TODO: `create_global` once the render node's formats are known.
             dmabuf_state: DmabufState::new(),

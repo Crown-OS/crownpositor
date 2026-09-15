@@ -24,9 +24,9 @@ use smithay::{
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
-        blur::{BlurBackdrop, BlurSession},
-        decorate::{Backdrop, Cropped, TileDecorator},
-        decoration::{Border, TitleBar, TitleBarParams, WindowDecoration},
+        blur::{BlurBackdrop, BlurSession, Glass},
+        decorate::{Backdrop, Cropped, Shadow, TileDecorator},
+        decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
     },
     shaders::rounded_corner::RoundedCornerShader,
 };
@@ -193,6 +193,7 @@ pub enum Decorated<E> {
     Backdrop(BlurBackdrop),
     TitleBar(TitleBar),
     Border(WindowDecoration),
+    Shadow(GlassShadow),
 }
 
 impl<E: Element> Element for Decorated<E> {
@@ -202,6 +203,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.id(),
             Self::TitleBar(bar) => bar.id(),
             Self::Border(border) => border.id(),
+            Self::Shadow(shadow) => shadow.id(),
         }
     }
 
@@ -211,6 +213,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.current_commit(),
             Self::TitleBar(bar) => bar.current_commit(),
             Self::Border(border) => border.current_commit(),
+            Self::Shadow(shadow) => shadow.current_commit(),
         }
     }
 
@@ -220,6 +223,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.src(),
             Self::TitleBar(bar) => bar.src(),
             Self::Border(border) => border.src(),
+            Self::Shadow(shadow) => shadow.src(),
         }
     }
 
@@ -229,6 +233,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.geometry(scale),
             Self::TitleBar(bar) => bar.geometry(scale),
             Self::Border(border) => border.geometry(scale),
+            Self::Shadow(shadow) => shadow.geometry(scale),
         }
     }
 
@@ -238,6 +243,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.location(scale),
             Self::TitleBar(bar) => bar.location(scale),
             Self::Border(border) => border.location(scale),
+            Self::Shadow(shadow) => shadow.location(scale),
         }
     }
 
@@ -247,6 +253,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.transform(),
             Self::TitleBar(bar) => bar.transform(),
             Self::Border(border) => border.transform(),
+            Self::Shadow(shadow) => shadow.transform(),
         }
     }
 
@@ -260,6 +267,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.damage_since(scale, commit),
             Self::TitleBar(bar) => bar.damage_since(scale, commit),
             Self::Border(border) => border.damage_since(scale, commit),
+            Self::Shadow(shadow) => shadow.damage_since(scale, commit),
         }
     }
 
@@ -269,6 +277,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.opaque_regions(scale),
             Self::TitleBar(bar) => bar.opaque_regions(scale),
             Self::Border(border) => border.opaque_regions(scale),
+            Self::Shadow(shadow) => shadow.opaque_regions(scale),
         }
     }
 
@@ -278,6 +287,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.alpha(),
             Self::TitleBar(bar) => bar.alpha(),
             Self::Border(border) => border.alpha(),
+            Self::Shadow(shadow) => shadow.alpha(),
         }
     }
 
@@ -287,6 +297,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::Backdrop(backdrop) => backdrop.kind(),
             Self::TitleBar(bar) => bar.kind(),
             Self::Border(border) => border.kind(),
+            Self::Shadow(shadow) => shadow.kind(),
         }
     }
 }
@@ -316,6 +327,9 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
             Self::Border(border) => {
                 RenderElement::<GlesRenderer>::draw(border, frame, src, dst, damage, opaque_regions)
             }
+            Self::Shadow(shadow) => {
+                RenderElement::<GlesRenderer>::draw(shadow, frame, src, dst, damage, opaque_regions)
+            }
         }
     }
 
@@ -326,6 +340,9 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
             Self::TitleBar(bar) => RenderElement::<GlesRenderer>::underlying_storage(bar, renderer),
             Self::Border(border) => {
                 RenderElement::<GlesRenderer>::underlying_storage(border, renderer)
+            }
+            Self::Shadow(shadow) => {
+                RenderElement::<GlesRenderer>::underlying_storage(shadow, renderer)
             }
         }
     }
@@ -369,6 +386,14 @@ where
                 damage,
                 opaque_regions,
             ),
+            Self::Shadow(shadow) => RenderElement::<KmsRenderer<'render>>::draw(
+                shadow,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+            ),
         }
     }
 
@@ -384,6 +409,9 @@ where
             }
             Self::Border(border) => {
                 RenderElement::<KmsRenderer<'render>>::underlying_storage(border, renderer)
+            }
+            Self::Shadow(shadow) => {
+                RenderElement::<KmsRenderer<'render>>::underlying_storage(shadow, renderer)
             }
         }
     }
@@ -428,6 +456,12 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
         self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }
 
+    fn glass(&self, scale: f64) -> Glass {
+        self.blur
+            .as_ref()
+            .map_or_else(Glass::default, |blur| blur.config.glass(scale))
+    }
+
     fn backdrop(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -435,6 +469,10 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
     ) -> Option<Self::Element> {
         let session = self.blur.as_mut()?;
         BlurBackdrop::new(renderer, session, backdrop).map(Decorated::Backdrop)
+    }
+
+    fn shadow(&mut self, renderer: &mut GlesRenderer, shadow: Shadow) -> Option<Self::Element> {
+        GlassShadow::new(renderer, shadow).map(Decorated::Shadow)
     }
 
     fn title_bar(
@@ -482,6 +520,12 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
         self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }
 
+    fn glass(&self, scale: f64) -> Glass {
+        self.blur
+            .as_ref()
+            .map_or_else(Glass::default, |blur| blur.config.glass(scale))
+    }
+
     fn backdrop(
         &mut self,
         renderer: &mut KmsRenderer<'render>,
@@ -489,6 +533,14 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
     ) -> Option<Self::Element> {
         let session = self.blur.as_mut()?;
         BlurBackdrop::new(renderer.as_mut(), session, backdrop).map(Decorated::Backdrop)
+    }
+
+    fn shadow(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        shadow: Shadow,
+    ) -> Option<Self::Element> {
+        GlassShadow::new(renderer.as_mut(), shadow).map(Decorated::Shadow)
     }
 
     fn title_bar(
