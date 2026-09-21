@@ -54,7 +54,6 @@ impl TabletSeatHandler for State {}
 
 delegate_seat!(State);
 delegate_cursor_shape!(State);
-// Swipe and hold are advertised along with pinch — one global covers all three
-// — but only pinch is ever sent: swipes are spent on workspace switching before
-// a client could see them.
+// One global covers all three gestures. Pinch and hold are forwarded; swipes
+// are spent on workspace switching before a client could see them.
 delegate_pointer_gestures!(State);

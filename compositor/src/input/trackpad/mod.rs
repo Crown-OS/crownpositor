@@ -10,11 +10,12 @@
 //! [`Action`](crate::input::shortcuts::action::Action), down the same dispatch
 //! path as a keyboard chord.
 //!
-//! Pinch is the exception: the compositor keeps none of it. It goes straight to
-//! the surface under the pointer over `wp_pointer_gestures`, which is what lets
-//! a browser zoom its page and a map application its map — the same division of
-//! labour as scrolling, where the compositor routes and the client decides what
-//! the motion means.
+//! Pinch and hold are the exception: the compositor keeps none of either. They
+//! go straight to the surface under the pointer over `wp_pointer_gestures`,
+//! which is what lets a browser zoom its page, a map application its map, and a
+//! terminal stop a kinetic scroll under a resting pair of fingers — the same
+//! division of labour as scrolling, where the compositor routes and the client
+//! decides what the motion means.
 
 pub mod gestures;
 
@@ -29,6 +30,7 @@ use smithay::{
         libinput::LibinputInputBackend,
     },
     input::pointer::{
+        GestureHoldBeginEvent as HoldBegin, GestureHoldEndEvent as HoldEnd,
         GesturePinchBeginEvent as PinchBegin, GesturePinchEndEvent as PinchEnd,
         GesturePinchUpdateEvent as PinchUpdate,
     },
@@ -189,6 +191,45 @@ impl State {
         pointer.gesture_pinch_end(
             self,
             &PinchEnd {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: event.time_msec(),
+                cancelled: event.cancelled(),
+            },
+        );
+    }
+
+    /// Hold goes to the client too, and for the same reason.
+    ///
+    /// A hold is fingers resting on the pad without travelling, which libinput
+    /// reports from one finger up. The compositor has nothing to spend it on,
+    /// but a client with momentum on screen does: the protocol exists so that
+    /// resting a hand stops a kinetic scroll where it is rather than letting it
+    /// coast. Withholding it leaves such a client waiting for an end it was
+    /// promised, so both halves are forwarded even though neither is acted on
+    /// here.
+    pub(super) fn on_hold_begin<I: InputBackend>(&mut self, event: I::GestureHoldBeginEvent) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+
+        pointer.gesture_hold_begin(
+            self,
+            &HoldBegin {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: event.time_msec(),
+                fingers: event.fingers(),
+            },
+        );
+    }
+
+    pub(super) fn on_hold_end<I: InputBackend>(&mut self, event: I::GestureHoldEndEvent) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+
+        pointer.gesture_hold_end(
+            self,
+            &HoldEnd {
                 serial: SERIAL_COUNTER.next_serial(),
                 time: event.time_msec(),
                 cancelled: event.cancelled(),

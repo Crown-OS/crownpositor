@@ -33,7 +33,11 @@ impl State {
             InputEvent::GesturePinchBegin { event, .. } => self.on_pinch_begin::<I>(event),
             InputEvent::GesturePinchUpdate { event, .. } => self.on_pinch_update::<I>(event),
             InputEvent::GesturePinchEnd { event, .. } => self.on_pinch_end::<I>(event),
-            // TODO: hold, touch, tablet and device hotplug.
+            // Hold is a client's cue to stop a kinetic scroll under a resting
+            // hand, so it takes the same route out.
+            InputEvent::GestureHoldBegin { event, .. } => self.on_hold_begin::<I>(event),
+            InputEvent::GestureHoldEnd { event, .. } => self.on_hold_end::<I>(event),
+            // TODO: touch, tablet and device hotplug.
             _ => {}
         }
     }
