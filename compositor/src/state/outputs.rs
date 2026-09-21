@@ -78,16 +78,18 @@ struct Current {
     position: Point<i32, Logical>,
     transform: Transform,
     scale: f64,
+    adaptive_sync: bool,
 }
 
 impl Current {
-    fn from_monitor(config: &OutputConfig) -> Self {
+    fn from_monitor(config: &OutputConfig, adaptive_sync: bool) -> Self {
         Self {
             mode: config.mode,
             modes: config.modes.clone(),
             position: config.position,
             transform: config.transform,
             scale: config.scale.fractional_scale(),
+            adaptive_sync,
         }
     }
 
@@ -108,6 +110,7 @@ impl Current {
             position: (0, 0).into(),
             transform: Transform::Normal,
             scale: 1.0,
+            adaptive_sync: false,
         }
     }
 }
@@ -155,9 +158,14 @@ impl State {
             .iter()
             .map(|monitor| {
                 let output = monitor.output();
+                let adaptive_sync = if self.backend.vrr_enabled(output) {
+                    AdaptiveSync::Enabled
+                } else {
+                    AdaptiveSync::Disabled
+                };
                 head_snapshot(
                     monitor,
-                    AdaptiveSync::Disabled,
+                    adaptive_sync,
                     vrr_support(self.backend.vrr_support(output)),
                 )
             })
@@ -175,12 +183,19 @@ impl State {
         Output::from_resource(wl_output).filter(|output| self.shell.contains_output(output))
     }
 
-    /// Re-advertises the head list, sending only what changed.
+    /// Everything that has to follow an output change: the head list clients
+    /// see, and the gamma ramps the hardware holds.
+    ///
+    /// The protocol half sends only what actually changed. The gamma half is
+    /// here rather than at each call site because a modeset clears the CRTC's
+    /// lookup table, so an output that has just been reconfigured has lost
+    /// whatever night light put there.
     pub fn refresh_output_heads(&mut self) {
         let heads = self.output_head_snapshots();
         self.wayland
             .output_management_state
             .set_heads::<State>(heads);
+        self.apply_display_gamma();
     }
 
     /// The one door for changing outputs: the protocol, a config reload and
@@ -406,7 +421,9 @@ impl State {
             .iter()
             .map(|(id, config)| {
                 if let Some(monitor) = self.shell.monitor_by_name(id.as_str()) {
-                    return resolve_head(id, config, &Current::from_monitor(monitor.config()));
+                    let vrr = self.backend.vrr_enabled(monitor.output());
+                    let current = Current::from_monitor(monitor.config(), vrr);
+                    return resolve_head(id, config, &current);
                 }
                 let head = disabled
                     .iter()
@@ -521,7 +538,7 @@ fn resolve_head(
         position: position.unwrap_or(current.position),
         transform: transform.unwrap_or(current.transform),
         scale: scale.unwrap_or(current.scale),
-        adaptive_sync: adaptive_sync.unwrap_or(false),
+        adaptive_sync: adaptive_sync.unwrap_or(current.adaptive_sync),
     })
 }
 

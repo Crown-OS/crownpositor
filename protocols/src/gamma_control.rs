@@ -101,12 +101,19 @@ impl GammaControlState {
     }
 
     /// Tells whoever holds this output's gamma that they no longer do.
+    pub fn revoke(&mut self, output: &WlOutput) {
+        self.revoke_matching(|held| held == output);
+    }
+
+    /// The same, for every control whose output `matches`.
     ///
     /// The compositor calls this when it takes gamma back for itself — its own
-    /// night-light setting outranks a client's.
-    pub fn revoke(&mut self, output: &WlOutput) {
-        self.controls.retain(|(owned, control)| {
-            if owned != output {
+    /// night-light setting outranks a client's. It has to be a predicate
+    /// rather than a `WlOutput`: one monitor is a `wl_output` *per client*,
+    /// and the compositor is taking the monitor, not one client's view of it.
+    pub fn revoke_matching(&mut self, mut matches: impl FnMut(&WlOutput) -> bool) {
+        self.controls.retain(|(output, control)| {
+            if !matches(output) {
                 return true;
             }
             fail(control);

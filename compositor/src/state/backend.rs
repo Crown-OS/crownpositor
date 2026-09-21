@@ -137,6 +137,18 @@ impl BackendState {
         }
     }
 
+    /// Whether adaptive sync is on for this output right now.
+    ///
+    /// Asked when the head list is built, because `zwlr_output_head_v1` sends
+    /// the *state* and a stale one makes a settings panel's toggle spring
+    /// back the moment the change it just applied is re-advertised.
+    pub fn vrr_enabled(&self, output: &Output) -> bool {
+        match self {
+            Self::Unset | Self::Winit(_) => false,
+            Self::Kms(kms) => reconfigure::vrr_enabled(kms, output),
+        }
+    }
+
     /// Every head the backend knows that is *not* currently an output.
     ///
     /// A monitor the user switched off has no `Monitor` in the shell — that is

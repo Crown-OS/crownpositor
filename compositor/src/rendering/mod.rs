@@ -19,12 +19,12 @@ pub mod rounded;
 
 use smithay::{
     backend::renderer::{
-        ImportAll, ImportMem, Renderer,
         element::{
-            AsRenderElements, Kind, Wrap, memory::MemoryRenderBufferRenderElement,
-            surface::WaylandSurfaceRenderElement, utils::CropRenderElement,
+            memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
+            utils::CropRenderElement, AsRenderElements, Element, Kind, Wrap,
         },
         utils::CommitCounter,
+        ImportAll, ImportMem, Renderer,
     },
     desktop::layer_map_for_output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -38,14 +38,14 @@ use crate::{
     rendering::{
         cursor::Cursor,
         decorate::{Backdrop, Shadow, TileDecorator},
-        decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
+        decoration::{window, Border, FramePalette, TextRenderer, TitleBarParams},
         element::CrownElement,
     },
     shell::{
-        Shell,
         decoration::{Control, TitleBarLayout},
         monitor::Monitor,
         tile::Tile,
+        Shell,
     },
     utils::id::WindowId,
 };
@@ -204,6 +204,7 @@ where
                 // Square corners and no frame: a fullscreen window covers its
                 // page edge to edge, so rounding it would cut four notches out
                 // of the display.
+
                 tile_elements(
                     &mut elements,
                     shell,
@@ -317,6 +318,11 @@ fn tile_elements<R, D>(
         // still the *old* size — so without the clip it bleeds over its
         // neighbour. `from_element` returns `None` when the element falls
         // entirely outside, which is exactly what should not be drawn.
+        // if shell.is_animating() {
+        //     let Some(surface) =  else {
+        //         continue;
+        //     }
+        // }
         let Some(cropped) = CropRenderElement::from_element(surface, scale, clip) else {
             continue;
         };

@@ -3,6 +3,7 @@ mod backend;
 mod client;
 mod common;
 mod config;
+mod display;
 mod input;
 pub mod outputs;
 mod wayland;
@@ -12,7 +13,7 @@ use smithay::utils::{Logical, Point};
 
 pub use crate::state::{
     backend::BackendState, client::ClientState, common::CommonState, config::ConfigState,
-    input::InputState, wayland::WaylandState,
+    display::DisplayGamma, input::InputState, wayland::WaylandState,
 };
 use crate::{
     animations::spring::Clock, rendering::decoration::TextRenderer, shell::Shell,
@@ -26,6 +27,9 @@ pub struct State {
     pub shell: Shell,
     pub input: InputState,
     pub config: ConfigState,
+    /// Which outputs the compositor's own gamma ramps are programmed on.
+    /// See [`crate::state::display`].
+    pub display_gamma: DisplayGamma,
     pub xwayland: Xwayland,
     /// Drives the springs. Owned here because it is per-compositor, not
     /// per-output — every output steps by the same wall-clock delta.
@@ -82,6 +86,7 @@ impl State {
             shell,
             input,
             config,
+            display_gamma: DisplayGamma::default(),
             xwayland,
             clock: Clock::new(),
             text: TextRenderer::new(),

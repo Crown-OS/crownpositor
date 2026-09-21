@@ -15,7 +15,7 @@ use wayland_protocols_wlr::output_management::v1::server::{
 };
 use wayland_server::{Dispatch, DisplayHandle, Resource};
 
-use super::{AdaptiveSync, HeadId, HeadSnapshot, ModeSnapshot};
+use super::{AdaptiveSync, HeadId, HeadSnapshot, ModeSnapshot, VrrSupport};
 
 /// User data of a `zwlr_output_head_v1`.
 #[derive(Debug)]
@@ -25,14 +25,13 @@ pub struct HeadData {
 
 /// User data of a `zwlr_output_mode_v1`.
 ///
-/// Carries the mode itself so `set_mode` need not index back through a
-/// snapshot that may already have moved on, and so a mode object that outlived
-/// its head is recognisable rather than silently resolving to the wrong mode.
+/// The head is what `set_mode` checks the mode belongs to, and the index is
+/// what it resolves to — object identity alone would not survive
+/// [`rebuild_modes`], which reuses objects positionally.
 #[derive(Debug)]
 pub struct ModeData {
     pub head: HeadId,
     pub index: usize,
-    pub mode: ModeSnapshot,
 }
 
 pub struct ManagerInstance {
@@ -50,8 +49,6 @@ pub struct HeadInstance {
 mod since {
     /// `make`, `model`, `serial_number`.
     pub const IDENTITY: u32 = 2;
-    /// `zwlr_output_head_v1.release` and `zwlr_output_mode_v1.release`.
-    pub const RELEASE: u32 = 3;
     /// `adaptive_sync`.
     pub const ADAPTIVE_SYNC: u32 = 4;
 }
@@ -88,16 +85,17 @@ pub fn apply_diff<D: HeadDispatch>(
     new: &[HeadSnapshot],
 ) {
     for instance in instances {
-        // A head that is gone is finished first, so its id is free before an
-        // identically named head could be created for a replug.
+        // A head that is gone is finished and dropped in the same breath. The
+        // entry cannot be kept to wait for the client's `release`: the lookup
+        // below is by id, so a monitor replugged into the same connector would
+        // find the dead object, be updated through it, and never reach the
+        // client as a new head.
         instance.heads.retain_mut(|head| {
             if new.iter().any(|snapshot| snapshot.id == head.id) {
                 return true;
             }
             finish_head(head);
-            // Below v3 the client cannot tell us it is done with the object,
-            // so there is no release to wait for and the entry goes now.
-            head.obj.version() >= since::RELEASE
+            false
         });
 
         for snapshot in new {
@@ -188,7 +186,6 @@ fn create_mode<D: HeadDispatch>(
             ModeData {
                 head: snapshot.id.clone(),
                 index,
-                mode,
             },
         )
         .ok()?;
@@ -236,7 +233,15 @@ fn update_head<D: HeadDispatch>(
         send_state(head, snapshot);
     }
 
-    if previous.is_none_or(|previous| previous.adaptive_sync != snapshot.adaptive_sync) {
+    // Not just the value: the event is suppressed entirely while a head is
+    // off and while the connector cannot do VRR, so a head coming back on
+    // with an unchanged value still owes the client an event.
+    let sync_changed = previous.is_none_or(|previous| {
+        previous.adaptive_sync != snapshot.adaptive_sync
+            || previous.enabled != snapshot.enabled
+            || previous.vrr_support != snapshot.vrr_support
+    });
+    if sync_changed {
         send_adaptive_sync(head, snapshot);
     }
 }
@@ -288,8 +293,16 @@ fn send_state(head: &HeadInstance, snapshot: &HeadSnapshot) {
     head.obj.scale(snapshot.scale);
 }
 
+/// The adaptive-sync state, and — by its absence — whether the head has one.
+///
+/// The protocol has no event for *capability*, only for state, so a client
+/// that wants to know whether to offer the control at all has nothing to read
+/// but whether this event ever arrives. Sending `disabled` for a connector
+/// that cannot do VRR would therefore advertise a control whose every use is
+/// refused, so a head with no support is left silent.
 fn send_adaptive_sync(head: &HeadInstance, snapshot: &HeadSnapshot) {
-    if head.obj.version() < since::ADAPTIVE_SYNC || !snapshot.enabled {
+    let unsupported = snapshot.vrr_support == VrrSupport::Unsupported;
+    if head.obj.version() < since::ADAPTIVE_SYNC || !snapshot.enabled || unsupported {
         return;
     }
 

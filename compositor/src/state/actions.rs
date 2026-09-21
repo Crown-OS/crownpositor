@@ -281,6 +281,10 @@ impl State {
                 config.appearance = appearance;
                 self.sync_background_effect_capabilities();
             }
+            Update::Display(display) => {
+                config.display = display;
+                self.apply_display_gamma();
+            }
         }
 
         self.queue_redraw();

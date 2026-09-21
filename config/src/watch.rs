@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crownos_config::{
-    Appearance, Key, Subscription,
+    Appearance, Display, Key, Subscription,
     schema::{Binding, OutputLayout, OutputSetting, WorkspaceMode, compositor, keybinds},
     subscribe_key, subscribe_typed,
 };
@@ -27,6 +27,7 @@ pub enum Update {
     WindowRules(WindowRules),
     CustomKeybinds(Vec<Binding>),
     Appearance(Appearance),
+    Display(Display),
 }
 
 /// The live subscriptions. Dropping it stops every one of them.
@@ -56,6 +57,7 @@ impl Watch {
                 }),
                 key(&sink, keybinds::CustomKeybinds, Update::CustomKeybinds),
                 section(&sink, Appearance::SECTION, Update::Appearance),
+                section(&sink, Display::SECTION, Update::Display),
             ],
         }
     }

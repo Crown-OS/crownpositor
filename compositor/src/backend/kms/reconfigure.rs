@@ -85,6 +85,15 @@ pub fn set_mode(kms: &mut KmsState, output: &Output, mode: Mode) -> anyhow::Resu
     Ok(())
 }
 
+/// Whether adaptive sync is on for this output right now.
+pub fn vrr_enabled(kms: &KmsState, output: &Output) -> bool {
+    kms.devices
+        .values()
+        .flat_map(|device| device.surfaces.values())
+        .find(|surface| surface.output == *output)
+        .is_some_and(|surface| surface.compositor.vrr_enabled())
+}
+
 /// Turns adaptive sync on or off.
 pub fn set_vrr(kms: &mut KmsState, output: &Output, enabled: bool) -> anyhow::Result<()> {
     let Some(surface) = surface_mut(kms, output) else {

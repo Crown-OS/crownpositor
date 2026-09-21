@@ -16,13 +16,13 @@ use std::{collections::HashMap, time::Instant};
 
 use smithay::{
     desktop::{
-        LayerSurface, PopupManager, Window, WindowSurfaceType, layer_map_for_output,
-        space::SpaceElement,
+        layer_map_for_output, space::SpaceElement, LayerSurface, PopupManager, Window,
+        WindowSurfaceType,
     },
     output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
-        wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
+        wayland_server::{protocol::wl_surface::WlSurface, DisplayHandle},
     },
     utils::{IsAlive, Logical, Point, Rectangle, Size},
     wayland::shell::{
@@ -36,11 +36,11 @@ use config::{Config, ResolvedRule};
 use crate::{
     animations::spring::SpringProfile,
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
-    layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
+    layout::{placement, Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode},
     menu::Menus,
     shell::{
         monitor::{
-            ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
+            output_from_descriptor, output_id, ConnectorId, Monitor, OutputConfig, OutputDescriptor,
         },
         snap::{SnapPreview, SnapPreviews},
         tile::{Tile, WindowState},
