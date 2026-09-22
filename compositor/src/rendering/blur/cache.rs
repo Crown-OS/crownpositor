@@ -17,7 +17,7 @@ use smithay::{
     utils::{Buffer as BufferCoords, Physical, Rectangle, Size, Transform},
 };
 
-use crate::rendering::blur::{BlurConfig, scene::BlurScene};
+use crate::rendering::blur::{BlurConfig, scene::BlurScene, stack::GlassStack};
 
 /// The band a blur still owes, element-local.
 ///
@@ -40,6 +40,10 @@ pub struct Halo {
 #[derive(Debug, Default)]
 pub struct BlurCache {
     scene: Option<Rc<BlurScene>>,
+    /// Which glass stands in front of which, rebuilt as this frame's elements
+    /// are. Emptied here rather than at the end of a frame, because a frame
+    /// that renders nothing never reaches an end.
+    stack: GlassStack,
     current: HashMap<Id, Rc<RefCell<Halo>>>,
     previous: HashMap<Id, Rc<RefCell<Halo>>>,
 }
@@ -54,6 +58,7 @@ impl BlurCache {
             let mut halo = halo.borrow_mut();
             halo.reported = mem::take(&mut halo.pending);
         }
+        self.stack.clear();
         if let Some(scene) = &self.scene {
             scene.begin_frame();
         }
@@ -73,6 +78,10 @@ impl BlurCache {
         };
         self.scene = Some(Rc::clone(&scene));
         Ok(scene)
+    }
+
+    pub(super) fn stack(&mut self) -> &mut GlassStack {
+        &mut self.stack
     }
 
     pub(super) fn halo(&mut self, id: &Id) -> Rc<RefCell<Halo>> {

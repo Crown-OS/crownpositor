@@ -42,6 +42,11 @@ pub struct BlurBackdrop {
     glass: Glass,
     alpha: f32,
     config: BlurConfig,
+    /// Where opaque glass already stands in front of this one, output-local.
+    /// Painting there would leave a blur for that glass to blur again, so this
+    /// backdrop gives those pixels up; what the piece above then lifts out of
+    /// the frame is the surface's own contents, unblurred.
+    occluders: Vec<Rectangle<i32, Physical>>,
     scene: Rc<BlurScene>,
     halo: Rc<RefCell<Halo>>,
     shaders: BlurShaders,
@@ -70,6 +75,7 @@ impl BlurBackdrop {
             )
             .inspect_err(|err| tracing::warn!(%err, "failed to allocate a blur pyramid"))
             .ok()?;
+        let occluders = session.cache.stack().occlude(&params, geometry);
         let halo = session.cache.halo(&params.id);
 
         Some(Self {
@@ -81,6 +87,7 @@ impl BlurBackdrop {
             glass: params.glass,
             alpha: params.alpha,
             config: session.config,
+            occluders,
             scene,
             halo,
             shaders,
@@ -98,6 +105,8 @@ impl BlurBackdrop {
         let Some(top) = self.scene.levels.first() else {
             return Ok(());
         };
+        let visible = self.visible(dst, damage);
+        let damage = visible.as_deref().unwrap_or(damage);
         let projection = *frame.projection();
         let Some(uniforms) =
             frame.with_context(|gl| unsafe { self.blur(gl, projection, dst, damage) })?
@@ -118,6 +127,22 @@ impl BlurBackdrop {
             Some(&self.shaders.finish),
             &uniforms,
         )
+    }
+
+    /// `damage` without the parts an opaque piece of glass in front of this
+    /// one has taken over, element-local. `None` when nothing is in front,
+    /// which is every backdrop on a frame with no overlapping glass.
+    fn visible(
+        &self,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> Option<Vec<Rectangle<i32, Physical>>> {
+        (!self.occluders.is_empty()).then(|| {
+            Rectangle::subtract_rects_many(
+                damage.iter().copied(),
+                self.occluders.iter().map(|rect| local(*rect, dst)),
+            )
+        })
     }
 
     /// Records the band this draw leaves stale: a changed pixel spreads
@@ -186,10 +211,15 @@ impl BlurBackdrop {
             })
             .collect();
         let refresh = self.scene.refresh(&dirty, radius, frame);
-        // From here on this rectangle is glass, whether or not the frame
-        // repaints any of it, so nothing drawn after it may blur these pixels
-        // back out of the framebuffer.
-        self.scene.cover(space.rect(dst));
+        // From here on these rectangles are glass, whether or not the frame
+        // repaints any of them, so nothing drawn after may blur these pixels
+        // back out of the framebuffer. Not the ones given up to the glass in
+        // front, though: the piece above is about to blur exactly those.
+        self.scene.cover(
+            Rectangle::subtract_rects_many([dst], self.occluders.iter().copied())
+                .into_iter()
+                .filter_map(|rect| space.rect(rect).intersection(frame)),
+        );
 
         let footprint = dirty.into_iter().reduce(Rectangle::merge)?;
         let footprint = grow(footprint, radius).intersection(frame)?;
@@ -367,6 +397,14 @@ fn level_area(
             round_up(footprint.loc.y + footprint.size.h).min(size.h),
         ),
     )
+}
+
+/// An output-local rectangle in the element-local space `draw` speaks.
+fn local(
+    rect: Rectangle<i32, Physical>,
+    dst: Rectangle<i32, Physical>,
+) -> Rectangle<i32, Physical> {
+    Rectangle::new(rect.loc - dst.loc, rect.size)
 }
 
 /// The dual-filter tap spacing: half a texel of the smaller of the two

@@ -14,6 +14,32 @@ use smithay::utils::{Logical, Rectangle, Size};
 
 use crate::layout;
 
+/// The output the overview is drawn on.
+///
+/// Two rectangles rather than one: proportions are measured against the whole
+/// output so the overview looks the same on every panel, but everything is
+/// *placed* inside the part of it nothing has reserved — a top bar's strip is
+/// not the overview's to draw in, and a grid that started at the screen's edge
+/// would sit tighter under the bar than it does against the sides.
+#[derive(Debug, Clone, Copy)]
+pub struct Canvas {
+    /// The whole output, output-local.
+    pub output: Rectangle<i32, Logical>,
+    /// What is left of it after layer surfaces took their exclusive zones.
+    pub usable: Rectangle<i32, Logical>,
+}
+
+impl Canvas {
+    pub fn new(output: Rectangle<i32, Logical>, usable: Rectangle<i32, Logical>) -> Self {
+        Self { output, usable }
+    }
+
+    /// A canvas nothing has reserved space on.
+    pub fn whole(output: Rectangle<i32, Logical>) -> Self {
+        Self::new(output, output)
+    }
+}
+
 /// Proportions of the output, so the overview looks the same on a laptop panel
 /// and a 4K desktop instead of being tuned for one of them.
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +71,11 @@ impl Metrics {
     fn gap_px(&self, output: Size<i32, Logical>) -> i32 {
         (f64::from(output.w.min(output.h)) * self.gap).round() as i32
     }
+
+    /// How tall the workspace bar is, previews and labels together.
+    fn bar_px(&self, output: Size<i32, Logical>) -> f64 {
+        f64::from(output.h) * self.bar
+    }
 }
 
 /// One workspace's place in the bottom bar.
@@ -68,16 +99,24 @@ impl Slot {
     }
 }
 
-/// The region the window grid is laid out in: the output, less the bar and a
-/// margin all round.
-pub fn grid_area(output: Rectangle<i32, Logical>, metrics: &Metrics) -> Rectangle<i32, Logical> {
-    let gap = metrics.gap_px(output.size);
-    let bar = (f64::from(output.size.h) * metrics.bar).round() as i32;
-    let height = (output.size.h - bar - gap * 3).max(1);
+/// The region the window grid is laid out in: the usable area, less the bar
+/// and the same margin on every side — including the one under whatever
+/// reserved the top, which is what stops the grid tucking in under a bar.
+pub fn grid_area(canvas: Canvas, metrics: &Metrics) -> Rectangle<i32, Logical> {
+    let gap = metrics.gap_px(canvas.output.size);
+    let bar = metrics.bar_px(canvas.output.size).round() as i32;
+    let usable = canvas.usable;
+
+    let top = usable.loc.y + gap;
+    let bottom = usable.loc.y + usable.size.h - bar - gap * 2;
 
     Rectangle::new(
-        (output.loc.x + gap, output.loc.y + gap).into(),
-        ((output.size.w - gap * 2).max(1), height).into(),
+        (usable.loc.x + gap, top).into(),
+        (
+            (usable.size.w - gap * 2).max(1),
+            (bottom - top).max(1),
+        )
+            .into(),
     )
 }
 
@@ -86,15 +125,15 @@ pub fn grid_area(output: Rectangle<i32, Logical>, metrics: &Metrics) -> Rectangl
 /// `windows` are the windows' real sizes in the order they should read, and
 /// the results are index-aligned with them.
 pub fn grid(
-    output: Rectangle<i32, Logical>,
+    canvas: Canvas,
     windows: &[Size<i32, Logical>],
     metrics: &Metrics,
     out: &mut Vec<Rectangle<f64, Logical>>,
 ) {
     layout::solve(
-        grid_area(output, metrics),
+        grid_area(canvas, metrics),
         windows,
-        metrics.gap_px(output.size),
+        metrics.gap_px(canvas.output.size),
         out,
     );
 }
@@ -104,25 +143,27 @@ pub fn grid(
 /// Every preview has the output's own aspect ratio, so a workspace reads as a
 /// small copy of the screen. They shrink to fit rather than scrolling: a
 /// thumbnail you cannot see is not a target you can drop a window on.
-pub fn bar(output: Rectangle<i32, Logical>, count: usize, metrics: &Metrics, out: &mut Vec<Slot>) {
+pub fn bar(canvas: Canvas, count: usize, metrics: &Metrics, out: &mut Vec<Slot>) {
     out.clear();
     if count == 0 {
         return;
     }
 
+    let output = canvas.output;
+    let usable = canvas.usable;
     let gap = f64::from(metrics.gap_px(output.size));
     let label = f64::from(output.size.h) * metrics.label;
-    let bar = f64::from(output.size.h) * metrics.bar;
+    let bar = metrics.bar_px(output.size);
 
     let aspect = f64::from(output.size.w) / f64::from(output.size.h.max(1));
     // The tallest a preview can be before the row is wider than the output.
-    let widest = (f64::from(output.size.w) - gap * (count + 1) as f64) / count as f64 / aspect;
+    let widest = (f64::from(usable.size.w) - gap * (count + 1) as f64) / count as f64 / aspect;
     let height = (bar - label - gap).min(widest).max(1.0);
     let width = height * aspect;
 
     let spread = width * count as f64 + gap * (count - 1) as f64;
-    let mut x = f64::from(output.loc.x) + (f64::from(output.size.w) - spread) / 2.0;
-    let y = f64::from(output.loc.y + output.size.h) - gap - label - height;
+    let mut x = f64::from(usable.loc.x) + (f64::from(usable.size.w) - spread) / 2.0;
+    let y = f64::from(usable.loc.y + usable.size.h) - gap - label - height;
 
     out.reserve(count);
     for _ in 0..count {
@@ -138,8 +179,8 @@ pub fn bar(output: Rectangle<i32, Logical>, count: usize, metrics: &Metrics, out
 ///
 /// The bar enters from below the bottom edge rather than fading in on the spot,
 /// and both the previews and their labels have to agree on by how much.
-pub fn climb(output: Rectangle<i32, Logical>, metrics: &Metrics, bar: f64) -> f64 {
-    f64::from(output.size.h) * metrics.bar * (1.0 - bar)
+pub fn climb(canvas: Canvas, metrics: &Metrics, bar: f64) -> f64 {
+    metrics.bar_px(canvas.output.size) * (1.0 - bar)
 }
 
 /// Shrinks a window's real geometry into a workspace preview, so the preview is
@@ -196,16 +237,20 @@ mod tests {
         Rectangle::new((0, 0).into(), (1920, 1080).into())
     }
 
+    fn canvas() -> Canvas {
+        Canvas::whole(output())
+    }
+
     fn slots(count: usize) -> Vec<Slot> {
         let mut out = Vec::new();
-        bar(output(), count, &Metrics::default(), &mut out);
+        bar(canvas(), count, &Metrics::default(), &mut out);
         out
     }
 
     #[test]
     fn the_grid_leaves_room_for_the_bar() {
         let metrics = Metrics::default();
-        let area = grid_area(output(), &metrics);
+        let area = grid_area(canvas(), &metrics);
         let lowest = slots(3)
             .iter()
             .map(|slot| slot.thumb.loc.y)
@@ -220,7 +265,7 @@ mod tests {
 
     #[test]
     fn the_grid_sits_inside_its_output() {
-        let area = grid_area(output(), &Metrics::default());
+        let area = grid_area(canvas(), &Metrics::default());
         assert!(area.loc.x > 0 && area.loc.y > 0);
         assert!(area.loc.x + area.size.w <= 1920);
     }
@@ -304,7 +349,7 @@ mod tests {
     fn an_offset_output_moves_the_whole_overview() {
         let mut shifted = Vec::new();
         bar(
-            Rectangle::new((1920, 200).into(), (1920, 1080).into()),
+            Canvas::whole(Rectangle::new((1920, 200).into(), (1920, 1080).into())),
             3,
             &Metrics::default(),
             &mut shifted,
@@ -339,15 +384,15 @@ mod tests {
     #[test]
     fn the_bar_climbs_its_own_height_and_no_further() {
         let metrics = Metrics::default();
-        let full = climb(output(), &metrics, 0.0);
+        let full = climb(canvas(), &metrics, 0.0);
 
         assert!(full > 0.0, "a bar that has not arrived is below the edge");
         assert_eq!(
-            climb(output(), &metrics, 1.0),
+            climb(canvas(), &metrics, 1.0),
             0.0,
             "arrived means in place"
         );
-        assert!((climb(output(), &metrics, 0.5) - full / 2.0).abs() < 1e-9);
+        assert!((climb(canvas(), &metrics, 0.5) - full / 2.0).abs() < 1e-9);
         assert!(full <= f64::from(output().size.h) * metrics.bar + 1e-9);
     }
 
@@ -390,14 +435,55 @@ mod tests {
         let metrics = Metrics::default();
 
         let (mut scene, mut solved) = (Vec::new(), Vec::new());
-        grid(output(), &windows, &metrics, &mut scene);
+        grid(canvas(), &windows, &metrics, &mut scene);
         layout::solve(
-            grid_area(output(), &metrics),
+            grid_area(canvas(), &metrics),
             &windows,
             metrics.gap_px(output().size),
             &mut solved,
         );
 
         assert_eq!(scene, solved);
+    }
+
+    #[test]
+    fn the_grid_clears_a_reserved_strip_by_the_same_margin_as_the_sides() {
+        let metrics = Metrics::default();
+        let bar = 48;
+        let canvas = Canvas::new(
+            output(),
+            Rectangle::new((0, bar).into(), (1920, 1080 - bar).into()),
+        );
+        let area = grid_area(canvas, &metrics);
+
+        assert_eq!(
+            area.loc.y - bar,
+            area.loc.x,
+            "the top margin should match the side one"
+        );
+        assert!(area.size.h > 0);
+    }
+
+    #[test]
+    fn the_bar_sits_above_a_reserved_bottom_strip() {
+        let metrics = Metrics::default();
+        let reserved = 60;
+        let mut out = Vec::new();
+        bar(
+            Canvas::new(
+                output(),
+                Rectangle::new((0, 0).into(), (1920, 1080 - reserved).into()),
+            ),
+            3,
+            &metrics,
+            &mut out,
+        );
+
+        for slot in &out {
+            assert!(
+                slot.label.loc.y + slot.label.size.h <= f64::from(1080 - reserved) + 1e-6,
+                "{slot:?} runs into the reserved strip"
+            );
+        }
     }
 }

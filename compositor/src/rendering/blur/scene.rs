@@ -94,11 +94,11 @@ impl BlurScene {
         self.glass.borrow().refresh(damage, radius, bounds)
     }
 
-    /// Records that `rect` now holds glass. Called whether or not the backdrop
+    /// Records that `rects` now hold glass. Called whether or not the backdrop
     /// redrew anything: where it did not, the frame is still showing the glass
     /// it drew last time.
-    pub(super) fn cover(&self, rect: Rectangle<i32, Physical>) {
-        self.glass.borrow_mut().drawn.push(rect);
+    pub(super) fn cover(&self, rects: impl IntoIterator<Item = Rectangle<i32, Physical>>) {
+        self.glass.borrow_mut().drawn.extend(rects);
     }
 }
 

@@ -14,13 +14,19 @@
 //! output; what the cache keeps instead is the scene from the frames that did
 //! own those pixels.
 //!
-//! Sharing them is what makes overlapping glass one layer of blur rather than
-//! two. A backdrop lifts its damage into the scene *minus* the rectangles this
-//! frame's earlier backdrops already covered, so a popup over a bar blurs the
-//! desktop the bar blurred, not the bar's own glass; glass writes opaque, so
-//! the upper piece simply wins where they meet. The same sharing is why two
-//! pieces that merely touch blur across their shared edge instead of each
-//! clamping its taps at it.
+//! Sharing them is also why two pieces of glass that merely touch blur across
+//! their shared edge instead of each clamping its taps at it.
+//!
+//! Overlapping glass is one layer of blur rather than two because the lower
+//! piece does not paint the overlap at all ([`GlassStack`]): the upper one is
+//! opaque there, so nothing of the lower piece would have been seen anyway, and
+//! what it leaves in the frame instead is the desktop with the lower surface's
+//! own contents over it — unblurred, which is exactly what the piece above then
+//! blurs, once. The scene copy stays out of it either way: a backdrop never
+//! lifts pixels another one has already turned to glass, or the blur would feed
+//! on its own output from one frame to the next.
+//!
+//! [`GlassStack`]: stack::GlassStack
 //!
 //! A pass spreads a changed pixel further than the rectangle it arrived in, so
 //! a draw leaves a stale band around its own damage. The cache offers that band
@@ -41,6 +47,7 @@
 mod backdrop;
 mod cache;
 mod scene;
+mod stack;
 
 pub use backdrop::BlurBackdrop;
 pub use cache::{BlurCache, BlurSession};
