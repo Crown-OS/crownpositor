@@ -141,6 +141,25 @@ impl BlurConfig {
         (self.offset.max(0.0) * (1u32 << (self.passes() + 1)) as f32).ceil() as i32
     }
 
+    /// The pyramid depth and tap spread that give `strength` of this config's
+    /// radius — for an effect being swiped in, which has to *grow* rather than
+    /// be a finished blur faded over a sharp picture.
+    ///
+    /// Depth comes off first, because a shallow pyramid is the cheap half of a
+    /// small blur, and the spread fills the gap between whole levels: a level
+    /// is entered at half the spread and reaches full spread by the time the
+    /// next one is, which is exactly the factor a halving costs. The radius is
+    /// therefore continuous across a level boundary even though the work is
+    /// not, and `0` passes means there is no blur left to draw.
+    pub fn taper(&self, strength: f32) -> (usize, f32) {
+        let depth = self.passes() as f32 * strength.clamp(0.0, 1.0);
+        let passes = depth.ceil() as usize;
+        (
+            passes,
+            self.offset.max(0.0) * (depth - passes as f32).exp2(),
+        )
+    }
+
     /// The material the compositor's own glass — window frames, menus, window
     /// previews — is made of, at one output's scale.
     pub fn glass(&self, scale: f64) -> Glass {

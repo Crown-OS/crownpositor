@@ -15,6 +15,18 @@ impl State {
         I::GestureSwipeUpdateEvent: LinearSwipe<I>,
     {
         match event {
+            // The overview owns the pointer while it is open. A scroll or a
+            // pinch there is aimed at a thumbnail rather than at the window
+            // inside it, and there is nothing a client could sensibly do with
+            // either — motion, buttons and keys are turned away further in,
+            // where the overview still has its own use for them.
+            InputEvent::PointerAxis { .. }
+            | InputEvent::GesturePinchBegin { .. }
+            | InputEvent::GesturePinchUpdate { .. }
+            | InputEvent::GesturePinchEnd { .. }
+            | InputEvent::GestureHoldBegin { .. }
+            | InputEvent::GestureHoldEnd { .. }
+                if self.overview_owns_input() => {}
             InputEvent::Keyboard { event, .. } => self.on_keyboard_key::<I>(event),
             // Relative motion is what libinput produces; without this arm a DRM
             // session has no pointer at all.

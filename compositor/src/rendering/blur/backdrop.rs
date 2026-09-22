@@ -65,6 +65,20 @@ impl BlurBackdrop {
     ) -> Option<Self> {
         let shaders = BlurShaders::get(renderer)?;
         let geometry = params.geometry.intersection(session.output)?;
+
+        // The pyramid is the output's, so it is always allocated to the full
+        // configured depth; this backdrop simply uses the first few levels of
+        // it. Nothing left to blur means nothing to draw.
+        let (passes, offset) = session.config.taper(params.strength);
+        if passes == 0 {
+            return None;
+        }
+        let config = BlurConfig {
+            passes: passes as u8,
+            offset,
+            ..session.config
+        };
+
         let size = session.transform.transform_size(session.output.size);
         let scene = session
             .cache
@@ -86,7 +100,7 @@ impl BlurBackdrop {
             radius: params.radius,
             glass: params.glass,
             alpha: params.alpha,
-            config: session.config,
+            config,
             occluders,
             scene,
             halo,
@@ -196,7 +210,11 @@ impl BlurBackdrop {
         if frame.size != space.viewport {
             return None;
         }
-        let top = self.scene.levels.first()?;
+        // Only the levels this backdrop's strength reaches: a blur on its way
+        // in runs a shallower pyramid than a settled one, out of the same
+        // textures.
+        let levels = self.scene.levels.get(..self.config.passes())?;
+        let top = levels.first()?;
         let radius = self.config.radius();
 
         // The scene spans the whole framebuffer, so damage maps into it with no
@@ -258,13 +276,13 @@ impl BlurBackdrop {
 
             let (down, up) = (&self.shaders.down, &self.shaders.up);
             let mut source = &self.scene.scene;
-            for (index, level) in self.scene.levels.iter().enumerate() {
+            for (index, level) in levels.iter().enumerate() {
                 pass(gl, down, source, level, footprint, index, offset);
                 source = level;
             }
-            for index in (0..self.scene.levels.len().saturating_sub(1)).rev() {
-                let source = &self.scene.levels[index + 1];
-                let level = &self.scene.levels[index];
+            for index in (0..levels.len().saturating_sub(1)).rev() {
+                let source = &levels[index + 1];
+                let level = &levels[index];
                 pass(gl, up, source, level, footprint, index, offset);
             }
 

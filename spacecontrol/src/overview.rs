@@ -31,12 +31,16 @@ const BAND: RubberBand = RubberBand::new(0.1, 0.5);
 /// Below this the overview is not worth drawing.
 const EPSILON: f64 = 1e-3;
 
-/// How dark the wallpaper goes behind the overview, at full open.
-const MAX_DIM: f32 = 0.45;
+/// How dark the wallpaper goes behind the overview, at full open — so three
+/// fifths of it is still showing through. The overview stands on the desktop
+/// rather than replacing it, and a wash heavy enough to hide the wallpaper
+/// takes that away.
+const MAX_DIM: f32 = 0.4;
 
-/// How far the wallpaper zooms in behind the overview. Slight: enough to read
-/// as depth, not enough to notice as motion.
-const BACKGROUND_ZOOM: f64 = 1.08;
+/// How far the wallpaper zooms in behind the overview. Enough to be seen as
+/// motion: the zoom is what says the windows are lifting away from a surface
+/// that is itself moving, and a zoom nobody notices says nothing.
+const BACKGROUND_ZOOM: f64 = 1.15;
 
 /// Progress before the workspace bar starts climbing into place, so the
 /// windows are already moving when it appears rather than everything arriving
@@ -222,9 +226,10 @@ impl Overview {
         self.eased() as f32 * MAX_DIM
     }
 
-    /// How much of the blur to apply, 0 to 1. The compositor scales its own
-    /// radius by this, so the wallpaper comes into and out of focus with the
-    /// gesture rather than snapping.
+    /// How much of the blur to apply, 0 to 1. The compositor scales both its
+    /// radius and the glass's opacity by this, so the wallpaper genuinely
+    /// comes into and out of focus with the gesture instead of a fully blurred
+    /// copy being faded over a sharp one.
     pub fn blur(&self) -> f32 {
         self.eased() as f32
     }
@@ -479,6 +484,18 @@ mod tests {
         overview.begin_gesture();
         overview.update_gesture(0.0);
         assert!(overview.is_active());
+    }
+
+    #[test]
+    fn the_wallpaper_still_shows_through_a_fully_open_overview() {
+        let mut overview = Overview::new();
+        overview.snap_to(true);
+
+        assert!(
+            overview.dim() <= 0.4,
+            "less than three fifths of the wallpaper survives the wash: {}",
+            overview.dim()
+        );
     }
 
     #[test]

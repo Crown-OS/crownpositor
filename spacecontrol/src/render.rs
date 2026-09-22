@@ -6,9 +6,15 @@
 //! is why the grid can stay live — a video keeps playing in its thumbnail for
 //! the same price as playing on the desktop.
 //!
-//! The compositor supplies the rounding through a `decorate` callback rather
-//! than a trait, because the effects it can apply depend on its renderer and
-//! that knowledge belongs on its side of the seam.
+//! Everything the compositor can do that this crate cannot name reaches it
+//! through [`Painter`]: rounding a window, the blurred glass a window asked to
+//! stand on, a workspace preview's own material. The effects available depend
+//! on the renderer, and that knowledge belongs on the compositor's side of the
+//! seam.
+//!
+//! Depth is the caller's to decide. Windows are drawn in the order they are
+//! handed over, nearest the eye first, so the overview stacks exactly the way
+//! the desktop does rather than inventing an order of its own.
 
 use smithay::{
     backend::renderer::{
@@ -23,35 +29,99 @@ use smithay::{
         utils::CommitCounter,
     },
     desktop::Window,
-    utils::{Logical, Physical, Point, Rectangle, Scale},
+    utils::{Logical, Physical, Point, Rectangle, Scale, Size},
 };
 
-use crate::{
-    interaction::Target,
-    scene::{self, Metrics, Slot},
-};
+use crate::scene::{self, Canvas, Metrics, Slot};
 
 /// A window's surfaces, scaled to the size they are drawn at and clipped to
 /// their thumbnail — structurally the compositor's own `Cropped`, so the
 /// decorator it already has takes these unchanged.
 pub type Scaled<R> = CropRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<R>>>;
 
-/// What the compositor does to one scaled window: rounds it, shadows it, or
-/// hands it straight back.
-pub type Decorate<'a, R, E> =
-    &'a mut dyn FnMut(&mut R, Scaled<R>, (f32, f32), [f32; 4]) -> Option<E>;
+/// One window's own background effects, at the size its thumbnail is drawn.
+///
+/// The overview does not know what a client asked for — a blur region, a tint,
+/// a shadow — only where the thumbnail landed and how far it was shrunk to get
+/// there. The compositor places the effects from that.
+pub struct Behind<'a> {
+    pub window: &'a Window,
+    /// Where the thumbnail is, output-local.
+    pub rect: Rectangle<f64, Logical>,
+    /// The window's own size, which `rect` is a shrunken copy of.
+    pub natural: Size<i32, Logical>,
+    pub radius: f32,
+    pub alpha: f32,
+}
+
+/// A workspace preview's backing: a rounded sheet of the compositor's own
+/// glass, the shadow it casts, and the ring around it when it is the active
+/// workspace.
+///
+/// A preview is a small copy of a workspace, so it is made of what a workspace
+/// is made of — the wallpaper showing through blurred, not a flat white card.
+pub struct Pane {
+    pub glass: Id,
+    pub shadow: Id,
+    pub ring: Id,
+    pub rect: Rectangle<f64, Logical>,
+    pub radius: f32,
+    pub alpha: f32,
+    /// The active workspace's ring colour, straight RGBA. `None` leaves the
+    /// preview unringed.
+    pub ring_colour: Option<[f32; 4]>,
+}
+
+/// Everything the compositor lends the overview.
+///
+/// The backings hand their elements to a sink rather than returning them, so
+/// one call can produce a shadow, a sheet of glass and a ring without
+/// allocating a vector to carry them back across the seam.
+pub trait Painter<R>
+where
+    R: Renderer + ImportAll,
+{
+    /// What a drawn thing becomes. The compositor's decorated tile type.
+    type Element: RenderElement<R>;
+
+    /// Rounds, shadows or otherwise finishes one scaled window, or hands it
+    /// straight back. `None` drops it.
+    fn decorate(
+        &mut self,
+        renderer: &mut R,
+        element: Scaled<R>,
+        size: (f32, f32),
+        radius: [f32; 4],
+    ) -> Option<Self::Element>;
+
+    /// The material a window stands on, behind its thumbnail.
+    fn behind(&mut self, renderer: &mut R, behind: Behind<'_>, out: &mut dyn FnMut(Self::Element));
+
+    /// A workspace preview's own backing.
+    fn pane(&mut self, renderer: &mut R, pane: Pane, out: &mut dyn FnMut(Self::Element));
+}
 
 smithay::backend::renderer::element::render_elements! {
     /// Everything the overview draws.
     pub OverviewElement<R, E> where R: ImportAll + ImportMem;
-    /// A window, shrunk into its thumbnail and decorated by the compositor.
-    /// Wrapped because a bare `E` could unify with another variant.
+    /// A window, shrunk into its thumbnail — or a piece of the compositor's
+    /// own material behind one. Wrapped because a bare `E` could unify with
+    /// another variant.
     Window = Wrap<E>,
-    /// Flat colour: the wash over the wallpaper, a preview's backing, the ring
-    /// around the active workspace.
+    /// Flat colour: the wash that pulls the wallpaper back behind the grid.
     Fill = SolidColorRenderElement,
     /// A workspace's name, rasterised by the compositor.
     Label = MemoryRenderBufferRenderElement<R>,
+}
+
+/// A window the pointer has picked up off the grid.
+///
+/// It is not in `grid` at all — the caller leaves it out — because a carried
+/// window belongs to the pointer rather than to any workspace's stack.
+pub struct Carried<'a> {
+    pub window: &'a Window,
+    pub rect: Rectangle<f64, Logical>,
+    pub alpha: f32,
 }
 
 /// One window on its way into or out of the grid.
@@ -64,6 +134,8 @@ pub struct Thumb<'a> {
     /// Where it lands once the overview is fully open.
     pub grid: Rectangle<f64, Logical>,
     pub alpha: f32,
+    /// How far the pointer has lifted it, 0 to 1.
+    pub lift: f64,
 }
 
 /// One workspace's preview along the bottom.
@@ -71,8 +143,11 @@ pub struct Preview<'a> {
     pub slot: Slot,
     /// The workspace's own area, which its windows' positions are relative to.
     pub area: Rectangle<i32, Logical>,
+    /// Topmost first, so the preview stacks the way the workspace does.
     pub windows: &'a [(&'a Window, Rectangle<i32, Logical>)],
     pub active: bool,
+    /// How far the pointer has lifted it, 0 to 1.
+    pub lift: f64,
 }
 
 /// Colours the overview draws its own furniture in.
@@ -81,38 +156,45 @@ pub struct Palette {
     /// The wash over the wallpaper. Alpha is supplied separately, from the
     /// overview's progress.
     pub dim: [f32; 3],
-    /// A workspace preview's backing, seen where no window covers it.
-    pub preview: [f32; 4],
     /// The ring around the active workspace.
     pub active: [f32; 4],
-    /// The lift under the pointer, painted behind the thumbnail it belongs to.
-    pub hover: [f32; 4],
 }
 
 impl Default for Palette {
     fn default() -> Self {
         Self {
             dim: [0.0, 0.0, 0.0],
-            preview: [1.0, 1.0, 1.0, 0.12],
             active: [0.20, 0.51, 0.98, 1.0],
-            hover: [1.0, 1.0, 1.0, 0.18],
         }
     }
 }
 
-/// Width of the ring around the active workspace, in logical pixels.
-const RING: f64 = 3.0;
-
-/// Identities the damage tracker knows the overview's flat quads by.
+/// Identities the damage tracker knows the overview's own quads by.
 ///
 /// They have to outlive a frame: a fresh [`Id`] every frame reads as a brand
 /// new element and repaints the whole screen continuously.
+#[derive(Debug, Clone)]
+struct SlotIds {
+    glass: Id,
+    shadow: Id,
+    ring: Id,
+}
+
+impl SlotIds {
+    fn new() -> Self {
+        Self {
+            glass: Id::new(),
+            shadow: Id::new(),
+            ring: Id::new(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Chrome {
     dim: Id,
-    hover: Id,
     backdrop: Id,
-    slots: Vec<[Id; 2]>,
+    slots: Vec<SlotIds>,
 }
 
 impl Default for Chrome {
@@ -125,7 +207,6 @@ impl Chrome {
     pub fn new() -> Self {
         Self {
             dim: Id::new(),
-            hover: Id::new(),
             backdrop: Id::new(),
             slots: Vec::new(),
         }
@@ -138,7 +219,7 @@ impl Chrome {
     /// appearing never renumbers the ones already on screen.
     pub fn ensure(&mut self, slots: usize) {
         if self.slots.len() < slots {
-            self.slots.resize_with(slots, || [Id::new(), Id::new()]);
+            self.slots.resize_with(slots, SlotIds::new);
         }
     }
 
@@ -153,14 +234,9 @@ impl Chrome {
         self.dim.clone()
     }
 
-    fn hover(&self) -> Id {
-        self.hover.clone()
-    }
-
-    /// `[backing, ring]` for one workspace preview. `None` before
-    /// [`Chrome::ensure`] has been told the slot exists.
-    fn slot(&self, index: usize) -> Option<[Id; 2]> {
-        self.slots.get(index).cloned()
+    /// `None` before [`Chrome::ensure`] has been told the slot exists.
+    fn slot(&self, index: usize) -> Option<&SlotIds> {
+        self.slots.get(index)
     }
 }
 
@@ -189,31 +265,17 @@ fn fill(
     ))
 }
 
-/// The four sides of a ring, as rectangles. Four thin quads cost less than a
-/// shader and read identically at this size.
-fn ring(rect: Rectangle<f64, Logical>, width: f64) -> [Rectangle<f64, Logical>; 4] {
-    let (x, y, w, h) = (rect.loc.x, rect.loc.y, rect.size.w, rect.size.h);
-    [
-        Rectangle::new(
-            (x - width, y - width).into(),
-            (w + width * 2.0, width).into(),
-        ),
-        Rectangle::new((x - width, y + h).into(), (w + width * 2.0, width).into()),
-        Rectangle::new((x - width, y).into(), (width, h).into()),
-        Rectangle::new((x + w, y).into(), (width, h).into()),
-    ]
-}
-
-/// Draws one window at `rect`, whatever size that is.
+/// Draws one window at `rect`, whatever size that is, on the material it
+/// asked to stand on.
 ///
 /// The window's own surfaces are positioned at the rectangle's origin and then
 /// scaled about it, so a thumbnail and a full-size window differ only by the
 /// factor handed to [`RescaleRenderElement`].
 #[allow(clippy::too_many_arguments)]
-fn window_at<R, E>(
-    out: &mut Vec<OverviewElement<R, E>>,
+fn window_at<R, P>(
+    out: &mut Vec<OverviewElement<R, P::Element>>,
     renderer: &mut R,
-    decorate: Decorate<'_, R, E>,
+    painter: &mut P,
     window: &Window,
     rect: Rectangle<f64, Logical>,
     scale: Scale<f64>,
@@ -222,7 +284,7 @@ fn window_at<R, E>(
 ) where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
-    E: RenderElement<R>,
+    P: Painter<R>,
 {
     let natural = window.geometry().size;
     if natural.w <= 0 || natural.h <= 0 || rect.size.w <= 0.0 || rect.size.h <= 0.0 {
@@ -245,28 +307,45 @@ fn window_at<R, E>(
         let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip) else {
             continue;
         };
-        if let Some(decorated) = decorate(renderer, cropped, size, [radius; 4]) {
+        if let Some(decorated) = painter.decorate(renderer, cropped, size, [radius; 4]) {
             out.push(OverviewElement::Window(Wrap::from(decorated)));
         }
     }
+
+    // After the surfaces, so it lands directly behind them — a translucent
+    // window keeps the glass it has on the desktop instead of losing it the
+    // moment the overview opens.
+    painter.behind(
+        renderer,
+        Behind {
+            window,
+            rect,
+            natural,
+            radius,
+            alpha,
+        },
+        &mut |element| out.push(OverviewElement::Window(Wrap::from(element))),
+    );
 }
 
 /// Everything one output's overview draws, nearest the eye first — the order
 /// the damage tracker and the renderer both want.
 ///
+/// `grid` and each preview's windows are drawn in the order they are given, so
+/// the caller's stacking order is the one that reaches the screen.
+///
 /// `progress` carries the windows between the desktop and the grid; `bar` does
 /// the same for the workspace strip, which trails slightly behind.
 #[allow(clippy::too_many_arguments)]
-pub fn elements<R, E>(
-    out: &mut Vec<OverviewElement<R, E>>,
+pub fn elements<R, P>(
+    out: &mut Vec<OverviewElement<R, P::Element>>,
     chrome: &Chrome,
     renderer: &mut R,
-    decorate: Decorate<'_, R, E>,
-    output: Rectangle<i32, Logical>,
+    painter: &mut P,
+    canvas: Canvas,
     grid: &[Thumb<'_>],
     previews: &[Preview<'_>],
-    carried: Option<(usize, Rectangle<f64, Logical>)>,
-    hovered: Option<Target>,
+    carried: Option<Carried<'_>>,
     progress: f64,
     bar: f64,
     metrics: &Metrics,
@@ -276,90 +355,73 @@ pub fn elements<R, E>(
 ) where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
-    E: RenderElement<R>,
+    P: Painter<R>,
 {
-    let climb = scene::climb(output, metrics, bar);
+    let climb = scene::climb(canvas, metrics, bar);
 
     for (index, preview) in previews.iter().enumerate() {
-        let Some([backing, outline]) = chrome.slot(index) else {
+        let Some(ids) = chrome.slot(index) else {
             continue;
         };
-        let thumb = Rectangle::new(
-            (preview.slot.thumb.loc.x, preview.slot.thumb.loc.y + climb).into(),
-            preview.slot.thumb.size,
+        let thumb = scene::lift(
+            Rectangle::new(
+                (preview.slot.thumb.loc.x, preview.slot.thumb.loc.y + climb).into(),
+                preview.slot.thumb.size,
+            ),
+            metrics.hover * preview.lift,
         );
-
-        if preview.active {
-            out.extend(
-                ring(thumb, RING)
-                    .into_iter()
-                    .zip(std::iter::repeat(outline))
-                    .filter_map(|(side, id)| fill(id, side, palette.active, bar as f32, scale))
-                    .map(OverviewElement::Fill),
-            );
-        }
-
-        if hovered == Some(Target::Workspace(index))
-            && let Some(lift) = fill(
-                chrome.hover(),
-                scene::lift(thumb, metrics.hover),
-                palette.hover,
-                bar as f32,
-                scale,
-            )
-        {
-            out.push(OverviewElement::Fill(lift));
-        }
 
         for (window, live) in preview.windows {
             window_at(
                 out,
                 renderer,
-                decorate,
+                painter,
                 window,
                 scene::inside(*live, preview.area, thumb),
                 scale,
-                radius * 0.4,
+                radius * PREVIEW_WINDOW_RADIUS,
                 bar as f32,
             );
         }
 
-        if let Some(backing) = fill(backing, thumb, palette.preview, bar as f32, scale) {
-            out.push(OverviewElement::Fill(backing));
-        }
-    }
-
-    // The carried window rides above the bar it is being dropped onto.
-    if let Some((index, rect)) = carried
-        && let Some(thumb) = grid.get(index)
-    {
-        window_at(
-            out,
+        painter.pane(
             renderer,
-            decorate,
-            thumb.window,
-            rect,
-            scale,
-            radius,
-            thumb.alpha,
+            Pane {
+                glass: ids.glass.clone(),
+                shadow: ids.shadow.clone(),
+                ring: ids.ring.clone(),
+                rect: thumb,
+                radius: radius * PREVIEW_RADIUS,
+                alpha: bar as f32,
+                ring_colour: preview.active.then_some(palette.active),
+            },
+            &mut |element| out.push(OverviewElement::Window(Wrap::from(element))),
         );
     }
 
-    for (index, thumb) in grid.iter().enumerate() {
-        if carried.is_some_and(|(carried, _)| carried == index) {
-            continue;
-        }
-
-        let target = match hovered {
-            Some(Target::Window(hovered)) if hovered == index => {
-                scene::lift(thumb.grid, metrics.hover * progress)
-            }
-            _ => thumb.grid,
-        };
+    // The carried window rides above the bar it is being dropped onto.
+    if let Some(carried) = carried {
         window_at(
             out,
             renderer,
-            decorate,
+            painter,
+            carried.window,
+            carried.rect,
+            scale,
+            radius,
+            carried.alpha,
+        );
+    }
+
+    for thumb in grid {
+        // The lift is scaled by how far open the overview is, so a window
+        // under the pointer on the way in grows with everything else rather
+        // than jumping out of a grid that has not arrived.
+        let target = scene::lift(thumb.grid, metrics.hover * thumb.lift * progress);
+        window_at(
+            out,
+            renderer,
+            painter,
             thumb.window,
             scene::between(thumb.live, target, progress),
             scale,
@@ -372,7 +434,7 @@ pub fn elements<R, E>(
     // back and makes the thumbnails read as the foreground.
     if let Some(dim) = fill(
         chrome.dim(),
-        output.to_f64(),
+        canvas.output.to_f64(),
         [palette.dim[0], palette.dim[1], palette.dim[2], 1.0],
         progress as f32,
         scale,
@@ -380,6 +442,16 @@ pub fn elements<R, E>(
         out.push(OverviewElement::Fill(dim));
     }
 }
+
+/// How round a workspace preview's corners are, against a window's own radius.
+/// Squarer than a window: the preview stands for the whole screen, and a
+/// screen's corners are the display's, not a window's.
+const PREVIEW_RADIUS: f32 = 0.6;
+
+/// How much of a window's corner radius survives into a workspace preview.
+/// The preview is a small copy of the screen, so its windows round by about as
+/// much as they are shrunk.
+const PREVIEW_WINDOW_RADIUS: f32 = 0.4;
 
 #[cfg(test)]
 mod tests {
@@ -396,8 +468,9 @@ mod tests {
         let mut chrome = Chrome::new();
         chrome.ensure(3);
         assert_eq!(chrome.dim(), chrome.dim());
-        assert_eq!(chrome.hover(), chrome.hover());
-        assert_eq!(chrome.slot(2), chrome.slot(2));
+        assert_eq!(chrome.slot(2).map(|ids| ids.glass.clone()), {
+            chrome.slot(2).map(|ids| ids.glass.clone())
+        });
     }
 
     #[test]
@@ -410,17 +483,18 @@ mod tests {
     fn every_slot_and_quad_has_its_own_identity() {
         let mut chrome = Chrome::new();
         chrome.ensure(2);
-        let (dim, hover) = (chrome.dim(), chrome.hover());
-        let [backing, outline] = chrome.slot(0).expect("slot 0");
-        let other = chrome.slot(1).expect("slot 1");
+        let first = chrome.slot(0).expect("slot 0");
+        let second = chrome.slot(1).expect("slot 1");
 
         let all = [
-            dim,
-            hover,
-            backing.clone(),
-            outline.clone(),
-            other[0].clone(),
-            other[1].clone(),
+            chrome.dim(),
+            chrome.backdrop(),
+            first.glass.clone(),
+            first.shadow.clone(),
+            first.ring.clone(),
+            second.glass.clone(),
+            second.shadow.clone(),
+            second.ring.clone(),
         ];
         for (index, id) in all.iter().enumerate() {
             for peer in &all[index + 1..] {
@@ -433,37 +507,13 @@ mod tests {
     fn growing_the_bar_keeps_the_identities_already_handed_out() {
         let mut chrome = Chrome::new();
         chrome.ensure(1);
-        let first = chrome.slot(0);
+        let first = chrome.slot(0).expect("slot 0").glass.clone();
         chrome.ensure(6);
         assert_eq!(
-            chrome.slot(0),
+            chrome.slot(0).expect("slot 0").glass,
             first,
             "adding a workspace repainted the rest"
         );
-    }
-
-    #[test]
-    fn a_ring_surrounds_its_rectangle_without_covering_it() {
-        let inner = rect(100.0, 100.0, 200.0, 150.0);
-        let sides = ring(inner, 4.0);
-
-        for side in sides {
-            assert!(side.size.w > 0.0 && side.size.h > 0.0, "{side:?}");
-            let overlaps = side.loc.x + side.size.w > inner.loc.x + 1e-9
-                && inner.loc.x + inner.size.w > side.loc.x + 1e-9
-                && side.loc.y + side.size.h > inner.loc.y + 1e-9
-                && inner.loc.y + inner.size.h > side.loc.y + 1e-9;
-            assert!(!overlaps, "{side:?} covers the preview it frames");
-        }
-
-        // And together they reach every edge.
-        let left = sides.iter().map(|s| s.loc.x).fold(f64::MAX, f64::min);
-        let right = sides
-            .iter()
-            .map(|s| s.loc.x + s.size.w)
-            .fold(f64::MIN, f64::max);
-        assert!((left - (inner.loc.x - 4.0)).abs() < 1e-9);
-        assert!((right - (inner.loc.x + inner.size.w + 4.0)).abs() < 1e-9);
     }
 
     #[test]

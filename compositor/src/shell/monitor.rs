@@ -279,6 +279,7 @@ impl Monitor {
 
     pub fn set_animation_profile(&mut self, profile: Option<SpringProfile>) {
         self.switch.set_profile(profile);
+        self.spacecontrol.set_profile(profile);
     }
 
     /// Logical pixels from one workspace to the next while they slide past

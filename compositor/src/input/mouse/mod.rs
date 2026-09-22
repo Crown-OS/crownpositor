@@ -59,7 +59,7 @@ impl State {
 
         // And an open overview owns it the same way: the thumbnails highlight
         // under the cursor and the windows they stand for hear nothing.
-        if self.overview_motion(location) {
+        if self.overview_motion(location) || self.overview_owns_input() {
             self.queue_redraw_at(previous);
             self.queue_redraw_at(location);
             return;
@@ -148,7 +148,7 @@ impl State {
                 ButtonState::Pressed => self.overview_press(at),
                 ButtonState::Released => self.overview_release(at),
             };
-            if taken {
+            if taken || self.overview_owns_input() {
                 return;
             }
         }

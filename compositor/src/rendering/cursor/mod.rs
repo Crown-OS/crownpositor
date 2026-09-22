@@ -115,6 +115,24 @@ impl Cursor {
         }
     }
 
+    /// Takes the pointer image back from the clients, and says whether it had
+    /// to.
+    ///
+    /// A client is free to hide the cursor, or to hand over a surface it later
+    /// stops drawing into, and either leaves the compositor with nothing to
+    /// draw. On the desktop that is the client's business — it is the thing
+    /// under the pointer. Once the overview owns the pointer it is not, and
+    /// there is no longer a client that will ever put the cursor back, so the
+    /// compositor's own arrow wins: it is the one image that is always
+    /// drawable.
+    pub fn reclaim(&mut self) -> bool {
+        if matches!(self.status, CursorImageStatus::Named(_)) {
+            return false;
+        }
+        self.status = CursorImageStatus::default_named();
+        true
+    }
+
     /// The buffer scale to rasterise for. Integer, because themes ship discrete
     /// sizes; rounding up keeps a fractional-scale output sharp at the cost of a
     /// marginally smaller cursor.

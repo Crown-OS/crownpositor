@@ -179,7 +179,19 @@ impl State {
             return;
         }
 
-        let under = self.shell.pointer_focus_under(location);
+        // The overview owns the pointer outright, so every client is told it
+        // left and hears nothing more until it closes. Handing that leave over
+        // is also what takes the cursor back: a client that had hidden it has
+        // no say over the pointer any more.
+        let under = match self.overview_owns_input() {
+            true => {
+                if self.input.cursor.reclaim() {
+                    self.queue_pointer_redraw();
+                }
+                None
+            }
+            false => self.shell.pointer_focus_under(location),
+        };
         if pointer.current_focus().as_ref() == under.as_ref().map(|(target, _)| target) {
             return;
         }

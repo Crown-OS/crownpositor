@@ -104,6 +104,7 @@ mod tests {
             radius,
             glass: Glass::default(),
             alpha,
+            strength: 1.0,
         }
     }
 

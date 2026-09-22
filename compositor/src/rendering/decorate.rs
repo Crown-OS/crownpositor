@@ -15,7 +15,8 @@ use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
         element::{
-            Id, RenderElement, surface::WaylandSurfaceRenderElement,
+            Id, RenderElement,
+            surface::WaylandSurfaceRenderElement,
             utils::{CropRenderElement, RescaleRenderElement},
         },
         utils::CommitCounter,
@@ -57,6 +58,11 @@ pub struct Backdrop {
     /// refractive rim along its edge.
     pub glass: Glass,
     pub alpha: f32,
+    /// How much of the configured blur to apply, 0 to 1. Anything below the
+    /// full strength is a blur being swiped in: the pyramid is run shallower
+    /// and narrower rather than in full, so the radius grows with the gesture
+    /// and a weak blur costs weak-blur work.
+    pub strength: f32,
 }
 
 /// One blurred silhouette to draw underneath a surface, and the identity the

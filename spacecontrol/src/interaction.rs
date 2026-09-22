@@ -11,7 +11,10 @@
 
 use smithay::utils::{Logical, Point, Rectangle};
 
-use crate::scene::Slot;
+use crate::{
+    animations::spring::{Spring, SpringProfile},
+    scene::Slot,
+};
 
 /// How far the pointer must travel with the button down before the press stops
 /// being a click and becomes a drag, in logical pixels.
@@ -20,6 +23,15 @@ const DRAG_THRESHOLD: f64 = 8.0;
 /// How much a window shrinks while it is being carried, so it reads as picked
 /// up off the grid rather than still part of it.
 const CARRY_SCALE: f64 = 0.85;
+
+/// How the carried window goes into the preview under it. Stiffer than
+/// anything the user can pick — this is direct manipulation, and a window that
+/// trails the pointer into a workspace reads as lag rather than as motion.
+/// Critically damped, so it never overshoots the preview it is going into.
+const SNAP: SpringProfile = SpringProfile {
+    stiffness: 900.0,
+    damping: 60.0,
+};
 
 /// Something in the overview the pointer can be over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,15 +97,68 @@ struct Press {
     carry: Option<Carry>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Interaction {
     hovered: Option<Target>,
     press: Option<Press>,
+    /// How far a carried window has settled into the preview it is over: 0 is
+    /// riding under the pointer, 1 is sitting in the workspace it would land
+    /// in. A spring rather than a swap so the window is seen to go in.
+    snap: Spring,
+    /// Whether the drop moves at all, or lands on the frame it happens.
+    animated: bool,
+}
+
+impl Default for Interaction {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Interaction {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            hovered: None,
+            press: None,
+            snap: Spring::with_profile(0.0, SNAP),
+            animated: true,
+        }
+    }
+
+    /// Only whether the drop moves at all is taken from the setting. Its feel
+    /// is not the user's to choose: [`SNAP`] is the one speed that keeps the
+    /// window under the hand that is carrying it.
+    pub fn set_profile(&mut self, profile: Option<SpringProfile>) {
+        self.animated = profile.is_some();
+        if !self.animated {
+            self.snap.snap_to_target();
+        }
+    }
+
+    /// How far the carried window has gone into the preview under it.
+    pub fn snap(&self) -> f64 {
+        f64::from(self.snap.position.clamp(0.0, 1.0))
+    }
+
+    pub fn step(&mut self, dt: f32) {
+        self.snap.step(dt);
+    }
+
+    pub fn at_rest(&self) -> bool {
+        self.snap.at_rest()
+    }
+
+    pub fn settle(&mut self) {
+        self.snap.snap_to_target();
+    }
+
+    /// Aims the snap at wherever the carried window currently is, and lands it
+    /// when motion is switched off.
+    fn aim_snap(&mut self, over_preview: bool) {
+        self.snap.set_target(f32::from(u8::from(over_preview)));
+        if !self.animated {
+            self.snap.snap_to_target();
+        }
     }
 
     /// What the pointer is over, for the hover highlight. A window being
@@ -113,6 +178,7 @@ impl Interaction {
     pub fn clear(&mut self) {
         self.hovered = None;
         self.press = None;
+        self.snap.hold(0.0);
     }
 
     /// Whatever is under `at`, topmost first. The bar wins over the grid
@@ -167,6 +233,7 @@ impl Interaction {
                     .position(|slot| slot.hit().contains(at))
                     .map(Target::Workspace);
                 self.hovered = over;
+                self.aim_snap(over.is_some());
                 return true;
             }
         }
@@ -192,6 +259,7 @@ impl Interaction {
             carry: None,
         });
         self.hovered = target;
+        self.snap.hold(0.0);
         target
     }
 
@@ -200,6 +268,7 @@ impl Interaction {
         let Some(press) = self.press.take() else {
             return Release::None;
         };
+        self.snap.hold(0.0);
 
         let Some(carry) = press.carry else {
             return Release::Click(press.target);
@@ -221,6 +290,7 @@ impl Interaction {
     pub fn cancel(&mut self) -> Option<usize> {
         let carried = self.press.take().and_then(|press| press.carry);
         self.hovered = None;
+        self.snap.hold(0.0);
         carried.map(|carry| carry.window)
     }
 }
@@ -250,6 +320,37 @@ mod tests {
 
     fn at(x: f64, y: f64) -> Point<f64, Logical> {
         Point::from((x, y))
+    }
+
+    #[test]
+    fn a_carried_window_is_in_the_preview_while_the_hand_is_still_over_it() {
+        let mut input = Interaction::new();
+        input.press(at(150.0, 150.0), &grid(), &bar());
+        input.motion(at(150.0, 950.0), &grid(), &bar());
+        assert_eq!(input.snap(), 0.0, "it starts under the pointer");
+
+        // A sixth of a second is the whole budget. Any slower and the window
+        // is still on its way in when the hand has already let go.
+        for _ in 0..10 {
+            input.step(1.0 / 60.0);
+        }
+        assert!(input.snap() > 0.9, "the drop dawdled: {}", input.snap());
+    }
+
+    #[test]
+    fn a_carried_window_comes_back_out_when_the_pointer_leaves() {
+        let mut input = Interaction::new();
+        input.press(at(150.0, 150.0), &grid(), &bar());
+        input.motion(at(150.0, 950.0), &grid(), &bar());
+        for _ in 0..30 {
+            input.step(1.0 / 60.0);
+        }
+
+        input.motion(at(700.0, 500.0), &grid(), &bar());
+        for _ in 0..30 {
+            input.step(1.0 / 60.0);
+        }
+        assert!(input.snap() < 0.05, "{}", input.snap());
     }
 
     #[test]

@@ -20,12 +20,14 @@ pub mod rounded;
 
 use smithay::{
     backend::renderer::{
+        ImportAll, ImportMem, Renderer,
         element::{
-            memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
-            utils::{CropRenderElement, RescaleRenderElement}, AsRenderElements, Element, Kind, Wrap,
+            AsRenderElements, Kind, Wrap,
+            memory::MemoryRenderBufferRenderElement,
+            surface::WaylandSurfaceRenderElement,
+            utils::{CropRenderElement, RescaleRenderElement},
         },
         utils::CommitCounter,
-        ImportAll, ImportMem, Renderer,
     },
     desktop::layer_map_for_output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -39,14 +41,14 @@ use crate::{
     rendering::{
         cursor::Cursor,
         decorate::{Backdrop, Shadow, TileDecorator},
-        decoration::{window, Border, FramePalette, TextRenderer, TitleBarParams},
+        decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
         element::CrownElement,
     },
     shell::{
+        Shell,
         decoration::{Control, TitleBarLayout},
         monitor::Monitor,
         tile::Tile,
-        Shell,
     },
     utils::id::WindowId,
 };
@@ -359,7 +361,7 @@ fn tile_elements<R, D>(
     // from and the bound the region is clipped to.
     if let Some(surface) = surface {
         backdrop_elements(
-            elements,
+            &mut |element| elements.push(CrownElement::Tile(Wrap::from(element))),
             renderer,
             decorator,
             &surface,
@@ -573,6 +575,7 @@ fn frame_backing<R, D>(
             radius: outer,
             glass: decorator.glass(style.scale),
             alpha,
+            strength: 1.0,
         },
     ) {
         elements.push(CrownElement::Tile(Wrap::from(glass)));
@@ -781,6 +784,7 @@ fn menu_elements<R, D>(
                 radius: style.radius,
                 glass: decorator.glass(style.scale),
                 alpha: 1.0,
+                strength: 1.0,
             },
         )
     {
@@ -855,6 +859,7 @@ fn snap_preview_elements<R, D>(
                 radius: style.radius,
                 glass: decorator.glass(style.scale),
                 alpha: alpha * 0.85,
+                strength: 1.0,
             },
         )
     {
@@ -886,9 +891,12 @@ fn corner_radii(radius: f32, decorated: bool) -> [f32; 4] {
 /// rectangle effects are clipped to and, for the portable protocol, the one the
 /// corners are cut from — a window's animated rect, or a layer surface's
 /// geometry.
+/// Elements go to `out` rather than into a list, because the overview draws
+/// the very same effects into a list of its own: a thumbnail is the window at
+/// a different size, and the blur it stands on is the window's own.
 #[allow(clippy::too_many_arguments)]
-fn backdrop_elements<R, D>(
-    elements: &mut Elements<R, D>,
+pub(crate) fn backdrop_elements<R, D>(
+    out: &mut dyn FnMut(D::Element),
     renderer: &mut R,
     decorator: &mut D,
     surface: &WlSurface,
@@ -910,7 +918,7 @@ fn backdrop_elements<R, D>(
 
     if let Some(effects) = blur::place_surface_effects(surface, origin, scale, mask) {
         surface_effect_elements(
-            elements,
+            out,
             renderer,
             decorator,
             surface,
@@ -939,9 +947,10 @@ fn backdrop_elements<R, D>(
                 radius,
                 glass,
                 alpha,
+                strength: 1.0,
             },
         ) {
-            elements.push(CrownElement::Tile(Wrap::from(backdrop)));
+            out(backdrop);
         }
     }
 }
@@ -952,7 +961,7 @@ fn backdrop_elements<R, D>(
 /// this is the order that puts the silhouette underneath the material it is
 /// cast by.
 fn surface_effect_elements<R, D>(
-    elements: &mut Elements<R, D>,
+    out: &mut dyn FnMut(D::Element),
     renderer: &mut R,
     decorator: &mut D,
     surface: &WlSurface,
@@ -981,9 +990,10 @@ fn surface_effect_elements<R, D>(
                 radius: piece.radius,
                 glass: effects.glass,
                 alpha,
+                strength: 1.0,
             },
         ) {
-            elements.push(CrownElement::Tile(Wrap::from(backdrop)));
+            out(backdrop);
         }
     }
 
@@ -1003,7 +1013,7 @@ fn surface_effect_elements<R, D>(
                 alpha,
             },
         ) {
-            elements.push(CrownElement::Tile(Wrap::from(shadow)));
+            out(shadow);
         }
     }
 }
@@ -1060,7 +1070,7 @@ fn layer_elements<R, D>(
             // Panels and notifications are what actually wants glass, so layer
             // surfaces get the same treatment windows do.
             backdrop_elements(
-                elements,
+                &mut |element| elements.push(CrownElement::Tile(Wrap::from(element))),
                 renderer,
                 decorator,
                 surface.wl_surface(),

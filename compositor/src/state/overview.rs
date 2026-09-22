@@ -25,6 +25,16 @@ impl State {
             .any(|monitor| monitor.spacecontrol().is_open())
     }
 
+    /// Whether the overview owns input.
+    ///
+    /// It is a mode, not a region: while it is open no client hears the
+    /// pointer or the keyboard, wherever on the desk the pointer happens to
+    /// be. A thumbnail is a picture of a window, and a click, a scroll or a
+    /// keystroke aimed at the picture is not aimed at the window.
+    pub fn overview_owns_input(&self) -> bool {
+        self.overview_is_open()
+    }
+
     /// Points the focused monitor's overview at the fingers, opening it on the
     /// first update rather than waiting for the release.
     pub fn drive_overview(&mut self, travelled: f64) {
