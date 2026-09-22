@@ -7,8 +7,9 @@ use smithay::{
 
 use config::ResolvedRule;
 
+use spacecontrol::animations::spring::{Spring, SpringProfile};
+
 use crate::{
-    animations::spring::{Spring, SpringProfile},
     layout::{SnapZone, TileInfo, placement},
     shell::decoration::{DecorationCommit, DecorationIds, Insets},
     utils::id::WindowId,

@@ -325,6 +325,7 @@ dependencies = [
  "serde",
  "smithay",
  "smithay-drm-extras",
+ "spacecontrol",
  "thiserror 2.0.20",
  "tiny-skia",
  "tokio",
@@ -2313,6 +2314,11 @@ dependencies = [
 [[package]]
 name = "spacecontrol"
 version = "0.1.0"
+dependencies = [
+ "config",
+ "smithay",
+ "tracing",
+]
 
 [[package]]
 name = "strict-num"

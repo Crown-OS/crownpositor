@@ -26,6 +26,7 @@ features = [
 [dependencies]
 config = { path = "../config" }
 protocols = { path = "../protocols" }
+spacecontrol = { path = "../spacecontrol" }
 crownos-config = { workspace = true }
 crownos-protocols = { workspace = true, features = ["server"] }
 anyhow = { workspace = true }

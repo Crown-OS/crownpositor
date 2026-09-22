@@ -57,6 +57,14 @@ impl State {
             return;
         }
 
+        // And an open overview owns it the same way: the thumbnails highlight
+        // under the cursor and the windows they stand for hear nothing.
+        if self.overview_motion(location) {
+            self.queue_redraw_at(previous);
+            self.queue_redraw_at(location);
+            return;
+        }
+
         let under = self.shell.pointer_focus_under(location);
         let on_frame = under
             .as_ref()
@@ -130,6 +138,19 @@ impl State {
                 self.dismiss_menu();
             }
             return;
+        }
+
+        // A click in the overview picks a window or a workspace, or drops a
+        // window it was carrying. None of it reaches a client.
+        let at = self.input.pointer_location;
+        if !pointer.is_grabbed() {
+            let taken = match state {
+                ButtonState::Pressed => self.overview_press(at),
+                ButtonState::Released => self.overview_release(at),
+            };
+            if taken {
+                return;
+            }
         }
 
         // Which frame the click belongs to, decided before the dispatch and

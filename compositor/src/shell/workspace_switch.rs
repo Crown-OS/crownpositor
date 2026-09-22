@@ -12,16 +12,18 @@
 //! own geometry to *pages* and back. That is what makes the same object usable
 //! for any paged viewport later.
 
-use crate::animations::spring::{Spring, SpringProfile};
+use spacecontrol::animations::{
+    rubber_band::RubberBand,
+    spring::{Spring, SpringProfile},
+};
 
 /// Seconds of coasting the release velocity is projected over to guess where
 /// the fingers were heading, and so how far a flick is worth. Roughly the time
 /// constant of a thrown object slowing to a stop.
 const PROJECTION: f64 = 0.5;
-/// How far past the first or last workspace the fingers may pull, in pages.
-const RUBBER_BAND_LIMIT: f64 = 0.35;
-/// Resistance at the edge. 1.0 would track the fingers exactly at first.
-const RUBBER_BAND_STRENGTH: f64 = 0.5;
+/// How far past the first or last workspace the fingers may pull, in pages,
+/// and how hard the edge resists.
+const BAND: RubberBand = RubberBand::new(0.35, 0.5);
 
 /// Logical pixels between two workspaces as they slide past each other, so the
 /// pages read as separate surfaces rather than one continuous strip.
@@ -121,7 +123,7 @@ impl WorkspaceSwitch {
         let Some(drag) = self.drag else {
             return;
         };
-        let pinned = resist(drag.origin - travelled, last) as f32;
+        let pinned = BAND.clamp(drag.origin - travelled, 0.0, last as f64) as f32;
         match self.profile {
             Some(_) => self.position.set_target(pinned),
             None => self.position.hold(pinned),
@@ -197,25 +199,6 @@ impl WorkspaceSwitch {
     fn nearest(&self, last: usize) -> usize {
         self.position().round().clamp(0.0, last as f64) as usize
     }
-}
-
-/// Squashes a position that has run off either end, so the first and last
-/// workspaces resist instead of stopping dead.
-fn resist(position: f64, last: usize) -> f64 {
-    let last = last as f64;
-    if position < 0.0 {
-        -band(-position)
-    } else if position > last {
-        last + band(position - last)
-    } else {
-        position
-    }
-}
-
-/// Diminishing returns: the first pixels nearly track the fingers, and no
-/// amount of pulling gets past [`RUBBER_BAND_LIMIT`].
-fn band(overshoot: f64) -> f64 {
-    RUBBER_BAND_LIMIT * (1.0 - 1.0 / (overshoot * RUBBER_BAND_STRENGTH / RUBBER_BAND_LIMIT + 1.0))
 }
 
 #[cfg(test)]
@@ -389,14 +372,14 @@ mod tests {
         let position = switch.position();
         assert!(position < 0.0, "the edge should still give a little");
         assert!(
-            position > -RUBBER_BAND_LIMIT,
+            position > -BAND.limit,
             "and never past the limit: {position}"
         );
 
         // Pulling ten times as hard barely gets further.
         switch.drag_to(10.0, 3);
         follow(&mut switch, 60);
-        assert!(switch.position() > -RUBBER_BAND_LIMIT);
+        assert!(switch.position() > -BAND.limit);
     }
 
     #[test]

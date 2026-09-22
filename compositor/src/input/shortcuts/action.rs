@@ -121,6 +121,8 @@ pub enum Action {
 
     OpenWorkspaceView,
     CloseWorkspaceView,
+    /// One chord for both, the way a dedicated mission-control key behaves.
+    ToggleWorkspaceView,
 
     /// Grow or shrink the master column by a fraction of the area.
     ResizeSplit(f64),
@@ -221,6 +223,7 @@ impl FromStr for Action {
 
             "open-workspace-view" => Ok(Self::OpenWorkspaceView),
             "close-workspace-view" => Ok(Self::CloseWorkspaceView),
+            "toggle-workspace-view" => Ok(Self::ToggleWorkspaceView),
 
             "resize-split" => {
                 let raw = arg("fraction", parts)?;

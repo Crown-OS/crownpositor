@@ -1,4 +1,3 @@
-mod animations;
 mod backend;
 mod color;
 mod handlers;

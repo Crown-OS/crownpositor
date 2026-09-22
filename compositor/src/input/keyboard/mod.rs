@@ -72,6 +72,22 @@ impl State {
                             return FilterResult::Intercept(Action::SwitchVt(vt));
                         }
 
+                        // An open overview owns the keyboard: the windows
+                        // behind it are pictures of windows, not somewhere to
+                        // type. Escape closes it, everything else is swallowed
+                        // — but only after the VT chord above, which nothing
+                        // may take away.
+                        if state.overview_is_open() {
+                            state.input.intercepted.insert(handle.raw_code());
+                            return FilterResult::Intercept(
+                                if handle.modified_syms().contains(&Keysym::Escape) {
+                                    Action::CloseWorkspaceView
+                                } else {
+                                    Action::None
+                                },
+                            );
+                        }
+
                         if bypass {
                             return FilterResult::Forward;
                         }

@@ -5,6 +5,7 @@ mod common;
 mod config;
 mod display;
 mod input;
+mod overview;
 pub mod outputs;
 mod wayland;
 
@@ -15,8 +16,10 @@ pub use crate::state::{
     backend::BackendState, client::ClientState, common::CommonState, config::ConfigState,
     display::DisplayGamma, input::InputState, wayland::WaylandState,
 };
+use spacecontrol::animations::spring::Clock;
+
 use crate::{
-    animations::spring::Clock, rendering::decoration::TextRenderer, shell::Shell,
+    rendering::decoration::TextRenderer, shell::Shell,
     xwayland::Xwayland,
 };
 

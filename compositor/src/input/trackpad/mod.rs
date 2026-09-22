@@ -53,6 +53,11 @@ const SWITCH_FINGERS: Fingers = Fingers::Three;
 /// page costs the same swipe on every monitor.
 const SWIPE_DISTANCE: f64 = 500.0;
 
+/// Finger travel that carries the overview all the way open. Shorter than a
+/// workspace page: this is a lift, not a scroll, and the hand should not have
+/// to cross the whole touchpad to finish it.
+const OVERVIEW_DISTANCE: f64 = 320.0;
+
 /// A swipe's motion without the pointer acceleration curve.
 ///
 /// Acceleration is right for a cursor and wrong for direct manipulation: it
@@ -92,7 +97,16 @@ impl State {
             return;
         };
 
-        if update.fingers != SWITCH_FINGERS || update.axis != Axis::Horizontal {
+        if update.fingers != SWITCH_FINGERS {
+            return;
+        }
+
+        if update.axis == Axis::Vertical {
+            // Up opens. `delta` grows downward, so the sign flips on the way in
+            // and the overview rises out of the bottom of the screen with the
+            // fingers.
+            self.drive_overview(-update.delta / OVERVIEW_DISTANCE);
+            self.queue_redraw();
             return;
         }
 
@@ -114,6 +128,13 @@ impl State {
         else {
             return;
         };
+
+        if self.release_overview(release.cancelled, -release.velocity / OVERVIEW_DISTANCE) {
+            self.shell.refresh();
+            self.update_keyboard_focus();
+            self.queue_redraw();
+            return;
+        }
 
         if self.shell.is_swiping_workspaces() {
             if release.cancelled {

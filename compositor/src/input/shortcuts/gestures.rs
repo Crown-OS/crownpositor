@@ -25,11 +25,11 @@ impl GestureBindings {
                     Action::Workspace(WorkspaceRef::Relative(1)),
                 ),
                 (
-                    SwipeGesture::BottomToTop(Fingers::Four),
+                    SwipeGesture::BottomToTop(Fingers::Three),
                     Action::OpenWorkspaceView,
                 ),
                 (
-                    SwipeGesture::TopToBottom(Fingers::Four),
+                    SwipeGesture::TopToBottom(Fingers::Three),
                     Action::CloseWorkspaceView,
                 ),
             ]

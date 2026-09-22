@@ -42,6 +42,7 @@ pub fn bindings() -> impl Iterator<Item = (Keybind, Action)> {
             Action::Spawn(vec![TERMINAL.to_owned()]),
         ),
         (SUPER, KeyCode::Q, Action::CloseWindow),
+        (SUPER, KeyCode::E, Action::ToggleWorkspaceView),
         (SUPER, KeyCode::H, Action::Focus(Direction::Left)),
         (SUPER, KeyCode::L, Action::Focus(Direction::Right)),
         (SUPER, KeyCode::K, Action::Focus(Direction::Up)),

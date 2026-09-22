@@ -15,13 +15,14 @@ pub mod cursor;
 pub mod decorate;
 pub mod decoration;
 pub mod element;
+pub mod overview;
 pub mod rounded;
 
 use smithay::{
     backend::renderer::{
         element::{
             memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
-            utils::CropRenderElement, AsRenderElements, Element, Kind, Wrap,
+            utils::{CropRenderElement, RescaleRenderElement}, AsRenderElements, Element, Kind, Wrap,
         },
         utils::CommitCounter,
         ImportAll, ImportMem, Renderer,
@@ -112,7 +113,7 @@ impl<'a> FrameStyle<'a> {
 ///
 /// The label buffers are imported at scale 1, so their pixel size and the
 /// logical size the element wants are the same number in two coordinate spaces.
-fn logical(size: Size<i32, BufferCoords>) -> Size<i32, Logical> {
+pub(crate) fn logical(size: Size<i32, BufferCoords>) -> Size<i32, Logical> {
     Size::from((size.w, size.h))
 }
 
@@ -187,6 +188,23 @@ where
         scale,
         style,
     );
+
+    // The overview stands in for the workspaces entirely: it draws the same
+    // windows, on their way to or from their thumbnails, so drawing both would
+    // be drawing every window twice.
+    if monitor.spacecontrol().is_visible() {
+        overview::overview_elements(
+            &mut elements,
+            monitor,
+            renderer,
+            decorator,
+            scale,
+            style.radius,
+        );
+        overview::label_elements::<R, D>(&mut elements, monitor, renderer, scale, style);
+        overview::background_elements(&mut elements, monitor, renderer, decorator, scale);
+        return elements;
+    }
 
     // One workspace once the viewport has settled, two while it is sliding —
     // and the slide is nothing but the offset each tile is drawn at, so the GPU
@@ -323,7 +341,10 @@ fn tile_elements<R, D>(
         //         continue;
         //     }
         // }
-        let Some(cropped) = CropRenderElement::from_element(surface, scale, clip) else {
+        // Drawn at its own size here; the overview passes a smaller factor
+        // through the very same wrapper.
+        let scaled = RescaleRenderElement::from_element(surface, clip.loc, 1.0);
+        let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip) else {
             continue;
         };
         if let Some(decorated) = decorator.decorate(renderer, cropped, size, radii) {
@@ -1019,7 +1040,8 @@ fn layer_elements<R, D>(
                 Some(radius) => {
                     let size = (clip.size.w as f32, clip.size.h as f32);
                     for layer in layers {
-                        let Some(cropped) = CropRenderElement::from_element(layer, scale, clip)
+                        let scaled = RescaleRenderElement::from_element(layer, clip.loc, 1.0);
+                        let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip)
                         else {
                             continue;
                         };

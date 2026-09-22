@@ -5,6 +5,7 @@ pub mod arrangement;
 pub mod decoration;
 pub mod grab;
 pub mod monitor;
+pub mod overview;
 pub mod scale;
 pub mod snap;
 pub mod tile;
@@ -33,8 +34,9 @@ use smithay::{
 
 use config::{Config, ResolvedRule};
 
+use spacecontrol::animations::spring::SpringProfile;
+
 use crate::{
-    animations::spring::SpringProfile,
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
     layout::{placement, Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode},
     menu::Menus,
@@ -280,6 +282,10 @@ impl Shell {
     }
 
     // ---- outputs ----
+
+    pub fn monitors_mut(&mut self) -> &mut [Monitor] {
+        &mut self.monitors
+    }
 
     pub fn monitors(&self) -> &[Monitor] {
         &self.monitors
@@ -1476,6 +1482,10 @@ impl Shell {
         self.snap_previews.step(dt);
         for monitor in &mut self.monitors {
             monitor.switch_mut().step(dt);
+            monitor.spacecontrol_mut().step(dt);
+            if monitor.spacecontrol().is_visible() {
+                monitor.with_spacecontrol(|space, monitor| space.relayout(monitor));
+            }
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().step(dt);
@@ -1490,6 +1500,7 @@ impl Shell {
         self.snap_previews.is_animating()
             || self.monitors.iter().any(|monitor| {
                 monitor.is_switching()
+                    || monitor.spacecontrol().is_active()
                     || monitor.workspaces().iter().any(|workspace| {
                         workspace.tiles().iter().any(|tile| !tile.anim().at_rest())
                     })
@@ -1500,6 +1511,7 @@ impl Shell {
     pub fn settle_animations(&mut self) {
         for monitor in &mut self.monitors {
             monitor.switch_mut().settle();
+            monitor.spacecontrol_mut().settle();
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().settle();

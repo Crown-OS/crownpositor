@@ -13,8 +13,9 @@ use protocols::{
     crownos_background_effects::Capability as CrownosEffectCapability,
 };
 
+use spacecontrol::animations::spring::SpringProfile;
+
 use crate::{
-    animations::spring::SpringProfile,
     input::shortcuts::{Action, Bindings},
     layout::{Gaps, LayoutOp},
     shell::tile::WindowState,
@@ -110,10 +111,23 @@ impl State {
                 self.shell.apply_layout_op(LayoutOp::ResetSize);
             }
 
-            // TODO: needs the exposé view in `shell/workspaces_view`.
-            Action::MoveWorkspaceToOutput(_)
-            | Action::OpenWorkspaceView
-            | Action::CloseWorkspaceView => {
+            Action::OpenWorkspaceView => {
+                if let Some(monitor) = self.shell.focused_monitor_mut() {
+                    monitor.with_spacecontrol(|space, monitor| space.open(monitor));
+                }
+            }
+            Action::CloseWorkspaceView => {
+                if let Some(monitor) = self.shell.focused_monitor_mut() {
+                    monitor.spacecontrol_mut().close();
+                }
+            }
+            Action::ToggleWorkspaceView => {
+                if let Some(monitor) = self.shell.focused_monitor_mut() {
+                    monitor.with_spacecontrol(|space, monitor| space.toggle(monitor));
+                }
+            }
+
+            Action::MoveWorkspaceToOutput(_) => {
                 tracing::warn!(?action, "action is not implemented yet");
             }
         }

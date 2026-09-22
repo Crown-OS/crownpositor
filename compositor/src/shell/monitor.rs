@@ -8,8 +8,10 @@ use smithay::{
 
 use config::{OutputSetting, OutputTransform};
 
+use spacecontrol::animations::spring::SpringProfile;
+
 use crate::{
-    animations::spring::SpringProfile,
+    shell::overview::SpaceControl,
     utils::edid::EdidInfo,
     layout::{Gaps, WorkspaceMode},
     shell::{
@@ -124,6 +126,9 @@ pub struct Monitor {
     default_mode: WorkspaceMode,
     /// Pinned by config; `None` lets `arrange_outputs` place it.
     fixed_position: Option<smithay::utils::Point<i32, Logical>>,
+    /// The mission-control overview on this output. Per-monitor, like the
+    /// viewport: each screen opens and closes its own.
+    spacecontrol: SpaceControl,
 }
 
 impl Monitor {
@@ -151,6 +156,7 @@ impl Monitor {
             gaps,
             default_mode,
             fixed_position: None,
+            spacecontrol: SpaceControl::new(),
         };
         monitor
             .workspaces
@@ -244,6 +250,24 @@ impl Monitor {
     }
 
     // ---- the viewport ----
+
+    pub fn spacecontrol(&self) -> &SpaceControl {
+        &self.spacecontrol
+    }
+
+    pub fn spacecontrol_mut(&mut self) -> &mut SpaceControl {
+        &mut self.spacecontrol
+    }
+
+    /// The overview and the monitor it is showing, borrowed together — the
+    /// shape every caller needs, and the one the borrow checker will not let
+    /// them build out of the two accessors above.
+    pub fn with_spacecontrol<T>(&mut self, act: impl FnOnce(&mut SpaceControl, &Monitor) -> T) -> T {
+        let mut overview = std::mem::take(&mut self.spacecontrol);
+        let result = act(&mut overview, self);
+        self.spacecontrol = overview;
+        result
+    }
 
     pub fn switch(&self) -> &WorkspaceSwitch {
         &self.switch
@@ -667,6 +691,7 @@ mod tests {
             gaps: Gaps::default(),
             default_mode: WorkspaceMode::Tiling,
             fixed_position: None,
+            spacecontrol: SpaceControl::new(),
         };
         for _ in 0..workspaces {
             monitor.workspaces.push(Workspace::new(

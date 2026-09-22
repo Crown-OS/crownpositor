@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::animations::velocity::VelocityTracker;
+use spacecontrol::animations::velocity::VelocityTracker;
 
 // Deltas are unaccelerated, normalized by libinput to a 1000 dpi device:
 // ~39 units are one millimetre of finger travel.

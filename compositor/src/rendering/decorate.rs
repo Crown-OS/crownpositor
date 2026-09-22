@@ -15,15 +15,22 @@ use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
         element::{
-            Id, RenderElement, surface::WaylandSurfaceRenderElement, utils::CropRenderElement,
+            Id, RenderElement, surface::WaylandSurfaceRenderElement,
+            utils::{CropRenderElement, RescaleRenderElement},
         },
         utils::CommitCounter,
     },
     utils::{Physical, Rectangle},
 };
 
-/// A tile's surfaces, already clipped to the window's animated rect.
-pub type Cropped<R> = CropRenderElement<WaylandSurfaceRenderElement<R>>;
+/// A tile's surfaces, scaled to the size they are drawn at and clipped to the
+/// window's animated rect.
+///
+/// The rescale is what lets the same element — and so the same decorator, the
+/// same shaders and the same damage tracking — draw a window both at its own
+/// size on the desktop and shrunk into an overview thumbnail. On the desktop
+/// the factor is 1.0, which the wrapper resolves to a no-op.
+pub type Cropped<R> = CropRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<R>>>;
 
 /// One piece of blurred glass to draw behind a surface.
 ///

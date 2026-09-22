@@ -1,0 +1,15 @@
+[package]
+name = "spacecontrol"
+version = "0.1.0"
+edition = "2024"
+
+# The overview draws client surfaces and renders workspace thumbnails to
+# offscreen textures, so it needs the element types and the renderer traits —
+# but no backend: the compositor picks that and hands one in.
+[dependencies.smithay]
+workspace = true
+features = ["desktop", "wayland_frontend"]
+
+[dependencies]
+config = { path = "../config" }
+tracing = { workspace = true }

@@ -5,6 +5,10 @@ use smithay::backend::renderer::{
     },
 };
 
+use spacecontrol::render::OverviewElement;
+
+use crate::rendering::decorate::Cropped;
+
 smithay::backend::renderer::element::render_elements! {
     /// Everything that can appear on an output.
     ///
@@ -25,4 +29,11 @@ smithay::backend::renderer::element::render_elements! {
     /// giving it: a themed cursor, a window's title. `ImportMem` above is what
     /// this variant costs.
     Memory = MemoryRenderBufferRenderElement<R>,
+    /// A surface drawn at a size other than its own, with nothing added: the
+    /// wallpaper as the overview zooms it.
+    Scaled = Cropped<R>,
+    /// Anything the mission-control overview drew: a window shrunk into its
+    /// thumbnail, a workspace preview, the wash over the wallpaper. Wrapped for
+    /// the same reason the tile variant is.
+    Overview = Wrap<OverviewElement<R, E>>,
 }
