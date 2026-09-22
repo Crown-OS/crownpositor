@@ -33,11 +33,13 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-// Where this backdrop sits in the framebuffer, in pixels. Every position below
-// comes from `gl_FragCoord`, so a rotated or flipped output needs no special
-// case: the framebuffer is the one space all of them agree on.
-uniform vec2 backdrop_origin;
-uniform vec2 backdrop_size;
+// The blurred scene is output-wide and shared by every piece of glass on the
+// frame, so a fragment addresses it by `gl_FragCoord` alone: no per-backdrop
+// origin, and the taps at the edge of one piece land on the real pixels next to
+// it rather than on a clamped copy of its own border. A rotated or flipped
+// output needs no special case either — the framebuffer is the one space every
+// position below agrees on.
+uniform vec2 scene_size;
 // The rounded rectangle the glass is cut from, in those same framebuffer
 // pixels: one shape, not the piece of it being drawn. A blur shape is several
 // primitives, and each piece has to be cut by its own primitive rather than by
@@ -149,8 +151,8 @@ void main() {
     // along the normal in proportion to how deep into the curve we are — which
     // costs nothing, because it moves the taps the upsample was going to make
     // anyway.
-    vec2 refracted = gl_FragCoord.xy - backdrop_origin - normal * (bevel * rim);
-    vec3 color = upsample(refracted / backdrop_size);
+    vec2 refracted = gl_FragCoord.xy - normal * (bevel * rim);
+    vec3 color = upsample(refracted / scene_size);
 
     // Vibrancy, about the luma so the blur keeps its brightness. The rim gets
     // more of it than the sheet: light through the bevel travels further

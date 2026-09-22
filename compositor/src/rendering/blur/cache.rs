@@ -1,35 +1,23 @@
-//! Per-backdrop pyramid storage, kept across frames.
+//! What a blur pipeline keeps between frames.
 //!
-//! A backdrop refreshes its scene copy only inside the rectangles the damage
-//! tracker hands it, so the texture has to be the very one it filled last
-//! frame: everywhere else it holds the composite from the frames that did own
-//! those pixels, which is the only correct thing to blur there. Hence a cache
-//! keyed by element [`Id`] rather than a scratch buffer per frame.
+//! Two things outlive a frame, with different lifetimes. The scene and its
+//! pyramid belong to the *output*: a backdrop refreshes them only inside the
+//! rectangles the damage tracker hands it, so everywhere else they hold the
+//! composite from the frames that did own those pixels, which is the only
+//! correct thing to blur there. The halo belongs to one *backdrop*, because it
+//! is the damage that backdrop owes the tracker next frame.
 
 use std::{cell::RefCell, collections::HashMap, mem, rc::Rc};
 
 use smithay::{
-    backend::{
-        allocator::Fourcc,
-        renderer::{
-            Offscreen, Texture as _,
-            element::Id,
-            gles::{GlesError, GlesRenderer, GlesTexture},
-        },
+    backend::renderer::{
+        element::Id,
+        gles::{GlesError, GlesRenderer},
     },
     utils::{Buffer as BufferCoords, Physical, Rectangle, Size, Transform},
 };
 
-use crate::rendering::blur::BlurConfig;
-
-/// One backdrop's textures: a full-resolution copy of what sits under it, in
-/// framebuffer orientation, and the halving kawase levels above that.
-#[derive(Debug)]
-pub struct Pyramid {
-    pub(super) scene: GlesTexture,
-    pub(super) levels: Vec<GlesTexture>,
-    pub(super) halo: RefCell<Halo>,
-}
+use crate::rendering::blur::{BlurConfig, scene::BlurScene};
 
 /// The band a blur still owes, element-local.
 ///
@@ -48,72 +36,49 @@ pub struct Halo {
     pub(super) reported: Vec<Rectangle<i32, Physical>>,
 }
 
-impl Pyramid {
-    fn allocate(
-        renderer: &mut GlesRenderer,
-        size: Size<i32, BufferCoords>,
-        passes: usize,
-    ) -> Result<Self, GlesError> {
-        let mut allocate =
-            |size| Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, size);
-        let scene = allocate(size)?;
-        let levels = (0..passes)
-            .map(|pass| {
-                let shift = pass as u32 + 1;
-                allocate(Size::from((
-                    (size.w >> shift).max(1),
-                    (size.h >> shift).max(1),
-                )))
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            scene,
-            levels,
-            halo: RefCell::default(),
-        })
-    }
-}
-
-/// Every backdrop's pyramid on one output.
+/// One output's blur state, across frames.
 #[derive(Debug, Default)]
 pub struct BlurCache {
-    current: HashMap<Id, Rc<Pyramid>>,
-    previous: HashMap<Id, Rc<Pyramid>>,
+    scene: Option<Rc<BlurScene>>,
+    current: HashMap<Id, Rc<RefCell<Halo>>>,
+    previous: HashMap<Id, Rc<RefCell<Halo>>>,
 }
 
 impl BlurCache {
-    /// Retires last frame's map. Whatever is not asked for again is dropped
-    /// with it, which is how a closed window's textures are freed. Each
-    /// surviving pyramid's owed band becomes this frame's offer.
+    /// Retires last frame's backdrops. Whatever is not asked for again is
+    /// dropped with it, which is how a closed window stops asking for frames.
+    /// Each surviving backdrop's owed band becomes this frame's offer.
     pub fn begin_frame(&mut self) {
         self.previous = mem::take(&mut self.current);
-        for pyramid in self.previous.values() {
-            let mut halo = pyramid.halo.borrow_mut();
+        for halo in self.previous.values() {
+            let mut halo = halo.borrow_mut();
             halo.reported = mem::take(&mut halo.pending);
+        }
+        if let Some(scene) = &self.scene {
+            scene.begin_frame();
         }
     }
 
-    /// This frame's pyramid for one backdrop, reusing last frame's whenever it
-    /// still has the right shape.
-    pub fn pyramid(
+    /// This output's scene and pyramid, reallocated only when the framebuffer
+    /// or the pass count changed shape.
+    pub(super) fn scene(
         &mut self,
         renderer: &mut GlesRenderer,
-        id: &Id,
         size: Size<i32, BufferCoords>,
         passes: usize,
-    ) -> Result<Rc<Pyramid>, GlesError> {
-        let reusable = self
-            .previous
-            .remove(id)
-            .filter(|pyramid| pyramid.scene.size() == size && pyramid.levels.len() == passes);
-        let pyramid = match reusable {
-            Some(pyramid) => pyramid,
-            None => Rc::new(Pyramid::allocate(renderer, size, passes)?),
+    ) -> Result<Rc<BlurScene>, GlesError> {
+        let scene = match self.scene.take().filter(|scene| scene.fits(size, passes)) {
+            Some(scene) => scene,
+            None => Rc::new(BlurScene::allocate(renderer, size, passes)?),
         };
+        self.scene = Some(Rc::clone(&scene));
+        Ok(scene)
+    }
 
-        self.current.insert(id.clone(), Rc::clone(&pyramid));
-        Ok(pyramid)
+    pub(super) fn halo(&mut self, id: &Id) -> Rc<RefCell<Halo>> {
+        let halo = self.previous.remove(id).unwrap_or_default();
+        self.current.insert(id.clone(), Rc::clone(&halo));
+        halo
     }
 
     /// Whether any backdrop this frame drew owes a band, and the output
@@ -121,7 +86,7 @@ impl BlurCache {
     pub fn wants_redraw(&self) -> bool {
         self.current
             .values()
-            .any(|pyramid| !pyramid.halo.borrow().pending.is_empty())
+            .any(|halo| !halo.borrow().pending.is_empty())
     }
 }
 
@@ -130,7 +95,7 @@ impl BlurCache {
 pub struct BlurSession<'a> {
     pub cache: &'a mut BlurCache,
     pub config: BlurConfig,
-    /// The transform the frame renders with: a pyramid is sized in the
+    /// The transform the frame renders with: the scene is sized in the
     /// framebuffer's orientation, not the output's.
     pub transform: Transform,
     /// Output-local physical bounds, the clip a backdrop's geometry survives.

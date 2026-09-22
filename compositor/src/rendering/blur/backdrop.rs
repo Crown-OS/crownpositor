@@ -1,6 +1,6 @@
 //! One rectangle of blurred glass, blurred out of the live framebuffer.
 
-use std::{mem, rc::Rc};
+use std::{cell::RefCell, mem, rc::Rc};
 
 use smithay::{
     backend::renderer::{
@@ -18,7 +18,8 @@ use crate::{
     rendering::{
         blur::{
             BlurConfig, Glass,
-            cache::{BlurSession, Pyramid},
+            cache::{BlurSession, Halo},
+            scene::{BlurScene, grow},
         },
         decorate::Backdrop,
     },
@@ -27,9 +28,10 @@ use crate::{
 
 /// One rectangle of the blurred glass behind a surface.
 ///
-/// Holds no pixels of its own. The blur happens in `draw`, out of whatever the
-/// framebuffer holds under this rectangle at that moment — everything below it
-/// in the element list, and nothing above.
+/// Holds no pixels of its own. The blur happens in `draw`, out of the output's
+/// shared scene — everything below this rectangle in the element list, and no
+/// glass at all, so pieces that overlap read one layer of blur between them
+/// rather than each blurring the one under it.
 #[derive(Debug)]
 pub struct BlurBackdrop {
     id: Id,
@@ -40,7 +42,8 @@ pub struct BlurBackdrop {
     glass: Glass,
     alpha: f32,
     config: BlurConfig,
-    pyramid: Rc<Pyramid>,
+    scene: Rc<BlurScene>,
+    halo: Rc<RefCell<Halo>>,
     shaders: BlurShaders,
 }
 
@@ -57,17 +60,17 @@ impl BlurBackdrop {
     ) -> Option<Self> {
         let shaders = BlurShaders::get(renderer)?;
         let geometry = params.geometry.intersection(session.output)?;
-        let size = session.transform.transform_size(geometry.size);
-        let pyramid = session
+        let size = session.transform.transform_size(session.output.size);
+        let scene = session
             .cache
-            .pyramid(
+            .scene(
                 renderer,
-                &params.id,
                 Size::<i32, BufferCoords>::from((size.w, size.h)),
                 session.config.passes(),
             )
             .inspect_err(|err| tracing::warn!(%err, "failed to allocate a blur pyramid"))
             .ok()?;
+        let halo = session.cache.halo(&params.id);
 
         Some(Self {
             id: params.id,
@@ -78,7 +81,8 @@ impl BlurBackdrop {
             glass: params.glass,
             alpha: params.alpha,
             config: session.config,
-            pyramid,
+            scene,
+            halo,
             shaders,
         })
     }
@@ -91,7 +95,7 @@ impl BlurBackdrop {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        let Some(top) = self.pyramid.levels.first() else {
+        let Some(top) = self.scene.levels.first() else {
             return Ok(());
         };
         let projection = *frame.projection();
@@ -122,7 +126,7 @@ impl BlurBackdrop {
     /// next one. Rectangles the tracker is repainting anyway are not owed
     /// twice.
     fn owe_halo(&self, dst: Rectangle<i32, Physical>, damage: &[Rectangle<i32, Physical>]) {
-        let mut halo = self.pyramid.halo.borrow_mut();
+        let mut halo = self.halo.borrow_mut();
         let fresh =
             Rectangle::subtract_rects_many(damage.iter().copied(), mem::take(&mut halo.reported));
 
@@ -136,9 +140,10 @@ impl BlurBackdrop {
         );
     }
 
-    /// Lifts the damaged part of the frame into the scene copy and runs the
-    /// pyramid over the dirty footprint, leaving the last upsample to the draw
-    /// that follows. `None` skips the backdrop entirely.
+    /// Lifts the part of the frame this backdrop is about to cover into the
+    /// output's scene copy and runs the pyramid over the dirty footprint,
+    /// leaving the last upsample to the draw that follows. `None` skips the
+    /// backdrop entirely.
     ///
     /// # Safety
     ///
@@ -150,7 +155,7 @@ impl BlurBackdrop {
         projection: [f32; 9],
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-    ) -> Option<[Uniform<'static>; 12]> {
+    ) -> Option<[Uniform<'static>; 11]> {
         let (mut viewport, mut previous) = ([0; 4], 0);
         unsafe {
             gl.GetIntegerv(ffi::VIEWPORT, viewport.as_mut_ptr());
@@ -161,24 +166,33 @@ impl BlurBackdrop {
             projection,
             viewport: Size::from((viewport[2], viewport[3])),
         };
-        let backdrop = space.rect(dst);
-        let scene = self.pyramid.scene.size();
-        let bounds = Rectangle::from_size(Size::from((scene.w, scene.h)));
-        let top = self.pyramid.levels.first()?;
-        if backdrop.size != bounds.size {
+        let size = self.scene.scene.size();
+        let frame = Rectangle::from_size(Size::<i32, Physical>::from((size.w, size.h)));
+        if frame.size != space.viewport {
             return None;
         }
+        let top = self.scene.levels.first()?;
+        let radius = self.config.radius();
 
-        // Damage arrives element-local; the scene is the same rectangle in the
-        // framebuffer's orientation, so one mapping serves both the blit source
-        // and its destination.
-        let dirty = |rect: &Rectangle<i32, Physical>| {
-            let mut rect = space.rect(Rectangle::new(rect.loc + dst.loc, rect.size));
-            rect.loc -= backdrop.loc;
-            rect.intersection(bounds)
-        };
-        let footprint = damage.iter().filter_map(dirty).reduce(Rectangle::merge)?;
-        let footprint = grow(footprint, self.config.radius()).intersection(bounds)?;
+        // The scene spans the whole framebuffer, so damage maps into it with no
+        // per-backdrop origin to subtract: one rectangle serves as both the
+        // blit's source and its destination.
+        let dirty: Vec<_> = damage
+            .iter()
+            .filter_map(|rect| {
+                space
+                    .rect(Rectangle::new(rect.loc + dst.loc, rect.size))
+                    .intersection(frame)
+            })
+            .collect();
+        let refresh = self.scene.refresh(&dirty, radius, frame);
+        // From here on this rectangle is glass, whether or not the frame
+        // repaints any of it, so nothing drawn after it may blur these pixels
+        // back out of the framebuffer.
+        self.scene.cover(space.rect(dst));
+
+        let footprint = dirty.into_iter().reduce(Rectangle::merge)?;
+        let footprint = grow(footprint, radius).intersection(frame)?;
         let offset = self.config.offset.max(0.0);
 
         unsafe {
@@ -188,17 +202,17 @@ impl BlurBackdrop {
                 ffi::DRAW_FRAMEBUFFER,
                 ffi::COLOR_ATTACHMENT0,
                 ffi::TEXTURE_2D,
-                self.pyramid.scene.tex_id(),
+                self.scene.scene.tex_id(),
                 0,
             );
             gl.Disable(ffi::SCISSOR_TEST);
-            for rect in damage.iter().filter_map(dirty) {
+            for rect in &refresh {
                 let (x, y, w, h) = (rect.loc.x, rect.loc.y, rect.size.w, rect.size.h);
                 gl.BlitFramebuffer(
-                    backdrop.loc.x + x,
-                    backdrop.loc.y + y,
-                    backdrop.loc.x + x + w,
-                    backdrop.loc.y + y + h,
+                    x,
+                    y,
+                    x + w,
+                    y + h,
                     x,
                     y,
                     x + w,
@@ -213,14 +227,14 @@ impl BlurBackdrop {
             gl.Disable(ffi::BLEND);
 
             let (down, up) = (&self.shaders.down, &self.shaders.up);
-            let mut source = &self.pyramid.scene;
-            for (index, level) in self.pyramid.levels.iter().enumerate() {
+            let mut source = &self.scene.scene;
+            for (index, level) in self.scene.levels.iter().enumerate() {
                 pass(gl, down, source, level, footprint, index, offset);
                 source = level;
             }
-            for index in (0..self.pyramid.levels.len().saturating_sub(1)).rev() {
-                let source = &self.pyramid.levels[index + 1];
-                let level = &self.pyramid.levels[index];
+            for index in (0..self.scene.levels.len().saturating_sub(1)).rev() {
+                let source = &self.scene.levels[index + 1];
+                let level = &self.scene.levels[index];
                 pass(gl, up, source, level, footprint, index, offset);
             }
 
@@ -234,9 +248,9 @@ impl BlurBackdrop {
         // This draw is the pyramid's last upsample, so it reads the tap
         // spacing of the level it samples exactly as the passes above do.
         Some(BlurShaders::finish_uniforms(
-            backdrop,
+            size,
             space.rect(self.mask),
-            half_pixel(top.size(), scene),
+            half_pixel(top.size(), size),
             offset,
             self.radius,
             self.config.noise,
@@ -355,11 +369,6 @@ fn level_area(
     )
 }
 
-fn grow(rect: Rectangle<i32, Physical>, margin: i32) -> Rectangle<i32, Physical> {
-    let margin = Point::from((margin, margin));
-    Rectangle::from_extremities(rect.loc - margin, rect.loc + rect.size.to_point() + margin)
-}
-
 /// The dual-filter tap spacing: half a texel of the smaller of the two
 /// textures a pass involves, in UV space — the destination going down, the
 /// source coming back up.
@@ -380,8 +389,12 @@ impl Element for BlurBackdrop {
         self.commit
     }
 
+    /// The whole shared level, because that is what the backdrop samples: the
+    /// finish shader addresses it by `gl_FragCoord` rather than through the
+    /// vertex stage, so what it reads is never the piece this rectangle maps
+    /// to.
     fn src(&self) -> Rectangle<f64, BufferCoords> {
-        self.pyramid
+        self.scene
             .levels
             .first()
             .map(|level| Rectangle::from_size(level.size().to_f64()))
@@ -405,7 +418,7 @@ impl Element for BlurBackdrop {
         _scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        let mut halo = self.pyramid.halo.borrow_mut();
+        let mut halo = self.halo.borrow_mut();
         if commit != Some(self.commit) {
             halo.reported.clear();
             return DamageSet::from_slice(&[Rectangle::from_size(self.geometry.size)]);

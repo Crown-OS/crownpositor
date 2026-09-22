@@ -23,7 +23,7 @@ use smithay::{
     backend::renderer::gles::{
         Capability, GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, ffi,
     },
-    utils::{Physical, Rectangle},
+    utils::{Buffer as BufferCoords, Physical, Rectangle, Size},
 };
 
 static DOWN_SHADER: &str = include_str!("./blur_down.frag");
@@ -41,10 +41,9 @@ pub struct BlurShaders {
 }
 
 impl BlurShaders {
-    fn finish_names() -> [UniformName<'static>; 12] {
+    fn finish_names() -> [UniformName<'static>; 11] {
         [
-            UniformName::new("backdrop_origin", UniformType::_2f),
-            UniformName::new("backdrop_size", UniformType::_2f),
+            UniformName::new("scene_size", UniformType::_2f),
             UniformName::new("mask_origin", UniformType::_2f),
             UniformName::new("mask_size", UniformType::_2f),
             UniformName::new("half_pixel", UniformType::_2f),
@@ -112,15 +111,15 @@ impl BlurShaders {
 
     /// Uniforms for one piece of glass.
     ///
-    /// `backdrop` and `mask` are both in framebuffer pixels, which is the space
-    /// the shader reads `gl_FragCoord` in; `half_pixel` is half a pixel of the
-    /// pyramid's top level, the source of the upsample this pass performs; and
-    /// `light` is the framebuffer-space direction the screen's upper left lies
-    /// in, which is the only thing the material needs to know about the
-    /// output's transform.
+    /// `scene` is the output-wide blur every backdrop shares, and `mask` is in
+    /// the framebuffer pixels the shader reads `gl_FragCoord` in; `half_pixel`
+    /// is half a pixel of the pyramid's top level, the source of the upsample
+    /// this pass performs; and `light` is the framebuffer-space direction the
+    /// screen's upper left lies in, which is the only thing the material needs
+    /// to know about the output's transform.
     #[allow(clippy::too_many_arguments)]
     pub fn finish_uniforms(
-        backdrop: Rectangle<i32, Physical>,
+        scene: Size<i32, BufferCoords>,
         mask: Rectangle<i32, Physical>,
         half_pixel: (f32, f32),
         offset: f32,
@@ -128,16 +127,9 @@ impl BlurShaders {
         noise: f32,
         glass: Glass,
         light: (f32, f32),
-    ) -> [Uniform<'static>; 12] {
+    ) -> [Uniform<'static>; 11] {
         [
-            Uniform::new(
-                "backdrop_origin",
-                (backdrop.loc.x as f32, backdrop.loc.y as f32),
-            ),
-            Uniform::new(
-                "backdrop_size",
-                (backdrop.size.w as f32, backdrop.size.h as f32),
-            ),
+            Uniform::new("scene_size", (scene.w as f32, scene.h as f32)),
             Uniform::new("mask_origin", (mask.loc.x as f32, mask.loc.y as f32)),
             Uniform::new("mask_size", (mask.size.w as f32, mask.size.h as f32)),
             Uniform::new("half_pixel", half_pixel),

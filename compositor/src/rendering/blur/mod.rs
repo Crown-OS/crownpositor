@@ -3,15 +3,24 @@
 //! Every backdrop blurs what is actually beneath it, at the moment it is drawn.
 //! The damage tracker composites back to front, so when a [`BlurBackdrop`]'s
 //! `draw` runs the framebuffer already holds everything below it and nothing
-//! above: the element blits the damaged part of that into a window-sized scene
+//! above: the element blits the damaged part of that into the output's scene
 //! texture, runs a dual-kawase pyramid over the dirty footprint, and the final
 //! upsample *is* the draw.
 //!
-//! The pyramid outlives the frame ([`BlurCache`], keyed by element id) because
-//! only the damaged rectangles are copied. Outside them the framebuffer still
-//! holds the previous composite — this window included — and blurring that
-//! would feed the effect its own output; what the cache keeps instead is the
-//! scene from the frames that did own those pixels.
+//! One scene and one pyramid serve the whole output, not one per backdrop, and
+//! they outlive the frame ([`BlurCache`]) because only the damaged rectangles
+//! are copied. Outside them the framebuffer still holds the previous composite
+//! — this window included — and blurring that would feed the effect its own
+//! output; what the cache keeps instead is the scene from the frames that did
+//! own those pixels.
+//!
+//! Sharing them is what makes overlapping glass one layer of blur rather than
+//! two. A backdrop lifts its damage into the scene *minus* the rectangles this
+//! frame's earlier backdrops already covered, so a popup over a bar blurs the
+//! desktop the bar blurred, not the bar's own glass; glass writes opaque, so
+//! the upper piece simply wins where they meet. The same sharing is why two
+//! pieces that merely touch blur across their shared edge instead of each
+//! clamping its taps at it.
 //!
 //! A pass spreads a changed pixel further than the rectangle it arrived in, so
 //! a draw leaves a stale band around its own damage. The cache offers that band
@@ -31,6 +40,7 @@
 
 mod backdrop;
 mod cache;
+mod scene;
 
 pub use backdrop::BlurBackdrop;
 pub use cache::{BlurCache, BlurSession};
