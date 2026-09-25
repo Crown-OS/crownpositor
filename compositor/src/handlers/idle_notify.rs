@@ -1,7 +1,4 @@
-use smithay::{
-    delegate_idle_notify,
-    wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState},
-};
+use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
 
 use crate::state::State;
 
@@ -10,5 +7,3 @@ impl IdleNotifierHandler for State {
         &mut self.wayland.idle_notifier_state
     }
 }
-
-delegate_idle_notify!(State);

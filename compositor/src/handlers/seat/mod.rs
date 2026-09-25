@@ -2,10 +2,16 @@ mod keyboard_target;
 mod pointer_target;
 
 use smithay::{
-    delegate_cursor_shape, delegate_pointer_gestures, delegate_seat,
-    input::{Seat, SeatHandler, SeatState, keyboard::LedState, pointer::CursorImageStatus},
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
-    wayland::tablet_manager::TabletSeatHandler,
+    input::{
+        Seat, SeatHandler, SeatState, keyboard::LedState, pointer::CursorImageStatus,
+        tablet::TabletSeatHandler,
+    },
+    reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
+    wayland::{
+        pointer_constraints::PointerConstraintsHandler,
+        seat::WaylandFocus,
+        selection::{data_device::set_data_device_focus, primary_selection::set_primary_focus},
+    },
 };
 
 use crate::state::State;
@@ -36,24 +42,34 @@ impl SeatHandler for State {
         self.queue_pointer_redraw();
     }
 
-    /// Only records which window holds focus. The `Activated` state and its
-    /// configure are `Shell::refresh`'s job, so exactly one pass decides what
-    /// every window is told.
-    fn focus_changed(&mut self, _seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {
+    /// Records which window holds focus and hands the clipboard and primary
+    /// selection to its client: `wl_data_device` and primary-selection offers
+    /// only ever go to the keyboard-focused client. The `Activated` state and
+    /// its configure are `Shell::refresh`'s job, so exactly one pass decides
+    /// what every window is told.
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {
         self.shell.activated = match focused {
             Some(KeyboardFocusTarget::Window(window)) => Some(window.clone()),
             _ => None,
         };
+
+        let display_handle = &self.common.display_handle;
+        let client = focused
+            .and_then(WaylandFocus::wl_surface)
+            .and_then(|surface| display_handle.get_client(surface.id()).ok());
+        set_data_device_focus(display_handle, seat, client.clone());
+        set_primary_focus(display_handle, seat, client);
     }
 
     fn led_state_changed(&mut self, _seat: &Seat<Self>, _led_state: LedState) {}
 }
 
 // TODO: Implement this
-impl TabletSeatHandler for State {}
+impl TabletSeatHandler for State {
+    type ToolFocus = WlSurface;
+}
 
-delegate_seat!(State);
-delegate_cursor_shape!(State);
-// One global covers all three gestures. Pinch and hold are forwarded; swipes
-// are spent on workspace switching before a client could see them.
-delegate_pointer_gestures!(State);
+/// smithay's `WlSurface` pointer target asks this on every motion. No
+/// `zwp_pointer_constraints_v1` global is advertised, so there is never a
+/// constraint to answer for.
+impl PointerConstraintsHandler for State {}

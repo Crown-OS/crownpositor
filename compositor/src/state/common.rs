@@ -1,4 +1,4 @@
-use std::{ffi::OsString, sync::Arc, time::Instant};
+use std::{ffi::OsString, time::Instant};
 
 use anyhow::Context;
 use calloop::{EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, generic::Generic};
@@ -62,14 +62,7 @@ impl CommonState {
 
         loop_handle
             .insert_source(listening_socket, move |client_stream, _, state| {
-                // Inside the callback, you should insert the client into the display.
-                //
-                // You may also associate some data with the client when inserting the client.
-                state
-                    .common
-                    .display_handle
-                    .insert_client(client_stream, Arc::new(ClientState::default()))
-                    .unwrap();
+                ClientState::default().insert(&mut state.common.display_handle, client_stream);
             })
             .expect("Failed to init the wayland event source.");
 

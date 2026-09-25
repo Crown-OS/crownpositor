@@ -1,5 +1,4 @@
 use smithay::{
-    delegate_layer_shell,
     desktop::{LayerSurface, WindowSurfaceType, layer_map_for_output},
     output::Output,
     reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -151,5 +150,3 @@ fn with_orphaned_layer_state(surface: &WlSurface, edit: impl Fn(&mut LayerSurfac
         edit(cached.current());
     });
 }
-
-delegate_layer_shell!(State);

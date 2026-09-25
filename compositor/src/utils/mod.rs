@@ -1,5 +1,6 @@
 pub mod edid;
 pub mod id;
+pub mod privilege;
 pub mod runtime;
 pub mod scale;
 

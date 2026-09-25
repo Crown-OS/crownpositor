@@ -25,7 +25,7 @@ impl State {
         };
 
         let serial = SERIAL_COUNTER.next_serial();
-        let time = Event::time_msec(&event);
+        let time = Event::time(&event);
         let code = event.key_code();
         let key_state = event.state();
 

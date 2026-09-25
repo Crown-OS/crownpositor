@@ -1,6 +1,6 @@
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputTime,
         PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
@@ -40,7 +40,7 @@ impl State {
         self.motion(&pointer_serial_time::<I>(&event), location);
     }
 
-    fn motion(&mut self, (serial, time): &(Serial, u32), location: Point<f64, Logical>) {
+    fn motion(&mut self, (serial, time): &(Serial, InputTime), location: Point<f64, Logical>) {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
@@ -179,7 +179,7 @@ impl State {
                 button: event.button_code(),
                 state,
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
             },
         );
         pointer.frame(self);
@@ -206,7 +206,7 @@ impl State {
         };
 
         let source = event.source();
-        let mut frame = AxisFrame::new(event.time_msec()).source(source);
+        let mut frame = AxisFrame::new(event.time()).source(source);
 
         for axis in [Axis::Horizontal, Axis::Vertical] {
             let amount = event
@@ -284,8 +284,8 @@ impl State {
     }
 }
 
-fn pointer_serial_time<I: InputBackend>(event: &impl Event<I>) -> (Serial, u32) {
-    (SERIAL_COUNTER.next_serial(), event.time_msec())
+fn pointer_serial_time<I: InputBackend>(event: &impl Event<I>) -> (Serial, InputTime) {
+    (SERIAL_COUNTER.next_serial(), event.time())
 }
 
 /// The closest point inside `rectangle`.

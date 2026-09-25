@@ -1,7 +1,4 @@
-use smithay::{
-    delegate_shm,
-    wayland::shm::{ShmHandler, ShmState},
-};
+use smithay::wayland::shm::{ShmHandler, ShmState};
 
 use crate::state::State;
 
@@ -10,5 +7,3 @@ impl ShmHandler for State {
         &self.wayland.shm_state
     }
 }
-
-delegate_shm!(State);

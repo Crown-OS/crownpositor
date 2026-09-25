@@ -18,7 +18,9 @@ use smithay::{
         multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    utils::{Buffer as BufferCoords, Physical, Rectangle, Scale, Size, Transform},
+    utils::{
+        Buffer as BufferCoords, Physical, Rectangle, Scale, Size, Transform, user_data::UserDataMap,
+    },
 };
 
 use crate::{
@@ -213,6 +215,7 @@ impl RenderElement<GlesRenderer> for TitleBar {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         self.draw_gles(frame, src, dst, damage)
     }
@@ -231,6 +234,7 @@ impl<'render> RenderElement<KmsRenderer<'render>> for TitleBar {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
     ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
         // The program lives on the render device's GLES context — the same one
         // `frame.as_mut()` exposes — so this never crosses GPUs.

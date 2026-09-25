@@ -7,7 +7,7 @@ use smithay::{
     reexports::{
         wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDefaultMode,
         wayland_server::{
-            Client, DisplayHandle,
+            DisplayHandle,
             protocol::{wl_shm, wl_surface::WlSurface},
         },
     },
@@ -23,6 +23,7 @@ use smithay::{
         output::OutputManagerState,
         pointer_gestures::PointerGesturesState,
         presentation::PresentationState,
+        security_context::SecurityContextState,
         selection::{
             data_device::DataDeviceState,
             ext_data_control::DataControlState as ExtDataControlState,
@@ -49,7 +50,7 @@ use protocols::{
     output_power::OutputPowerState,
 };
 
-use crate::state::State;
+use crate::{state::State, utils::privilege::is_privileged};
 
 pub struct WaylandState {
     pub appmenu_state: AppmenuState,
@@ -86,6 +87,9 @@ pub struct WaylandState {
     // pub output_capture_source_state: OutputCaptureSourceState,
     // pub toplevel_capture_source_state: ToplevelCaptureSourceState,
     // pub image_copy_capture_state: ImageCopyCaptureState,
+    /// `wp_security_context_v1`. Sandbox engines register a listener per app,
+    /// and every client that connects through it loses the privileged globals.
+    pub security_context_state: SecurityContextState,
     pub seat_state: SeatState<State>,
     pub seat: Seat<State>,
     pub session_lock_manager_state: SessionLockManagerState,
@@ -161,36 +165,28 @@ impl WaylandState {
             fractional_scale_state: FractionalScaleManagerState::new::<State>(display),
             keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState::new::<State>(display),
             output_state: OutputManagerState::new_with_xdg_output::<State>(display),
-            gamma_control_state: GammaControlState::new::<State, _>(
-                display,
-                privileged_client_filter,
-            ),
-            output_management_state: OutputManagementState::new::<State, _>(
-                display,
-                privileged_client_filter,
-            ),
-            output_power_state: OutputPowerState::new::<State, _>(
-                display,
-                privileged_client_filter,
-            ),
+            gamma_control_state: GammaControlState::new::<State, _>(display, is_privileged),
+            output_management_state: OutputManagementState::new::<State, _>(display, is_privileged),
+            output_power_state: OutputPowerState::new::<State, _>(display, is_privileged),
             pointer_gestures_state: PointerGesturesState::new::<State>(display),
             presentation_state: PresentationState::new::<State>(display, clock.id() as u32),
             ext_data_control_state: ExtDataControlState::new::<State, _>(
                 display,
                 Some(&primary_selection_state),
-                privileged_client_filter,
+                is_privileged,
             ),
             wlr_data_control_state: WlrDataControlState::new::<State, _>(
                 display,
                 Some(&primary_selection_state),
-                privileged_client_filter,
+                is_privileged,
             ),
             primary_selection_state,
+            security_context_state: SecurityContextState::new::<State, _>(display, is_privileged),
             seat_state,
             seat,
             session_lock_manager_state: SessionLockManagerState::new::<State, _>(
                 display,
-                privileged_client_filter,
+                is_privileged,
             ),
             idle_notifier_state: IdleNotifierState::new(display, loop_handle),
             idle_inhibit_manager_state: IdleInhibitManagerState::new::<State>(display),
@@ -204,11 +200,4 @@ impl WaylandState {
             clock,
         })
     }
-}
-
-/// Gates globals that must not be exposed to untrusted clients.
-///
-/// TODO: only accept clients launched by the shell itself.
-fn privileged_client_filter(_client: &Client) -> bool {
-    true
 }

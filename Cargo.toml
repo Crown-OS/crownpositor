@@ -34,3 +34,10 @@ wayland-server = "0.31.14"
 # the checkout next door rather than the last push.
 [patch."https://github.com/crown-os/crownos-config"]
 crownos-config = { path = "../crownos-config" }
+
+# Tracks smithay master for the selection fixes that postdate 0.7.0: the
+# ext-data-control `used_source` error, dropping devices of disconnected
+# clients, and clearing a selection the moment its source dies. Same rev
+# cosmic-comp ships.
+[patch.crates-io]
+smithay = { git = "https://github.com/smithay/smithay.git", rev = "e3d461a" }

@@ -1,12 +1,8 @@
-use smithay::{
-    delegate_keyboard_shortcuts_inhibit,
-    wayland::{
-        keyboard_shortcuts_inhibit::{
-            KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState,
-            KeyboardShortcutsInhibitor,
-        },
-        seat::WaylandFocus,
+use smithay::wayland::{
+    keyboard_shortcuts_inhibit::{
+        KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
     },
+    seat::WaylandFocus,
 };
 
 use crate::state::State;
@@ -54,5 +50,3 @@ impl State {
             .contains(surface.as_ref())
     }
 }
-
-delegate_keyboard_shortcuts_inhibit!(State);

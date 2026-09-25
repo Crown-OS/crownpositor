@@ -23,6 +23,8 @@ use crate::{
     xwayland::Xwayland,
 };
 
+smithay::delegate_dispatch2!(State);
+
 pub struct State {
     pub common: CommonState,
     pub backend: BackendState,

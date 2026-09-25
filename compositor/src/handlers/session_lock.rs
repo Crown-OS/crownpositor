@@ -1,5 +1,4 @@
 use smithay::{
-    delegate_session_lock,
     reexports::wayland_server::protocol::wl_output::WlOutput,
     wayland::session_lock::{
         LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
@@ -22,5 +21,3 @@ impl SessionLockHandler for State {
 
     fn new_surface(&mut self, _surface: LockSurface, _output: WlOutput) {}
 }
-
-delegate_session_lock!(State);

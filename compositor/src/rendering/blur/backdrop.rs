@@ -10,7 +10,10 @@ use smithay::{
         multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Size, Transform},
+    utils::{
+        Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Size, Transform,
+        user_data::UserDataMap,
+    },
 };
 
 use crate::{
@@ -506,6 +509,7 @@ impl RenderElement<GlesRenderer> for BlurBackdrop {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         self.draw_gles(frame, src, dst, damage, opaque_regions)
     }
@@ -524,6 +528,7 @@ impl<'render> RenderElement<KmsRenderer<'render>> for BlurBackdrop {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
     ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
         // The pyramid lives on the render device's GLES context — the same one
         // `frame.as_mut()` exposes — so this never crosses GPUs.

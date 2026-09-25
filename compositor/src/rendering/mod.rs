@@ -990,7 +990,7 @@ fn surface_effect_elements<R, D>(
                 radius: piece.radius,
                 glass: effects.glass,
                 alpha,
-                strength: 1.0,
+                strength: effects.strength,
             },
         ) {
             out(backdrop);

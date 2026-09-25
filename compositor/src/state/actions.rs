@@ -5,7 +5,7 @@
 
 use std::{os::unix::process::CommandExt, process::Stdio};
 
-use smithay::{input::pointer::MotionEvent, utils::SERIAL_COUNTER};
+use smithay::{backend::input::InputTime, input::pointer::MotionEvent, utils::SERIAL_COUNTER};
 
 use config::{Config, Update};
 use protocols::{
@@ -207,7 +207,7 @@ impl State {
             &MotionEvent {
                 location,
                 serial: SERIAL_COUNTER.next_serial(),
-                time: self.wayland.clock.now().as_millis(),
+                time: InputTime::now(),
             },
         );
         pointer.frame(self);

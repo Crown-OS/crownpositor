@@ -1,5 +1,4 @@
 use smithay::{
-    delegate_xdg_decoration,
     reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
     wayland::shell::xdg::{ToplevelSurface, decoration::XdgDecorationHandler},
 };
@@ -22,5 +21,3 @@ impl XdgDecorationHandler for State {
         toplevel.send_configure();
     }
 }
-
-delegate_xdg_decoration!(State);

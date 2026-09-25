@@ -28,7 +28,7 @@ pub fn apply_defaults(device: &mut Device) {
     if let Err(err) = device.config_tap_set_enabled(true) {
         tracing::warn!(
             ?err,
-            device = device.name(),
+            device = %device.name(),
             "touchpad refused tap-to-click"
         );
         return;
@@ -41,10 +41,10 @@ pub fn apply_defaults(device: &mut Device) {
     if let Err(err) = device.config_tap_set_drag_enabled(true) {
         tracing::warn!(
             ?err,
-            device = device.name(),
+            device = %device.name(),
             "touchpad refused tap-and-drag"
         );
     }
 
-    tracing::info!(device = device.name(), "tap-to-click enabled");
+    tracing::info!(device = %device.name(), "tap-to-click enabled");
 }

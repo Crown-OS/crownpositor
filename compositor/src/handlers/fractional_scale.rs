@@ -1,5 +1,5 @@
 use smithay::{
-    delegate_fractional_scale, reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::fractional_scale::FractionalScaleHandler,
 };
 
@@ -12,5 +12,3 @@ impl FractionalScaleHandler for State {
         self.shell.advertise_scale(&surface);
     }
 }
-
-delegate_fractional_scale!(State);

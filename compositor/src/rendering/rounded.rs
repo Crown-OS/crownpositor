@@ -18,7 +18,10 @@ use smithay::{
         multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Transform},
+    utils::{
+        Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Transform,
+        user_data::UserDataMap,
+    },
 };
 
 use crate::{
@@ -133,9 +136,12 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Rounded<E> 
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         let bound = self.bind(frame);
-        let result = self.inner.draw(frame, src, dst, damage, opaque_regions);
+        let result = self
+            .inner
+            .draw(frame, src, dst, damage, opaque_regions, cache);
         if bound {
             frame.clear_tex_program_override();
         }
@@ -161,12 +167,15 @@ where
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
         // The override lives on the GLES frame under the multi frame; the
         // inner element still draws through the multi frame so cross-GPU
         // copies keep working.
         let bound = self.bind(frame.as_mut());
-        let result = self.inner.draw(frame, src, dst, damage, opaque_regions);
+        let result = self
+            .inner
+            .draw(frame, src, dst, damage, opaque_regions, cache);
         if bound {
             frame.as_mut().clear_tex_program_override();
         }
@@ -310,9 +319,10 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         match self {
-            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions),
+            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions, cache),
             Self::Backdrop(backdrop) => RenderElement::<GlesRenderer>::draw(
                 backdrop,
                 frame,
@@ -320,16 +330,35 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
                 dst,
                 damage,
                 opaque_regions,
+                cache,
             ),
-            Self::TitleBar(bar) => {
-                RenderElement::<GlesRenderer>::draw(bar, frame, src, dst, damage, opaque_regions)
-            }
-            Self::Border(border) => {
-                RenderElement::<GlesRenderer>::draw(border, frame, src, dst, damage, opaque_regions)
-            }
-            Self::Shadow(shadow) => {
-                RenderElement::<GlesRenderer>::draw(shadow, frame, src, dst, damage, opaque_regions)
-            }
+            Self::TitleBar(bar) => RenderElement::<GlesRenderer>::draw(
+                bar,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
+            Self::Border(border) => RenderElement::<GlesRenderer>::draw(
+                border,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
+            Self::Shadow(shadow) => RenderElement::<GlesRenderer>::draw(
+                shadow,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
         }
     }
 
@@ -359,9 +388,10 @@ where
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
         match self {
-            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions),
+            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions, cache),
             Self::Backdrop(backdrop) => RenderElement::<KmsRenderer<'render>>::draw(
                 backdrop,
                 frame,
@@ -369,6 +399,7 @@ where
                 dst,
                 damage,
                 opaque_regions,
+                cache,
             ),
             Self::TitleBar(bar) => RenderElement::<KmsRenderer<'render>>::draw(
                 bar,
@@ -377,6 +408,7 @@ where
                 dst,
                 damage,
                 opaque_regions,
+                cache,
             ),
             Self::Border(border) => RenderElement::<KmsRenderer<'render>>::draw(
                 border,
@@ -385,6 +417,7 @@ where
                 dst,
                 damage,
                 opaque_regions,
+                cache,
             ),
             Self::Shadow(shadow) => RenderElement::<KmsRenderer<'render>>::draw(
                 shadow,
@@ -393,6 +426,7 @@ where
                 dst,
                 damage,
                 opaque_regions,
+                cache,
             ),
         }
     }

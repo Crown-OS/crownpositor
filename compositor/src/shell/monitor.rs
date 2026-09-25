@@ -11,13 +11,13 @@ use config::{OutputSetting, OutputTransform};
 use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
-    shell::overview::SpaceControl,
-    utils::edid::EdidInfo,
     layout::{Gaps, WorkspaceMode},
+    shell::overview::SpaceControl,
     shell::{
         workspace::{Workspace, WorkspaceRef},
         workspace_switch::{PAGE_GAP, WorkspaceSwitch},
     },
+    utils::edid::EdidInfo,
     utils::id::{OutputId, WorkspaceId},
 };
 
@@ -93,7 +93,11 @@ pub fn logical_size(
 
 impl OutputConfig {
     pub fn logical_size(&self) -> Size<i32, Logical> {
-        logical_size(self.mode.size, self.scale.fractional_scale(), self.transform)
+        logical_size(
+            self.mode.size,
+            self.scale.fractional_scale(),
+            self.transform,
+        )
     }
 
     pub fn logical_geometry(&self) -> Rectangle<i32, Logical> {
@@ -262,7 +266,10 @@ impl Monitor {
     /// The overview and the monitor it is showing, borrowed together — the
     /// shape every caller needs, and the one the borrow checker will not let
     /// them build out of the two accessors above.
-    pub fn with_spacecontrol<T>(&mut self, act: impl FnOnce(&mut SpaceControl, &Monitor) -> T) -> T {
+    pub fn with_spacecontrol<T>(
+        &mut self,
+        act: impl FnOnce(&mut SpaceControl, &Monitor) -> T,
+    ) -> T {
         let mut overview = std::mem::take(&mut self.spacecontrol);
         let result = act(&mut overview, self);
         self.spacecontrol = overview;
@@ -617,6 +624,7 @@ pub fn output_from_descriptor(descriptor: &OutputDescriptor) -> Output {
             subpixel: descriptor.physical.subpixel,
             make: descriptor.physical.make.clone(),
             model: descriptor.physical.model.clone(),
+            serial_number: descriptor.physical.serial_number.clone(),
         },
     );
 
@@ -665,6 +673,7 @@ mod tests {
                     subpixel: smithay::output::Subpixel::Unknown,
                     make: "test".into(),
                     model: "test".into(),
+                    serial_number: "test".into(),
                 },
             ),
             global: None,

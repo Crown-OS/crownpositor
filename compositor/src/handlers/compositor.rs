@@ -1,6 +1,5 @@
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    delegate_compositor,
     reexports::wayland_server::{
         Client,
         protocol::{wl_buffer::WlBuffer, wl_surface::WlSurface},
@@ -60,5 +59,3 @@ impl CompositorHandler for State {
 impl BufferHandler for State {
     fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
 }
-
-delegate_compositor!(State);

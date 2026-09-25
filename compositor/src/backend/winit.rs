@@ -58,6 +58,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                 subpixel: Subpixel::Unknown,
                 make: "Crownpositor".into(),
                 model: "Winit".into(),
+                serial_number: "Unknown".into(),
             },
             modes: vec![mode],
             preferred: Some(mode),

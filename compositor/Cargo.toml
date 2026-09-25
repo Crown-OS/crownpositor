@@ -65,3 +65,6 @@ name = "color_info"
 
 [[example]]
 name = "liquid_glass"
+
+[[example]]
+name = "data_control_probe"

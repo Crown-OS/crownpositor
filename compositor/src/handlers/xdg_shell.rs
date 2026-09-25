@@ -1,5 +1,4 @@
 use smithay::{
-    delegate_xdg_shell,
     desktop::{PopupKind, Window},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
@@ -396,8 +395,6 @@ pub fn handle_commit(state: &mut State, surface: &WlSurface) {
         popup.send_configure().expect("initial configure failed");
     }
 }
-
-delegate_xdg_shell!(State);
 
 #[cfg(test)]
 mod tests {

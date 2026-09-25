@@ -179,7 +179,7 @@ impl State {
             self,
             &PinchBegin {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: event.time_msec(),
+                time: event.time(),
                 fingers: event.fingers(),
             },
         );
@@ -196,7 +196,7 @@ impl State {
         pointer.gesture_pinch_update(
             self,
             &PinchUpdate {
-                time: event.time_msec(),
+                time: event.time(),
                 delta: event.delta(),
                 scale: event.scale(),
                 rotation: event.rotation(),
@@ -213,7 +213,7 @@ impl State {
             self,
             &PinchEnd {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: event.time_msec(),
+                time: event.time(),
                 cancelled: event.cancelled(),
             },
         );
@@ -237,7 +237,7 @@ impl State {
             self,
             &HoldBegin {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: event.time_msec(),
+                time: event.time(),
                 fingers: event.fingers(),
             },
         );
@@ -252,7 +252,7 @@ impl State {
             self,
             &HoldEnd {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: event.time_msec(),
+                time: event.time(),
                 cancelled: event.cancelled(),
             },
         );
@@ -260,5 +260,5 @@ impl State {
 }
 
 fn timestamp<I: InputBackend>(event: &impl Event<I>) -> Duration {
-    Duration::from_micros(Event::time(event))
+    Duration::from_micros(Event::time(event).micros())
 }

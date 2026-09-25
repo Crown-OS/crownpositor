@@ -11,7 +11,6 @@
 
 use smithay::{
     backend::drm::DrmNode,
-    delegate_drm_lease,
     wayland::drm_lease::{
         DrmLease, DrmLeaseBuilder, DrmLeaseHandler, DrmLeaseRequest, DrmLeaseState, LeaseRejected,
     },
@@ -67,7 +66,10 @@ impl DrmLeaseHandler for State {
                 return Err(LeaseRejected::default());
             };
 
-            let planes = device.drm.planes(&crtc).map_err(LeaseRejected::with_cause)?;
+            let planes = device
+                .drm
+                .planes(&crtc)
+                .map_err(LeaseRejected::with_cause)?;
             // A CRTC always has at least one primary plane; a driver that
             // disagrees is one this compositor cannot drive anyway.
             let Some(primary) = planes.primary.first().map(|plane| plane.handle) else {
@@ -121,5 +123,3 @@ impl DrmLeaseHandler for State {
         tracing::info!(id = lease_id, %node, "a DRM lease ended");
     }
 }
-
-delegate_drm_lease!(State);

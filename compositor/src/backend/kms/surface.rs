@@ -48,10 +48,7 @@ use smithay::{
 use crate::{
     backend::{
         frame_clock::FrameClock,
-        kms::{
-            KmsState,
-            head::HeadState,
-        },
+        kms::{KmsState, head::HeadState},
         render::{CrownAllocator, DmabufExporter},
     },
     rendering::{
@@ -216,8 +213,19 @@ pub fn enable_head(
                 // smithay has no null here, so an unidentified panel keeps the
                 // "Unknown" placeholder; the protocol layer filters it out
                 // rather than telling clients that is the make.
-                make: head.edid.as_ref().map_or("Unknown".into(), |edid| edid.make.clone()),
-                model: head.edid.as_ref().map_or("Unknown".into(), |edid| edid.model.clone()),
+                make: head
+                    .edid
+                    .as_ref()
+                    .map_or("Unknown".into(), |edid| edid.make.clone()),
+                model: head
+                    .edid
+                    .as_ref()
+                    .map_or("Unknown".into(), |edid| edid.model.clone()),
+                serial_number: head
+                    .edid
+                    .as_ref()
+                    .and_then(|edid| edid.serial.clone())
+                    .unwrap_or_else(|| "Unknown".into()),
             },
             modes: head.modes.iter().copied().map(Into::into).collect(),
             preferred: head
@@ -234,7 +242,7 @@ pub fn enable_head(
 
     let allocator = device.create_allocator(api, vulkan);
     let compositor = SurfaceCompositor::new(
-        smithay::output::OutputModeSource::Auto(output.clone()),
+        smithay::output::OutputModeSource::Auto(output.downgrade()),
         drm_surface,
         // Default plane set: the compositor filters what scanout may use per
         // frame through `FrameFlags` instead.

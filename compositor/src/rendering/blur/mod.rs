@@ -254,6 +254,9 @@ pub struct SurfaceEffects {
     /// built from this repaint.
     pub generation: u32,
     pub glass: Glass,
+    /// How much of the configured blur the glass is drawn with — see
+    /// [`blur_strength`].
+    pub strength: f32,
     pub pieces: Vec<GlassPiece>,
     pub shadows: Vec<ShadowPiece>,
 }
@@ -267,6 +270,15 @@ const SHADOW_TAIL: f32 = 3.0;
 /// about twice its sigma.
 fn sigma(radius: u32) -> f32 {
     radius as f32 * 0.5
+}
+
+/// The protocol blur radius that buys the configured blur in full. It is what
+/// every client asks for at rest, so anything below it is a blur on its way in
+/// or out and is drawn as that fraction of the pyramid rather than all of it.
+const FULL_BLUR_RADIUS: f32 = 32.0;
+
+fn blur_strength(radius: u32) -> f32 {
+    (radius as f32 / FULL_BLUR_RADIUS).min(1.0)
 }
 
 /// The corner radius a surface asked for through
@@ -312,16 +324,22 @@ pub fn place_surface_effects(
         None => vec![whole],
     };
 
+    // The tint, the vibrancy and the rim come up with the blur they sit on,
+    // or a panel fading in would be preceded by its own glass.
+    let strength = effects
+        .blur
+        .as_ref()
+        .map_or(0.0, |blur| blur_strength(blur.radius));
     let glass = Glass {
-        tint: effects
-            .blur
-            .as_ref()
-            .map_or([0.0; 4], |blur| blur.tint.channels()),
+        tint: effects.blur.as_ref().map_or([0.0; 4], |blur| {
+            let [red, green, blue, alpha] = blur.tint.channels();
+            [red, green, blue, alpha * strength]
+        }),
         saturation: effects
             .blur
             .as_ref()
-            .map_or(1.0, |blur| blur.saturation as f32),
-        rim: (effects.border_width as f64 * scale.x) as f32,
+            .map_or(1.0, |blur| 1.0 + (blur.saturation as f32 - 1.0) * strength),
+        rim: (effects.border_width as f64 * scale.x) as f32 * strength,
     };
 
     let pieces = effects
@@ -353,6 +371,7 @@ pub fn place_surface_effects(
     Some(SurfaceEffects {
         generation: committed.generation,
         glass,
+        strength,
         pieces,
         shadows,
     })
@@ -781,6 +800,13 @@ mod tests {
         // The convention every toolkit uses, and the one the protocol states.
         assert_eq!(sigma(16), 8.0);
         assert_eq!(sigma(0), 0.0);
+    }
+
+    #[test]
+    fn a_smaller_blur_radius_is_a_blur_on_its_way_in() {
+        assert_eq!(blur_strength(16), 0.5);
+        assert_eq!(blur_strength(32), 1.0);
+        assert_eq!(blur_strength(96), 1.0);
     }
 
     #[test]

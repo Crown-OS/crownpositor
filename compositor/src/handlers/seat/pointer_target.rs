@@ -8,12 +8,14 @@
 //! focused window alone — so every variant carries both halves, and a button
 //! press costs no second hit test.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use smithay::{
+    backend::input::InputTime,
     desktop::{LayerSurface, Window},
     input::{
         Seat,
+        dnd::{DndFocus, Source},
         pointer::{
             AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
             GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
@@ -21,8 +23,10 @@ use smithay::{
             PointerTarget, RelativeMotionEvent,
         },
     },
-    reexports::wayland_server::{Resource, backend::ObjectId, protocol::wl_surface::WlSurface},
-    utils::{IsAlive, Serial},
+    reexports::wayland_server::{
+        DisplayHandle, Resource, backend::ObjectId, protocol::wl_surface::WlSurface,
+    },
+    utils::{IsAlive, Logical, Point, Serial},
     wayland::seat::WaylandFocus,
 };
 
@@ -144,7 +148,7 @@ impl PointerTarget<State> for PointerFocusTarget {
     delegate_to_surface! {
         enter(event: &MotionEvent);
         motion(event: &MotionEvent);
-        leave(serial: Serial, time: u32);
+        leave(serial: Serial, time: InputTime);
         button(event: &ButtonEvent);
         relative_motion(event: &RelativeMotionEvent);
         axis(frame: AxisFrame);
@@ -157,5 +161,59 @@ impl PointerTarget<State> for PointerFocusTarget {
         gesture_pinch_end(event: &GesturePinchEndEvent);
         gesture_hold_begin(event: &GestureHoldBeginEvent);
         gesture_hold_end(event: &GestureHoldEndEvent);
+    }
+}
+
+/// A drag hovers the same client surface the pointer would enter. A frame
+/// accepts nothing: it has no client to offer the data to.
+impl DndFocus<State> for PointerFocusTarget {
+    type OfferData<S: Source> = <WlSurface as DndFocus<State>>::OfferData<S>;
+
+    fn enter<S: Source>(
+        &self,
+        data: &mut State,
+        dh: &DisplayHandle,
+        source: Arc<S>,
+        seat: &Seat<State>,
+        location: Point<f64, Logical>,
+        serial: &Serial,
+    ) -> Option<Self::OfferData<S>> {
+        self.surface()
+            .and_then(|surface| DndFocus::enter(surface, data, dh, source, seat, location, serial))
+    }
+
+    fn motion<S: Source>(
+        &self,
+        data: &mut State,
+        offer: Option<&mut Self::OfferData<S>>,
+        seat: &Seat<State>,
+        location: Point<f64, Logical>,
+        time: InputTime,
+    ) {
+        if let Some(surface) = self.surface() {
+            DndFocus::motion(surface, data, offer, seat, location, time);
+        }
+    }
+
+    fn leave<S: Source>(
+        &self,
+        data: &mut State,
+        offer: Option<&mut Self::OfferData<S>>,
+        seat: &Seat<State>,
+    ) {
+        if let Some(surface) = self.surface() {
+            DndFocus::leave(surface, data, offer, seat);
+        }
+    }
+
+    fn drop<S: Source>(
+        &self,
+        data: &mut State,
+        offer: Option<&mut Self::OfferData<S>>,
+        seat: &Seat<State>,
+    ) {
+        if let Some(surface) = self.surface() {
+            DndFocus::drop(surface, data, offer, seat);
+        }
     }
 }
