@@ -134,11 +134,21 @@ impl BlurConfig {
         self.passes.clamp(1, 8) as usize
     }
 
-    /// How far a pixel's influence spreads, in full-resolution pixels: every
-    /// halving doubles the tap spread, and the last upsample doubles it once
-    /// more. The footprint the pyramid is rerun over grows by this.
+    /// How far a pixel's influence spreads, in full-resolution pixels, summed
+    /// over every pass it goes through: down into each level, back up into each
+    /// but the last, and the final upsample into the frame.
+    ///
+    /// A pass at a level `2^k` pixels to the texel reaches `offset` texels
+    /// with its taps and one more with the bilinear filter behind them — so
+    /// `(offset + 1) * 2^k` pixels. Down that is `2^0 ..= 2^(n-1)`, up
+    /// `2^2 ..= 2^n`, and the finish `2^1`: `(offset + 1) * (3 * 2^n - 3)`.
+    ///
+    /// The footprint the pyramid is rerun over grows by this, and so does the
+    /// band a draw leaves stale. Anything less and the edge of a damage rect
+    /// blurs in levels last written by another frame, or another backdrop.
     fn radius(&self) -> i32 {
-        (self.offset.max(0.0) * (1u32 << (self.passes() + 1)) as f32).ceil() as i32
+        let texels = (3 * (1u32 << self.passes()) - 3) as f32;
+        ((self.offset.max(0.0) + 1.0) * texels).ceil() as i32
     }
 
     /// The pyramid depth and tap spread that give `strength` of this config's

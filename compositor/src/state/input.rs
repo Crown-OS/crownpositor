@@ -8,6 +8,7 @@ use smithay::{
 use config::Config;
 
 use crate::{
+    input::capture::InputCaptureState,
     input::decoration::{FramePress, LastClick},
     input::{
         shortcuts::{Bindings, GestureBindings, ModMask},
@@ -49,6 +50,11 @@ pub struct InputState {
     pub frame_press: Option<FramePress>,
     /// The last click on a titlebar, for spotting the second half of a double.
     pub last_frame_click: Option<LastClick>,
+    /// `crownos_input_capture_v1`: armed edges, and the capture holding the
+    /// seat, if any.
+    pub capture: InputCaptureState,
+    /// The injected touch point being emulated as the primary button.
+    pub emulated_touch: Option<i32>,
 }
 
 impl InputState {
@@ -65,6 +71,8 @@ impl InputState {
             hovered_control: None,
             frame_press: None,
             last_frame_click: None,
+            capture: InputCaptureState::default(),
+            emulated_touch: None,
         }
     }
 }

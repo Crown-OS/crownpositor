@@ -6,6 +6,7 @@ pub mod decoration;
 pub mod grab;
 pub mod monitor;
 pub mod overview;
+pub mod popup;
 pub mod scale;
 pub mod snap;
 pub mod tile;

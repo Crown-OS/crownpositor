@@ -32,7 +32,10 @@ use smithay::{
     utils::{Logical, Physical, Point, Rectangle, Scale, Size},
 };
 
-use crate::scene::{self, Canvas, Metrics, Slot};
+use crate::{
+    overview::Overview,
+    scene::{self, Canvas, Metrics, Slot},
+};
 
 /// A window's surfaces, scaled to the size they are drawn at and clipped to
 /// their thumbnail — structurally the compositor's own `Cropped`, so the
@@ -346,8 +349,7 @@ pub fn elements<R, P>(
     grid: &[Thumb<'_>],
     previews: &[Preview<'_>],
     carried: Option<Carried<'_>>,
-    progress: f64,
-    bar: f64,
+    overview: &Overview,
     metrics: &Metrics,
     palette: &Palette,
     scale: Scale<f64>,
@@ -357,6 +359,8 @@ pub fn elements<R, P>(
     R::TextureId: Send + Clone + 'static,
     P: Painter<R>,
 {
+    let progress = overview.progress();
+    let bar = overview.bar();
     let climb = scene::climb(canvas, metrics, bar);
 
     for (index, preview) in previews.iter().enumerate() {
@@ -436,7 +440,7 @@ pub fn elements<R, P>(
         chrome.dim(),
         canvas.output.to_f64(),
         [palette.dim[0], palette.dim[1], palette.dim[2], 1.0],
-        progress as f32,
+        overview.dim(),
         scale,
     ) {
         out.push(OverviewElement::Fill(dim));

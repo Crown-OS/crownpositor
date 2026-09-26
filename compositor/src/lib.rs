@@ -29,6 +29,7 @@ pub fn run() -> anyhow::Result<()> {
         backend::Preference::Kms => backend::kms::init(&mut state)?,
     }
     tracing::info!(backend = state.backend.name(), "backend started");
+    state.configure_capture_sync();
 
     // Point child processes at our socket rather than the host compositor.
     // Safety: no other thread is reading the environment yet.
@@ -51,6 +52,7 @@ pub fn run() -> anyhow::Result<()> {
             // Frames queued during dispatch render here, after the burst of
             // events that requested them has been fully drained.
             backend::kms::redraw_queued_outputs(state);
+            backend::render_offscreen(state);
             let _ = state.common.display_handle.flush_clients();
         })
         .with_context(|| "The event loop stopped unexpectedly")

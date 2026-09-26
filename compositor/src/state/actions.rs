@@ -175,7 +175,10 @@ impl State {
         };
 
         let location = self.input.pointer_location;
-        if pointer.is_grabbed() || self.shell.menus.contains(location) {
+        if pointer.is_grabbed()
+            || self.shell.menus.contains(location)
+            || self.input.capture.is_active()
+        {
             return;
         }
 

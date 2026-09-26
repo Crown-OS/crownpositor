@@ -27,6 +27,7 @@ use crate::{
         decorate::Backdrop,
     },
     shaders::blur::{BlurShaders, KawaseProgram},
+    utils::region,
 };
 
 /// One rectangle of the blurred glass behind a surface.
@@ -92,6 +93,7 @@ impl BlurBackdrop {
             )
             .inspect_err(|err| tracing::warn!(%err, "failed to allocate a blur pyramid"))
             .ok()?;
+        scene.stand(geometry);
         let occluders = session.cache.stack().occlude(&params, geometry);
         let halo = session.cache.halo(&params.id);
 
@@ -155,11 +157,18 @@ impl BlurBackdrop {
         damage: &[Rectangle<i32, Physical>],
     ) -> Option<Vec<Rectangle<i32, Physical>>> {
         (!self.occluders.is_empty()).then(|| {
-            Rectangle::subtract_rects_many(
+            region::subtract(
                 damage.iter().copied(),
                 self.occluders.iter().map(|rect| local(*rect, dst)),
             )
         })
+    }
+
+    /// How far a changed pixel of the scene reaches into this glass: the whole
+    /// pyramid's spread, plus the refraction at the rim, which moves the taps
+    /// that far inwards.
+    fn reach(&self) -> i32 {
+        self.config.radius() + self.glass.rim.max(0.0).ceil() as i32
     }
 
     /// Records the band this draw leaves stale: a changed pixel spreads
@@ -169,12 +178,11 @@ impl BlurBackdrop {
     /// twice.
     fn owe_halo(&self, dst: Rectangle<i32, Physical>, damage: &[Rectangle<i32, Physical>]) {
         let mut halo = self.halo.borrow_mut();
-        let fresh =
-            Rectangle::subtract_rects_many(damage.iter().copied(), mem::take(&mut halo.reported));
+        let fresh = region::subtract(damage.iter().copied(), mem::take(&mut halo.reported));
 
         let bounds = Rectangle::from_size(dst.size);
-        let radius = self.config.radius();
-        halo.pending = Rectangle::subtract_rects_many(
+        let radius = self.reach();
+        halo.pending = region::subtract(
             fresh
                 .iter()
                 .filter_map(|rect| grow(*rect, radius).intersection(bounds)),
@@ -218,7 +226,7 @@ impl BlurBackdrop {
         // textures.
         let levels = self.scene.levels.get(..self.config.passes())?;
         let top = levels.first()?;
-        let radius = self.config.radius();
+        let radius = self.reach();
 
         // The scene spans the whole framebuffer, so damage maps into it with no
         // per-backdrop origin to subtract: one rectangle serves as both the
@@ -231,13 +239,15 @@ impl BlurBackdrop {
                     .intersection(frame)
             })
             .collect();
-        let refresh = self.scene.refresh(&dirty, radius, frame);
+        let refresh = self
+            .scene
+            .refresh(&dirty, radius, frame, |rect| space.rect(rect));
         // From here on these rectangles are glass, whether or not the frame
         // repaints any of them, so nothing drawn after may blur these pixels
         // back out of the framebuffer. Not the ones given up to the glass in
         // front, though: the piece above is about to blur exactly those.
         self.scene.cover(
-            Rectangle::subtract_rects_many([dst], self.occluders.iter().copied())
+            region::subtract([dst], self.occluders.iter().copied())
                 .into_iter()
                 .filter_map(|rect| space.rect(rect).intersection(frame)),
         );

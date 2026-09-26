@@ -1,4 +1,6 @@
+pub mod capture;
 pub mod decoration;
+pub mod injected;
 mod keyboard;
 pub mod libinput;
 pub mod mouse;
@@ -14,6 +16,9 @@ impl State {
     where
         I::GestureSwipeUpdateEvent: LinearSwipe<I>,
     {
+        if self.capture_input_event(&event) {
+            return;
+        }
         match event {
             // The overview owns the pointer while it is open. A scroll or a
             // pinch there is aimed at a thumbnail rather than at the window

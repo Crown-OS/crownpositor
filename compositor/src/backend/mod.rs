@@ -30,10 +30,22 @@
 //! [`PassThrough`]: crate::rendering::decorate::PassThrough
 //! [`BackendState`]: crate::state::BackendState
 
+pub mod capture;
+pub mod debug_frames;
 pub mod frame_clock;
 pub mod kms;
 pub mod render;
+pub mod virtual_output;
 pub mod winit;
+
+/// Everything drawn off-screen, after the backends have drawn their outputs:
+/// virtual outputs step their frame clocks, capture sessions render, and the
+/// surfaces on virtual outputs hear that their frame was taken.
+pub fn render_offscreen(state: &mut crate::state::State) {
+    let virtual_frames = virtual_output::begin_frames(state);
+    capture::render_pending(state);
+    virtual_output::end_frames(state, &virtual_frames);
+}
 
 /// Which backend to start, chosen from the environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

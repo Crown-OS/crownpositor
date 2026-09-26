@@ -1601,6 +1601,7 @@ version = "0.1.0"
 dependencies = [
  "crownos-protocols",
  "smithay",
+ "thiserror 2.0.20",
  "tracing",
  "wayland-protocols",
  "wayland-protocols-plasma",

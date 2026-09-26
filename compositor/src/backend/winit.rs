@@ -74,6 +74,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
     );
 
     state.refresh_output_heads();
+    crate::backend::debug_frames::init(&output);
 
     if let Err(err) = backend.renderer().compile_shaders() {
         // Cosmetic, so a compile failure degrades to square corners / no blur.
@@ -181,6 +182,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
     // is settled before either of them runs — and before the borrows below,
     // because laying it out needs the whole state.
     state.layout_menus(scale.y);
+    crate::backend::debug_frames::script(state);
 
     let State {
         backend,
@@ -190,6 +192,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         config,
         input,
         text,
+        capture,
         ..
     } = state;
 
@@ -258,13 +261,42 @@ fn render(state: &mut State) -> anyhow::Result<()> {
             .render_output(renderer, &mut framebuffer, age, &elements, CLEAR_COLOR)
             .with_context(|| "Failed to render the output")?;
 
-        result.damage.cloned()
+        let damage = result.damage.cloned();
+        drop(elements);
+        if damage.as_ref().is_some_and(|damage| !damage.is_empty()) {
+            crate::backend::debug_frames::grab(
+                renderer,
+                &framebuffer,
+                &winit.output,
+                damage.as_deref(),
+                age,
+            );
+        }
+        damage
     };
+    if submitted.as_ref().is_some_and(|damage| !damage.is_empty()) {
+        capture.mark_output_damaged(&winit.output);
+    }
 
     winit
         .backend
         .submit(submitted.as_deref())
         .map_err(|err| anyhow!("Failed to submit the winit frame: {err}"))?;
+    if crate::backend::debug_frames::compare(
+        (
+            shell,
+            &mut input.cursor,
+            input.pointer_location,
+            &config.current.appearance,
+            text,
+            input.hovered_control,
+        ),
+        winit.backend.renderer(),
+        &winit.output,
+    ) && let Ok((renderer, framebuffer)) = winit.backend.bind()
+    {
+        crate::backend::debug_frames::rebind(renderer, &framebuffer);
+    }
 
     let now = common.start_time.elapsed();
     let throttle = Some(Duration::ZERO);
@@ -293,7 +325,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
     // what takes an idle desktop from a permanent 60 Hz loop to ~0% CPU; a client
     // that damages its surface wakes us through its own commit — except for a
     // backdrop's owed halo, which nothing else would schedule a frame for.
-    if animating || winit.blur.wants_redraw() {
+    if animating || winit.blur.wants_redraw() || std::env::var_os("CROWN_DEBUG_SPIN").is_some() {
         winit.backend.window().request_redraw();
     }
 

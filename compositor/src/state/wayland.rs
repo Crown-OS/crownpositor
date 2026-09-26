@@ -45,6 +45,9 @@ use protocols::{
         BackgroundEffectsState as CrownosBackgroundEffectsState,
         Capability as CrownosEffectCapability,
     },
+    crownos_input::InputState as CrownosInputState,
+    crownos_screencast::ScreencastState,
+    crownos_virtual_output::VirtualOutputState,
     gamma_control::GammaControlState,
     output_management::OutputManagementState,
     output_power::OutputPowerState,
@@ -83,6 +86,14 @@ pub struct WaylandState {
     pub primary_selection_state: PrimarySelectionState,
     pub ext_data_control_state: ExtDataControlState,
     pub wlr_data_control_state: WlrDataControlState,
+    /// `crownos_screencast_v1`. Privileged: it reads every pixel on screen.
+    pub screencast_state: ScreencastState,
+    /// `crownos_virtual_output_v1`. Privileged: it adds outputs windows can
+    /// be moved onto, out of the user's sight.
+    pub virtual_output_state: VirtualOutputState,
+    /// `crownos_input_v1`. Privileged: an injector types into any window and
+    /// a capture sees every keystroke.
+    pub crownos_input_state: CrownosInputState,
     // pub cosmic_image_capture_source_state: CosmicImageCaptureSourceState,
     // pub output_capture_source_state: OutputCaptureSourceState,
     // pub toplevel_capture_source_state: ToplevelCaptureSourceState,
@@ -181,6 +192,9 @@ impl WaylandState {
                 is_privileged,
             ),
             primary_selection_state,
+            screencast_state: ScreencastState::new::<State, _>(display, is_privileged),
+            virtual_output_state: VirtualOutputState::new::<State, _>(display, is_privileged),
+            crownos_input_state: CrownosInputState::new::<State, _>(display, is_privileged),
             security_context_state: SecurityContextState::new::<State, _>(display, is_privileged),
             seat_state,
             seat,

@@ -40,6 +40,12 @@ impl State {
         self.motion(&pointer_serial_time::<I>(&event), location);
     }
 
+    /// Moves the pointer straight to `location`, as absolute motion would:
+    /// injected absolute input and a released input capture arrive here.
+    pub(crate) fn warp_pointer(&mut self, location: Point<f64, Logical>, time: InputTime) {
+        self.motion(&(SERIAL_COUNTER.next_serial(), time), location);
+    }
+
     fn motion(&mut self, (serial, time): &(Serial, InputTime), location: Point<f64, Logical>) {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;

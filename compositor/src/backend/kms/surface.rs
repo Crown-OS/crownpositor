@@ -417,6 +417,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         clock,
         input,
         text,
+        capture,
         ..
     } = state;
     let blur_config = BlurConfig::from(&config.current.appearance);
@@ -559,7 +560,10 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
             if !result.is_empty {
                 let feedback = take_presentation_feedbacks(shell, &surface.output);
                 match surface.compositor.queue_frame(feedback) {
-                    Ok(()) => submitted = true,
+                    Ok(()) => {
+                        submitted = true;
+                        capture.mark_output_damaged(&surface.output);
+                    }
                     Err(err) => {
                         tracing::warn!(%err, "failed to queue frame");
                     }

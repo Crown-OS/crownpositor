@@ -16,6 +16,7 @@ pub mod decorate;
 pub mod decoration;
 pub mod element;
 pub mod overview;
+pub mod popup;
 pub mod rounded;
 
 use smithay::{
@@ -24,7 +25,7 @@ use smithay::{
         element::{
             AsRenderElements, Kind, Wrap,
             memory::MemoryRenderBufferRenderElement,
-            surface::WaylandSurfaceRenderElement,
+            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             utils::{CropRenderElement, RescaleRenderElement},
         },
         utils::CommitCounter,
@@ -304,6 +305,12 @@ fn tile_elements<R, D>(
     let size = (clip.size.w as f32, clip.size.h as f32);
     let alpha = tile.render_alpha();
 
+    elements.extend(
+        popup::popup_elements(renderer, tile.window(), clip.loc, scale, alpha)
+            .into_iter()
+            .map(CrownElement::Surface),
+    );
+
     if inset > 0 {
         frame_overlay(
             elements, shell, tile, renderer, decorator, frame, inset, radius, scale, style, alpha,
@@ -327,11 +334,14 @@ fn tile_elements<R, D>(
         None => corner_radii(radius, inset > 0),
     };
 
-    // `Window::render_elements` walks the surface tree and its popups, so popups
-    // need no separate pass.
-    let surfaces: Vec<WaylandSurfaceRenderElement<R>> = tile
-        .window()
-        .render_elements(renderer, clip.loc, scale, alpha);
+    let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+        renderer,
+        tile.surface(),
+        clip.loc,
+        scale,
+        alpha,
+        Kind::Unspecified,
+    );
 
     for surface in surfaces {
         // A client's buffer is whatever size it last committed — during a shrink

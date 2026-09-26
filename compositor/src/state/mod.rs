@@ -19,7 +19,9 @@ pub use crate::state::{
 use spacecontrol::animations::spring::Clock;
 
 use crate::{
-    rendering::decoration::TextRenderer, shell::Shell,
+    backend::{capture::CaptureState, virtual_output::VirtualOutputs},
+    rendering::decoration::TextRenderer,
+    shell::Shell,
     xwayland::Xwayland,
 };
 
@@ -43,6 +45,10 @@ pub struct State {
     /// the same title on two monitors differs only by scale, which the cache
     /// key already covers.
     pub text: TextRenderer,
+    /// The render side of every `crownos_screencast_v1` session.
+    pub capture: CaptureState,
+    /// Outputs `crownos_virtual_output_v1` clients created.
+    pub virtual_outputs: VirtualOutputs,
 }
 
 impl State {
@@ -95,6 +101,8 @@ impl State {
             xwayland,
             clock: Clock::new(),
             text: TextRenderer::new(),
+            capture: CaptureState::default(),
+            virtual_outputs: VirtualOutputs::default(),
         };
         // The global was created advertising everything the renderer can do;
         // the config gets the first word on what it will actually do.

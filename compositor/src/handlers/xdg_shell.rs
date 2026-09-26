@@ -65,8 +65,10 @@ impl XdgShellHandler for State {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
-        // TODO: unconstrain the popup against its output before tracking it.
-        let _ = self.shell.popups.track_popup(PopupKind::Xdg(surface));
+        self.shell.unconstrain_popup(&surface);
+        if let Err(err) = self.shell.popups.track_popup(PopupKind::Xdg(surface)) {
+            tracing::warn!(%err, "failed to track a popup");
+        }
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
@@ -77,10 +79,8 @@ impl XdgShellHandler for State {
         positioner: PositionerState,
         token: u32,
     ) {
-        surface.with_pending_state(|state| {
-            state.geometry = positioner.get_geometry();
-            state.positioner = positioner;
-        });
+        surface.with_pending_state(|state| state.positioner = positioner);
+        self.shell.unconstrain_popup(&surface);
         surface.send_repositioned(token);
     }
 

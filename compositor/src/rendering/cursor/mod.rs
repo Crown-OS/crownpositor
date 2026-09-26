@@ -174,6 +174,17 @@ impl Cursor {
             .as_ref()
     }
 
+    /// The pixels of a named shape at a buffer scale, straight from the theme
+    /// chain. Uncached: only the capture path asks, and only when the shape
+    /// changes.
+    pub fn raw_image(&self, icon: CursorIcon, scale: i32) -> Option<RawImage> {
+        let size = self.size * scale.max(1) as u32;
+        self.sources
+            .iter()
+            .find_map(|source| source.shape(icon, size))
+            .filter(RawImage::is_valid)
+    }
+
     /// Pushes the cursor's elements for one output, front of everything.
     ///
     /// `pointer` is global logical; `monitor` is the output being drawn and its

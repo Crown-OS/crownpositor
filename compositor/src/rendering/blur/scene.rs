@@ -7,9 +7,11 @@
 //!
 //! What keeps that true is [`BlurScene::cover`]: once a backdrop has drawn, the
 //! framebuffer under it holds glass, so nothing after it may lift those pixels
-//! back into the scene. Everything else in the frame is fair game, which is why
-//! the refresh below reaches a blur radius past the damage it was handed — the
-//! taps at the edge of a piece of glass need real pixels to land on.
+//! back into the scene. The refresh also reaches a blur radius past the damage
+//! it was handed, because the taps at the edge of a piece of glass need real
+//! pixels to land on — but outside the damage the framebuffer still holds the
+//! finished composite, so there it stops at every piece of glass on the frame
+//! ([`BlurScene::stand`]), drawn yet or not.
 
 use std::cell::RefCell;
 
@@ -24,6 +26,8 @@ use smithay::{
     utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Size},
 };
 
+use crate::utils::region;
+
 /// The framebuffer as it was before any glass was drawn over it, and the
 /// halving kawase levels blurred out of it. Both in framebuffer orientation and
 /// at framebuffer resolution, so a backdrop addresses them with `gl_FragCoord`.
@@ -34,15 +38,16 @@ pub struct BlurScene {
     glass: RefCell<Glass>,
 }
 
-/// Where the frame already holds glass rather than scene, in framebuffer
-/// pixels.
+/// Where the frame holds glass rather than scene.
 #[derive(Debug, Default)]
 struct Glass {
-    /// Drawn by this frame's backdrops so far.
+    /// Drawn by this frame's backdrops so far, in framebuffer pixels.
     drawn: Vec<Rectangle<i32, Physical>>,
-    /// Last frame's, for the parts of the frame this one has not repainted:
-    /// the old glass is still standing there.
-    stale: Vec<Rectangle<i32, Physical>>,
+    /// Every backdrop placed on this frame, output-local. Recorded when the
+    /// element is built rather than when it draws, because the damage tracker
+    /// skips an element with no damage, and its glass is still standing in the
+    /// framebuffer all the same.
+    standing: Vec<Rectangle<i32, Physical>>,
 }
 
 impl BlurScene {
@@ -80,18 +85,32 @@ impl BlurScene {
     /// those pixels, which is the only correct thing to blur there.
     pub(super) fn begin_frame(&self) {
         let mut glass = self.glass.borrow_mut();
-        glass.stale = std::mem::take(&mut glass.drawn);
+        glass.drawn.clear();
+        glass.standing.clear();
+    }
+
+    /// Records a backdrop placed on this frame, in output-local pixels.
+    pub(super) fn stand(&self, geometry: Rectangle<i32, Physical>) {
+        self.glass.borrow_mut().standing.push(geometry);
     }
 
     /// What of `damage` is worth lifting out of the frame, in framebuffer
-    /// pixels. See [`Glass::refresh`].
+    /// pixels. See [`Glass::refresh`]; `to_framebuffer` maps the output-local
+    /// glass on the frame into the same space.
     pub(super) fn refresh(
         &self,
         damage: &[Rectangle<i32, Physical>],
         radius: i32,
         bounds: Rectangle<i32, Physical>,
+        to_framebuffer: impl Fn(Rectangle<i32, Physical>) -> Rectangle<i32, Physical>,
     ) -> Vec<Rectangle<i32, Physical>> {
-        self.glass.borrow().refresh(damage, radius, bounds)
+        let glass = self.glass.borrow();
+        let standing: Vec<_> = glass
+            .standing
+            .iter()
+            .map(|rect| to_framebuffer(*rect))
+            .collect();
+        glass.refresh(damage, radius, bounds, &standing)
     }
 
     /// Records that `rects` now hold glass. Called whether or not the backdrop
@@ -103,31 +122,32 @@ impl BlurScene {
 }
 
 impl Glass {
-    /// The damage itself, minus the glass this frame has already drawn — that
-    /// is the whole of the fix: a backdrop over another one lifts the scene the
-    /// lower one blurred, not the blur it left behind.
+    /// The damage itself, minus the glass this frame has already drawn: a
+    /// backdrop over another one lifts the scene the lower one blurred, not the
+    /// blur it left behind.
     ///
-    /// Plus a `radius`-wide skirt around the damage, minus glass of either
-    /// frame. The skirt is where the outermost taps of the blur land, and it is
-    /// the one part of the refresh that reads pixels this backdrop is not
-    /// about to cover — so it is also the one part that has to mind the glass
-    /// still standing from last frame.
+    /// Plus a `radius`-wide skirt around the damage, minus every piece of glass
+    /// `standing` on the frame. The skirt is where the outermost taps of the
+    /// blur land, and it is the one part of the refresh that reads pixels
+    /// nothing has repainted — the finished composite, glass and whatever sits
+    /// on it included. Lifting that would blur the glass, and the text on it,
+    /// back into itself.
     fn refresh(
         &self,
         damage: &[Rectangle<i32, Physical>],
         radius: i32,
         bounds: Rectangle<i32, Physical>,
+        standing: &[Rectangle<i32, Physical>],
     ) -> Vec<Rectangle<i32, Physical>> {
-        let mut refresh =
-            Rectangle::subtract_rects_many(damage.iter().copied(), self.drawn.iter().copied());
+        let mut refresh = region::subtract(damage.iter().copied(), self.drawn.iter().copied());
 
         let skirt = damage
             .iter()
             .filter_map(|rect| grow(*rect, radius).intersection(bounds));
-        let skirt = Rectangle::subtract_rects_many(skirt, damage.iter().copied());
-        refresh.extend(Rectangle::subtract_rects_many(
+        let skirt = region::subtract(skirt, damage.iter().copied());
+        refresh.extend(region::subtract(
             skirt,
-            self.drawn.iter().chain(&self.stale).copied(),
+            self.drawn.iter().chain(standing).copied(),
         ));
 
         refresh
@@ -167,55 +187,55 @@ mod tests {
 
     #[test]
     fn the_first_backdrop_of_a_frame_lifts_its_damage_and_a_skirt() {
-        let refreshed = Glass::default().refresh(&[rect(50, 50, 20, 20)], 4, bounds());
+        let refreshed = Glass::default().refresh(&[rect(50, 50, 20, 20)], 4, bounds(), &[]);
         assert_eq!(points(&refreshed), points(&[rect(46, 46, 28, 28)]));
     }
 
-    /// The fix, as geometry: the popup does not lift the bar's glass back out
-    /// of the frame, so it blurs what the bar blurred instead of blurring the
-    /// bar's own blur.
+    /// The popup does not lift the bar's glass back out of the frame, so it
+    /// blurs what the bar blurred instead of blurring the bar's own blur.
     #[test]
     fn a_backdrop_over_another_one_leaves_its_glass_alone() {
         let glass = Glass {
             drawn: vec![rect(0, 0, 200, 40)],
-            stale: Vec::new(),
+            standing: Vec::new(),
         };
-        let refreshed = glass.refresh(&[rect(50, 20, 20, 40)], 0, bounds());
+        let refreshed = glass.refresh(&[rect(50, 20, 20, 40)], 0, bounds(), &[]);
         assert_eq!(points(&refreshed), points(&[rect(50, 40, 20, 20)]));
     }
 
-    /// The skirt reaches past the damage into pixels nothing repainted, so the
-    /// glass another backdrop left standing last frame is off limits there too.
+    /// The skirt reaches past the damage into pixels nothing repainted, so any
+    /// glass standing on the frame is off limits there — drawn yet or not.
     #[test]
-    fn the_skirt_stops_at_glass_from_either_frame() {
+    fn the_skirt_stops_at_every_piece_of_glass_on_the_frame() {
         let glass = Glass {
             drawn: vec![rect(0, 0, 200, 40)],
-            stale: vec![rect(0, 160, 200, 40)],
+            standing: Vec::new(),
         };
-        let refreshed = glass.refresh(&[rect(50, 60, 20, 80)], 30, bounds());
-        assert_eq!(points(&refreshed), points(&[rect(20, 40, 80, 120)]),);
+        let standing = [rect(0, 0, 200, 40), rect(0, 160, 200, 40)];
+        let refreshed = glass.refresh(&[rect(50, 60, 20, 80)], 30, bounds(), &standing);
+        assert_eq!(points(&refreshed), points(&[rect(20, 40, 80, 120)]));
     }
 
-    /// Last frame's glass is only in the way of the skirt: inside the damage
-    /// the frame has already repainted whatever was under it, which is exactly
-    /// what a backdrop redrawing its own area every frame depends on.
+    /// Glass that is merely standing is only in the way of the skirt: inside
+    /// the damage the frame has already repainted whatever was under it, which
+    /// is exactly what a backdrop redrawing its own area every frame depends on.
     #[test]
-    fn damage_is_lifted_through_last_frames_glass() {
-        let glass = Glass {
-            drawn: Vec::new(),
-            stale: vec![rect(0, 0, 200, 40)],
-        };
-        let refreshed = glass.refresh(&[rect(0, 0, 200, 40)], 0, bounds());
+    fn damage_is_lifted_through_glass_that_has_not_drawn_yet() {
+        let refreshed =
+            Glass::default().refresh(&[rect(0, 0, 200, 40)], 0, bounds(), &[rect(0, 0, 200, 40)]);
         assert_eq!(points(&refreshed), points(&[rect(0, 0, 200, 40)]));
     }
 
+    /// A backdrop the damage tracker skipped last frame still counts: its glass
+    /// never left the framebuffer, so a skirt reaching into it lifts nothing.
     #[test]
-    fn a_frame_retires_its_glass() {
-        let mut glass = Glass::default();
-        glass.drawn.push(rect(0, 0, 10, 10));
-
-        glass.stale = std::mem::take(&mut glass.drawn);
-        assert!(glass.drawn.is_empty());
-        assert_eq!(glass.stale, vec![rect(0, 0, 10, 10)]);
+    fn glass_that_did_not_draw_still_guards_the_skirt() {
+        let refreshed = Glass::default().refresh(
+            &[rect(50, 50, 20, 20)],
+            10,
+            bounds(),
+            &[rect(0, 0, 200, 200)],
+        );
+        assert_eq!(points(&refreshed), points(&[rect(50, 50, 20, 20)]));
     }
 }
