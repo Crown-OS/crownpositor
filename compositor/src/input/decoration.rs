@@ -8,18 +8,22 @@
 //!
 //! The rules are the ones every desktop already has: the controls close,
 //! minimize and maximize; a drag on the bar moves the window; a double-click
-//! toggles maximize.
+//! toggles maximize; a drag just outside the frame's edge resizes it.
 
 use std::time::{Duration, Instant};
 
 use smithay::{
     backend::input::ButtonState,
+    input::pointer::CursorIcon,
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
     utils::{Logical, Point, Serial},
 };
 
 use crate::{
     shell::{
+        WindowPart,
         decoration::{Control, TitleBarLayout},
+        grab::resize_cursor,
         tile::{Tile, WindowState},
     },
     state::State,
@@ -74,6 +78,23 @@ impl State {
         self.queue_pointer_redraw();
     }
 
+    /// Shows the resize cursor over a frame's edge, and the arrow over the
+    /// rest of it.
+    ///
+    /// Only while the pointer is on a frame: no client hears about it, so no
+    /// client will ever set the cursor there. Anywhere else the image is the
+    /// client's own business. Called after the seat has seen the motion,
+    /// because crossing from a client onto a frame resets the cursor.
+    pub fn track_frame_cursor(&mut self, over_frame: bool) {
+        if !over_frame {
+            return;
+        }
+        let icon = self
+            .edge_at(self.input.pointer_location)
+            .map_or(CursorIcon::Default, |(_, edge)| resize_cursor(edge));
+        self.show_cursor(icon);
+    }
+
     /// A click on a window's frame.
     ///
     /// The compositor drew those pixels, so it answers for them: nothing is
@@ -98,6 +119,13 @@ impl State {
         // included — closing a background window should not leave the one
         // behind it thinking it never lost focus.
         self.shell.focus_window(id);
+
+        // The band outside the frame resizes it. It never overlaps the bar, so
+        // there is no control or label it could be shadowing.
+        if let Some((_, edge)) = self.edge_at(location).filter(|(window, _)| *window == id) {
+            self.start_frame_resize(id, edge, serial);
+            return;
+        }
 
         // A menu label opens or closes its menu, and nothing else: no drag, no
         // double-click, and the press is not remembered as one.
@@ -223,9 +251,21 @@ impl State {
         closed
     }
 
+    /// Which window's edge the pointer is over, if any.
+    fn edge_at(&self, location: Point<f64, Logical>) -> Option<(WindowId, ResizeEdge)> {
+        let hit = self.shell.window_part_under(location)?;
+        match hit.part {
+            WindowPart::Edge(edge) => Some((hit.id, edge)),
+            WindowPart::TitleBar | WindowPart::Content => None,
+        }
+    }
+
     /// Which window's control the pointer is over, if any.
     fn control_at(&self, location: Point<f64, Logical>) -> Option<(WindowId, Control)> {
-        let hit = self.shell.window_part_under(location)?;
+        let hit = self
+            .shell
+            .window_part_under(location)
+            .filter(|hit| hit.part == WindowPart::TitleBar)?;
         let tile = self.shell.tile(hit.id)?;
         let layout = TitleBarLayout::new(tile.target(), tile.insets());
 
