@@ -41,11 +41,6 @@ tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 wayland-server = "0.31.14"
 
-# The compositor section is developed alongside the compositor, so build against
-# the checkout next door rather than the last push.
-[patch."https://github.com/crown-os/crownos-config"]
-crownos-config = { path = "../crownos-config" }
-
 # Tracks smithay master for the selection fixes that postdate 0.7.0: the
 # ext-data-control `used_source` error, dropping devices of disconnected
 # clients, and clearing a selection the moment its source dies. Same rev
