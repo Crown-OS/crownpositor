@@ -20,6 +20,23 @@ use smithay::{
 
 use crate::{input::decoration::LEFT_BUTTON, layout::placement, state::State, utils::id::WindowId};
 
+/// Whether dragging `edges` moves the window's left edge, and with it the
+/// window's origin.
+pub fn moves_left(edges: ResizeEdge) -> bool {
+    matches!(
+        edges,
+        ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
+    )
+}
+
+/// The same for the top edge.
+pub fn moves_top(edges: ResizeEdge) -> bool {
+    matches!(
+        edges,
+        ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
+    )
+}
+
 /// The cursor for dragging `edges`: the arrow that points the way it will go.
 pub fn resize_cursor(edges: ResizeEdge) -> CursorIcon {
     match edges {
@@ -237,10 +254,7 @@ impl ResizeGrab {
 
         // Dragging a left or top edge moves the origin as well as the size, so
         // the opposite edge stays put.
-        if matches!(
-            self.edges,
-            ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
-        ) {
+        if moves_left(self.edges) {
             rect.loc.x += delta.x;
             rect.size.w -= delta.x;
         }
@@ -250,10 +264,7 @@ impl ResizeGrab {
         ) {
             rect.size.w += delta.x;
         }
-        if matches!(
-            self.edges,
-            ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
-        ) {
+        if moves_top(self.edges) {
             rect.loc.y += delta.y;
             rect.size.h -= delta.y;
         }
@@ -264,8 +275,10 @@ impl ResizeGrab {
             rect.size.h += delta.y;
         }
 
-        rect.size = Size::from((rect.size.w.max(1), rect.size.h.max(1)));
-        rect
+        // Dragged past the opposite edge: a pixel, still hanging off the edge
+        // that is not moving.
+        let size = Size::from((rect.size.w.max(1), rect.size.h.max(1)));
+        placement::fit_resize(rect, size, moves_left(self.edges), moves_top(self.edges))
     }
 }
 
@@ -285,7 +298,7 @@ impl PointerGrab<State> for ResizeGrab {
         // grab holds the resize arrow itself. Idempotent, so every motion can.
         state.show_cursor(resize_cursor(self.edges));
         let rect = self.resized(event.location);
-        state.shell.resize_floating(self.window, rect);
+        state.shell.resize_floating(self.window, rect, self.edges);
     }
 
     fn relative_motion(
