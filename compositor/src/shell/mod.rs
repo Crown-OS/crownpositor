@@ -25,7 +25,7 @@ use smithay::{
     },
     output::Output,
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
+        wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
     },
     utils::{IsAlive, Logical, Point, Rectangle, Size},
@@ -44,6 +44,7 @@ use crate::{
     layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
     menu::Menus,
     shell::{
+        decoration::resize_edge,
         monitor::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
@@ -183,6 +184,9 @@ fn layer_under(
 pub enum WindowPart {
     /// The compositor's own frame. No client hears about it.
     TitleBar,
+    /// The invisible band just outside a floating frame, which resizes it.
+    /// Also the compositor's, for the same reason.
+    Edge(ResizeEdge),
     /// The client's area, or a popup hanging off it.
     Content,
 }
@@ -932,7 +936,11 @@ impl Shell {
                 workspace.stacking_order().find_map(|tile| {
                     let frame = tile.target();
                     if !frame.to_f64().contains(local) {
-                        return None;
+                        return tile
+                            .has_resize_band()
+                            .then(|| resize_edge(frame, local))
+                            .flatten()
+                            .map(|edge| hit(tile, WindowPart::Edge(edge)));
                     }
 
                     // The decoration is opaque to input: the compositor drew it,
@@ -999,7 +1007,7 @@ impl Shell {
         // deliberately not baked into the target — the pointer crossing from one
         // control to the next would otherwise read as leaving one window and
         // entering another.
-        if hit.part == WindowPart::TitleBar {
+        if hit.part != WindowPart::Content {
             return Some((
                 PointerFocusTarget::Decoration { window },
                 hit.frame.to_f64(),
