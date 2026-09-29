@@ -25,7 +25,7 @@ use smithay::{
     },
     output::Output,
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
+        wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
     },
     utils::{IsAlive, Logical, Point, Rectangle, Size},
@@ -44,6 +44,8 @@ use crate::{
     layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
     menu::Menus,
     shell::{
+        decoration::resize_edge,
+        grab::{moves_left, moves_top},
         monitor::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
@@ -183,6 +185,9 @@ fn layer_under(
 pub enum WindowPart {
     /// The compositor's own frame. No client hears about it.
     TitleBar,
+    /// The invisible band just outside a floating frame, which resizes it.
+    /// Also the compositor's, for the same reason.
+    Edge(ResizeEdge),
     /// The client's area, or a popup hanging off it.
     Content,
 }
@@ -932,7 +937,11 @@ impl Shell {
                 workspace.stacking_order().find_map(|tile| {
                     let frame = tile.target();
                     if !frame.to_f64().contains(local) {
-                        return None;
+                        return tile
+                            .has_resize_band()
+                            .then(|| resize_edge(frame, local))
+                            .flatten()
+                            .map(|edge| hit(tile, WindowPart::Edge(edge)));
                     }
 
                     // The decoration is opaque to input: the compositor drew it,
@@ -999,7 +1008,7 @@ impl Shell {
         // deliberately not baked into the target — the pointer crossing from one
         // control to the next would otherwise read as leaving one window and
         // entering another.
-        if hit.part == WindowPart::TitleBar {
+        if hit.part != WindowPart::Content {
             return Some((
                 PointerFocusTarget::Decoration { window },
                 hit.frame.to_f64(),
@@ -1377,11 +1386,20 @@ impl Shell {
 
     /// Resizes a floating window, respecting its own size hints.
     ///
+    /// `edges` is what the drag holds, and the edges opposite it stay put: a
+    /// window at its minimum stops shrinking rather than sliding after the
+    /// pointer.
+    ///
     /// The top edge is held inside the usable area here rather than left to
     /// `arrange`: a resize anchors the edge opposite the one being dragged, and
     /// nudging the whole window down — which is all `keep_reachable` can do —
     /// would drag that anchor along with it.
-    pub fn resize_floating(&mut self, id: WindowId, rect: Rectangle<i32, Logical>) -> bool {
+    pub fn resize_floating(
+        &mut self,
+        id: WindowId,
+        rect: Rectangle<i32, Logical>,
+        edges: ResizeEdge,
+    ) -> bool {
         let Some(area) = self
             .location(id)
             .and_then(|at| self.workspace(at))
@@ -1396,11 +1414,18 @@ impl Shell {
             return false;
         }
 
-        let size = tile.info().constrain(rect.size);
-        tile.set_floating_rect(placement::keep_top_reachable(
-            Rectangle::new(rect.loc, size),
-            area,
-        ));
+        // The hints are the client's, so they limit its content; the frame
+        // around it is that plus the titlebar. Clamping the frame instead
+        // would let the content go a titlebar shorter than the client allows.
+        let insets = tile.insets();
+        let content = tile.info().constrain(insets.content_size(rect.size));
+        let fitted = placement::fit_resize(
+            rect,
+            insets.frame_size(content),
+            moves_left(edges),
+            moves_top(edges),
+        );
+        tile.set_floating_rect(placement::keep_top_reachable(fitted, area));
         self.mark_dirty(id);
         true
     }

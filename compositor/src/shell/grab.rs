@@ -9,7 +9,7 @@
 use smithay::{
     desktop::Window,
     input::pointer::{
-        AxisFrame, ButtonEvent, Focus, GestureHoldBeginEvent, GestureHoldEndEvent,
+        AxisFrame, ButtonEvent, CursorIcon, Focus, GestureHoldBeginEvent, GestureHoldEndEvent,
         GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
         GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
         MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
@@ -18,7 +18,39 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Serial, Size},
 };
 
-use crate::{layout::placement, state::State, utils::id::WindowId};
+use crate::{input::decoration::LEFT_BUTTON, layout::placement, state::State, utils::id::WindowId};
+
+/// Whether dragging `edges` moves the window's left edge, and with it the
+/// window's origin.
+pub fn moves_left(edges: ResizeEdge) -> bool {
+    matches!(
+        edges,
+        ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
+    )
+}
+
+/// The same for the top edge.
+pub fn moves_top(edges: ResizeEdge) -> bool {
+    matches!(
+        edges,
+        ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
+    )
+}
+
+/// The cursor for dragging `edges`: the arrow that points the way it will go.
+pub fn resize_cursor(edges: ResizeEdge) -> CursorIcon {
+    match edges {
+        ResizeEdge::Top => CursorIcon::NResize,
+        ResizeEdge::Bottom => CursorIcon::SResize,
+        ResizeEdge::Left => CursorIcon::WResize,
+        ResizeEdge::Right => CursorIcon::EResize,
+        ResizeEdge::TopLeft => CursorIcon::NwResize,
+        ResizeEdge::TopRight => CursorIcon::NeResize,
+        ResizeEdge::BottomLeft => CursorIcon::SwResize,
+        ResizeEdge::BottomRight => CursorIcon::SeResize,
+        _ => CursorIcon::Default,
+    }
+}
 
 pub struct MoveGrab {
     start_data: GrabStartData<State>,
@@ -222,10 +254,7 @@ impl ResizeGrab {
 
         // Dragging a left or top edge moves the origin as well as the size, so
         // the opposite edge stays put.
-        if matches!(
-            self.edges,
-            ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
-        ) {
+        if moves_left(self.edges) {
             rect.loc.x += delta.x;
             rect.size.w -= delta.x;
         }
@@ -235,10 +264,7 @@ impl ResizeGrab {
         ) {
             rect.size.w += delta.x;
         }
-        if matches!(
-            self.edges,
-            ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
-        ) {
+        if moves_top(self.edges) {
             rect.loc.y += delta.y;
             rect.size.h -= delta.y;
         }
@@ -249,8 +275,10 @@ impl ResizeGrab {
             rect.size.h += delta.y;
         }
 
-        rect.size = Size::from((rect.size.w.max(1), rect.size.h.max(1)));
-        rect
+        // Dragged past the opposite edge: a pixel, still hanging off the edge
+        // that is not moving.
+        let size = Size::from((rect.size.w.max(1), rect.size.h.max(1)));
+        placement::fit_resize(rect, size, moves_left(self.edges), moves_top(self.edges))
     }
 }
 
@@ -266,8 +294,11 @@ impl PointerGrab<State> for ResizeGrab {
         event: &MotionEvent,
     ) {
         handle.motion(state, None, event);
+        // Nothing is focused mid-drag, so no client will set the cursor: the
+        // grab holds the resize arrow itself. Idempotent, so every motion can.
+        state.show_cursor(resize_cursor(self.edges));
         let rect = self.resized(event.location);
-        state.shell.resize_floating(self.window, rect);
+        state.shell.resize_floating(self.window, rect, self.edges);
     }
 
     fn relative_motion(
@@ -312,10 +343,13 @@ impl PointerGrab<State> for ResizeGrab {
         &self.start_data
     }
 
+    /// Hands the cursor back as the arrow. Whatever is under the pointer now
+    /// gets an enter and sets its own; a frame is set on the next motion.
     fn unset(&mut self, state: &mut State) {
         if let Some(tile) = state.shell.tile_mut(self.window) {
             tile.release_pointer();
         }
+        state.show_cursor(CursorIcon::Default);
     }
 
     fn gesture_swipe_begin(
@@ -427,6 +461,8 @@ impl State {
                 serial,
                 Focus::Clear,
             );
+            // After the grab: clearing focus resets the cursor to the arrow.
+            self.show_cursor(resize_cursor(edges));
         }
     }
 
@@ -439,11 +475,7 @@ impl State {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
-        let start_data = GrabStartData {
-            focus: None,
-            button: 0x110,
-            location: pointer.current_location(),
-        };
+        let start_data = frame_grab_start(pointer.current_location());
 
         let Some(origin) = self.begin_move(id, start_data.location) else {
             return;
@@ -455,6 +487,28 @@ impl State {
             serial,
             Focus::Clear,
         );
+    }
+
+    /// Starts a resize the compositor asked for — a drag on a frame's edge.
+    /// No serial to validate, for the same reason as
+    /// [`start_frame_move`](Self::start_frame_move).
+    pub fn start_frame_resize(&mut self, id: WindowId, edges: ResizeEdge, serial: Serial) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+        let start_data = frame_grab_start(pointer.current_location());
+
+        let Some(initial) = self.begin_resize(id, start_data.location) else {
+            return;
+        };
+
+        pointer.set_grab(
+            self,
+            ResizeGrab::new(start_data, id, edges, initial),
+            serial,
+            Focus::Clear,
+        );
+        self.show_cursor(resize_cursor(edges));
     }
 
     /// Floats a window for a drag and hands its geometry to the pointer.
@@ -549,5 +603,15 @@ impl State {
             return None;
         }
         pointer.grab_start_data()
+    }
+}
+
+/// The start of a grab the compositor began on its own frame: no client
+/// surface had focus, and the button is the only one a frame answers to.
+fn frame_grab_start(location: Point<f64, Logical>) -> GrabStartData<State> {
+    GrabStartData {
+        focus: None,
+        button: LEFT_BUTTON,
+        location,
     }
 }
