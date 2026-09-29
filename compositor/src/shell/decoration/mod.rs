@@ -13,6 +13,7 @@ use std::cell::Cell;
 
 use smithay::{
     backend::renderer::{element::Id, utils::CommitCounter},
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
     utils::{Logical, Point, Rectangle, Size},
 };
 
@@ -201,8 +202,9 @@ impl TitleBarLayout {
 /// The band the decoration occupies along each edge of a window.
 ///
 /// Only the top is non-zero today. It is still a struct rather than a bare
-/// `i32` because the resize band and a future bottom bar both belong here, and
-/// every call site already asks the same two questions of it.
+/// `i32` because a future bottom bar belongs here, and every call site already
+/// asks the same two questions of it. The resize band does not: it lies
+/// outside the frame, so it changes neither rect — see [`resize_edge`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Insets {
     pub top: i32,
@@ -263,12 +265,105 @@ impl Insets {
     }
 }
 
+/// How far outside a floating window's frame its edges can still be grabbed.
+///
+/// The band is invisible and sits *outside* the frame, the way every desktop
+/// with a thin border does it: inside, the pixels belong to the titlebar and
+/// the client, and neither should lose a column to a resize handle.
+pub const RESIZE_BAND: i32 = 8;
+/// How far along an edge a corner still wins. A corner's own share of the band
+/// is only `RESIZE_BAND` square, which is too small to hit on purpose.
+const RESIZE_CORNER: i32 = 20;
+
+/// Which edge of `frame` a point in its resize band grabs, if it is in the band
+/// at all. A point inside the frame is not: that is the titlebar or the client.
+pub fn resize_edge(
+    frame: Rectangle<i32, Logical>,
+    point: Point<f64, Logical>,
+) -> Option<ResizeEdge> {
+    let (left, top) = (frame.loc.x as f64, frame.loc.y as f64);
+    let (right, bottom) = (left + frame.size.w as f64, top + frame.size.h as f64);
+    let band = RESIZE_BAND as f64;
+    let corner = RESIZE_CORNER as f64;
+
+    let in_reach = point.x >= left - band
+        && point.x < right + band
+        && point.y >= top - band
+        && point.y < bottom + band;
+    if !in_reach || frame.to_f64().contains(point) {
+        return None;
+    }
+
+    let horizontal = if point.x < left + corner {
+        Some(ResizeEdge::Left)
+    } else if point.x >= right - corner {
+        Some(ResizeEdge::Right)
+    } else {
+        None
+    };
+    let vertical = if point.y < top + corner {
+        Some(ResizeEdge::Top)
+    } else if point.y >= bottom - corner {
+        Some(ResizeEdge::Bottom)
+    } else {
+        None
+    };
+
+    // Near a corner on both axes means the corner. Otherwise the point is
+    // outside the frame on exactly one axis, and that side is the edge.
+    let outside_x = point.x < left || point.x >= right;
+    let outside_y = point.y < top || point.y >= bottom;
+    match (horizontal, vertical) {
+        (Some(ResizeEdge::Left), Some(ResizeEdge::Top)) => Some(ResizeEdge::TopLeft),
+        (Some(ResizeEdge::Right), Some(ResizeEdge::Top)) => Some(ResizeEdge::TopRight),
+        (Some(ResizeEdge::Left), Some(ResizeEdge::Bottom)) => Some(ResizeEdge::BottomLeft),
+        (Some(ResizeEdge::Right), Some(ResizeEdge::Bottom)) => Some(ResizeEdge::BottomRight),
+        _ if outside_x => horizontal,
+        _ if outside_y => vertical,
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    fn edge_at(x: f64, y: f64) -> Option<ResizeEdge> {
+        resize_edge(rect(100, 100, 800, 600), Point::from((x, y)))
+    }
+
+    #[test]
+    fn each_side_of_the_band_grabs_its_own_edge() {
+        assert_eq!(edge_at(95.0, 400.0), Some(ResizeEdge::Left));
+        assert_eq!(edge_at(903.0, 400.0), Some(ResizeEdge::Right));
+        assert_eq!(edge_at(500.0, 95.0), Some(ResizeEdge::Top));
+        assert_eq!(edge_at(500.0, 703.0), Some(ResizeEdge::Bottom));
+    }
+
+    #[test]
+    fn a_corner_reaches_along_both_of_its_edges() {
+        assert_eq!(edge_at(95.0, 95.0), Some(ResizeEdge::TopLeft));
+        assert_eq!(edge_at(95.0, 110.0), Some(ResizeEdge::TopLeft));
+        assert_eq!(edge_at(110.0, 95.0), Some(ResizeEdge::TopLeft));
+        assert_eq!(edge_at(903.0, 695.0), Some(ResizeEdge::BottomRight));
+        assert_eq!(edge_at(890.0, 703.0), Some(ResizeEdge::BottomRight));
+    }
+
+    #[test]
+    fn the_inside_of_the_frame_is_not_the_band() {
+        assert_eq!(edge_at(100.0, 100.0), None);
+        assert_eq!(edge_at(500.0, 400.0), None);
+        assert_eq!(edge_at(899.0, 699.0), None);
+    }
+
+    #[test]
+    fn past_the_band_is_nothing() {
+        assert_eq!(edge_at(91.0, 400.0), None);
+        assert_eq!(edge_at(500.0, 708.0), None);
     }
 
     #[test]
