@@ -157,6 +157,9 @@ impl State {
 
         tracing::debug!(?target, "keyboard focus moved");
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
+        self.sync_shortcuts_inhibitors();
+        self.release_unfocused_pointer_constraint();
+        self.refresh_pointer_constraint();
     }
 
     /// The same reconcile for the pointer, for the changes no pointer event
@@ -170,6 +173,7 @@ impl State {
     /// nothing. A grab owns the pointer outright and an open menu holds it for
     /// as long as it is open, so neither is disturbed.
     pub fn update_pointer_focus(&mut self) {
+        self.apply_unlock_warp();
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
@@ -214,10 +218,11 @@ impl State {
             },
         );
         pointer.frame(self);
+        self.refresh_pointer_constraint();
     }
 
-    /// Window rules are deliberately not retro-applied: a window floated by hand
-    /// must not be re-tiled because an unrelated rule was edited.
+    /// Only the presentation half of window rules is retro-applied: a window
+    /// floated by hand must not be re-tiled because an unrelated rule was edited.
     pub fn apply_config(&mut self, new: Config) {
         self.input.bindings = Bindings::with_custom(&new.keybinds.custom_keybinds);
 
@@ -232,6 +237,7 @@ impl State {
             .set_workspace_animation(SpringProfile::from_config(new.appearance.animations));
 
         self.config.current = new;
+        self.reapply_window_rules();
         self.shell.apply_output_settings(&self.config.current);
         self.refresh_output_heads();
         self.sync_background_effect_capabilities();
@@ -281,7 +287,11 @@ impl State {
                 self.shell.set_default_mode(mode);
             }
             Update::FocusFollowsMouse(follows) => config.compositor.focus_follows_mouse = follows,
-            Update::WindowRules(rules) => config.window_rules = rules,
+            Update::WindowRules(rules) => {
+                config.window_rules = rules;
+                self.reapply_window_rules();
+            }
+            Update::Gaming(gaming) => config.compositor.gaming = gaming,
 
             Update::Outputs(outputs) => {
                 config.compositor.outputs = outputs;

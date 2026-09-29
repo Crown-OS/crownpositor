@@ -2,13 +2,13 @@ mod keyboard_target;
 mod pointer_target;
 
 use smithay::{
+    backend::input::TabletToolDescriptor,
     input::{
         Seat, SeatHandler, SeatState, keyboard::LedState, pointer::CursorImageStatus,
         tablet::TabletSeatHandler,
     },
     reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
     wayland::{
-        pointer_constraints::PointerConstraintsHandler,
         seat::WaylandFocus,
         selection::{data_device::set_data_device_focus, primary_selection::set_primary_focus},
     },
@@ -64,12 +64,15 @@ impl SeatHandler for State {
     fn led_state_changed(&mut self, _seat: &Seat<Self>, _led_state: LedState) {}
 }
 
-// TODO: Implement this
 impl TabletSeatHandler for State {
     type ToolFocus = WlSurface;
-}
 
-/// smithay's `WlSurface` pointer target asks this on every motion. No
-/// `zwp_pointer_constraints_v1` global is advertised, so there is never a
-/// constraint to answer for.
-impl PointerConstraintsHandler for State {}
+    /// The pen moves the one cursor there is, so its image is the cursor's.
+    fn tablet_tool_image(&mut self, _tool: &TabletToolDescriptor, image: CursorImageStatus) {
+        if self.input.cursor.status == image {
+            return;
+        }
+        self.input.cursor.status = image;
+        self.queue_pointer_redraw();
+    }
+}

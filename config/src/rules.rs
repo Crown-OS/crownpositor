@@ -38,6 +38,8 @@ pub struct ResolvedRule {
     pub focus: Option<bool>,
     pub opacity: Option<f32>,
     pub corner_radius: Option<u16>,
+    pub tearing: Option<bool>,
+    pub vrr: Option<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -81,6 +83,8 @@ impl WindowRules {
             out.focus = rule.focus.or(out.focus);
             out.opacity = rule.opacity.or(out.opacity);
             out.corner_radius = rule.corner_radius.or(out.corner_radius);
+            out.tearing = rule.tearing.or(out.tearing);
+            out.vrr = rule.vrr.or(out.vrr);
         }
 
         out
@@ -163,6 +167,29 @@ mod tests {
             Some(true),
             "one bad regex must not discard the rules around it"
         );
+    }
+
+    #[test]
+    fn gaming_fields_merge_like_the_rest() {
+        let game = WindowRule {
+            app_id: Some("^steam_app_".into()),
+            tearing: Some(true),
+            vrr: Some(true),
+            ..Default::default()
+        };
+        let calmer = WindowRule {
+            app_id: Some("^steam_app_42$".into()),
+            tearing: Some(false),
+            ..Default::default()
+        };
+        let rules = WindowRules::compile(&[game, calmer]);
+
+        let other = rules.resolve(Some("steam_app_7"), None);
+        assert_eq!((other.tearing, other.vrr), (Some(true), Some(true)));
+
+        let quiet = rules.resolve(Some("steam_app_42"), None);
+        assert_eq!(quiet.tearing, Some(false), "the later rule wins");
+        assert_eq!(quiet.vrr, Some(true), "fields it does not set are kept");
     }
 
     #[test]

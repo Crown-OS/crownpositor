@@ -15,6 +15,8 @@ pub mod cursor;
 pub mod decorate;
 pub mod decoration;
 pub mod element;
+pub mod fullscreen;
+pub mod lock;
 pub mod overview;
 pub mod popup;
 pub mod rounded;
@@ -48,6 +50,7 @@ use crate::{
     shell::{
         Shell,
         decoration::{Control, TitleBarLayout},
+        gaming,
         monitor::Monitor,
         tile::Tile,
     },
@@ -158,6 +161,30 @@ where
         pointer,
         scale,
     );
+
+    // A locked session draws the lock and nothing else, whatever mode the
+    // desktop behind it was in.
+    if shell.session_lock.is_active() {
+        lock::lock_elements::<R, D>(&mut elements, &shell.session_lock, monitor, renderer, scale);
+        return elements;
+    }
+
+    // A settled fullscreen window is all there is to see. Panels and
+    // notifications stay hidden, so its buffer can go straight to a plane;
+    // only a menu the user opened is drawn over it.
+    if let Some(tile) = gaming::scanout_tile(monitor) {
+        menu_elements(
+            &mut elements,
+            shell,
+            monitor,
+            renderer,
+            decorator,
+            scale,
+            style,
+        );
+        fullscreen::fullscreen_elements::<R, D>(&mut elements, tile, renderer, scale);
+        return elements;
+    }
 
     layer_elements(
         &mut elements,

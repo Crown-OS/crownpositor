@@ -1,5 +1,12 @@
 [workspace]
-members = ["compositor", "config", "lockscreen", "protocols", "spacecontrol", "windowswitcher"]
+members = [
+  "compositor",
+  "config",
+  "lockscreen",
+  "protocols",
+  "spacecontrol",
+  "windowswitcher",
+]
 resolver = "3"
 
 [workspace.dependencies]
@@ -7,7 +14,7 @@ crownos-config = { git = "https://github.com/crown-os/crownos-config", default-f
 # The XML lives next door and is developed alongside the compositor, so a path
 # dependency rather than a git one: a protocol change and the code that honours
 # it have to land in the same build.
-crownos-protocols = { path = "../crownos-protocols", default-features = false }
+crownos-protocols = { git = "https://github.com/crown-os/crown-protocols", default-features = false }
 
 anyhow = "1.0.104"
 thiserror = "2.0.20"
@@ -24,7 +31,11 @@ smithay = { version = "0.7.0", default-features = false }
 # newer on this system than the sys crate allows. We only need `drm_scanner`;
 # EDID make/model naming can come back when the sys crate catches up.
 smithay-drm-extras = { version = "0.1.0", default-features = false }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync"] }
+tokio = { version = "1", default-features = false, features = [
+  "rt-multi-thread",
+  "time",
+  "sync",
+] }
 tracing = "0.1.44"
 tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

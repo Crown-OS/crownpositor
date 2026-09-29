@@ -62,6 +62,8 @@ pub struct Cursor {
     cache: HashMap<(CursorIcon, i32), Option<Image>>,
     /// What the focused client last asked for.
     pub status: CursorImageStatus,
+    /// Nothing is drawn while set: a locked pointer points at nothing.
+    pub suppressed: bool,
 }
 
 /// A rasterised cursor image, ready to draw.
@@ -92,6 +94,7 @@ impl Cursor {
             size,
             cache: HashMap::new(),
             status: CursorImageStatus::default_named(),
+            suppressed: false,
         }
     }
 
@@ -203,6 +206,9 @@ impl Cursor {
         E: From<WaylandSurfaceRenderElement<R>> + From<MemoryRenderBufferRenderElement<R>>,
     {
         self.refresh();
+        if self.suppressed {
+            return;
+        }
         let local = pointer - output_location.to_f64();
 
         // Cloned so the `Surface` arm's borrow does not outlive the `Named`

@@ -3,11 +3,13 @@
 
 pub mod arrangement;
 pub mod decoration;
+pub mod gaming;
 pub mod grab;
 pub mod monitor;
 pub mod overview;
 pub mod popup;
 pub mod scale;
+pub mod session_lock;
 pub mod snap;
 pub mod tile;
 pub mod transaction;
@@ -18,13 +20,13 @@ use std::{collections::HashMap, time::Instant};
 
 use smithay::{
     desktop::{
-        layer_map_for_output, space::SpaceElement, LayerSurface, PopupManager, Window,
-        WindowSurfaceType,
+        LayerSurface, PopupManager, Window, WindowSurfaceType, layer_map_for_output,
+        space::SpaceElement, utils::under_from_surface_tree,
     },
     output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
-        wayland_server::{protocol::wl_surface::WlSurface, DisplayHandle},
+        wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
     },
     utils::{IsAlive, Logical, Point, Rectangle, Size},
     wayland::shell::{
@@ -39,12 +41,13 @@ use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
-    layout::{placement, Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode},
+    layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
     menu::Menus,
     shell::{
         monitor::{
-            output_from_descriptor, output_id, ConnectorId, Monitor, OutputConfig, OutputDescriptor,
+            ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
+        session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
         tile::{Tile, WindowState},
         transaction::Transaction,
@@ -247,6 +250,9 @@ pub struct Shell {
     /// Where a dragged window would land. At most one, and only while a drag is
     /// actually over an edge.
     snap_previews: SnapPreviews,
+    /// `ext-session-lock-v1`: while active, the only thing drawn and the only
+    /// thing that hears input.
+    pub session_lock: SessionLock,
     /// Every window's menubar, and whichever one is open. Here rather than on
     /// `State` because hit-testing has to see it: an open menu is on top of
     /// every window, and a click has to reach it before anything else.
@@ -278,6 +284,7 @@ impl Shell {
             transactions: Vec::new(),
             cascade: 0,
             snap_previews: SnapPreviews::default(),
+            session_lock: SessionLock::default(),
             menus: Menus::default(),
         })
     }
@@ -384,6 +391,7 @@ impl Shell {
             refresh_interval: descriptor.refresh_interval,
             default_mode: None,
             edid: descriptor.edid.clone(),
+            vrr: config::Vrr::OnDemand,
         };
 
         // `enabled` is deliberately not read here: a `Monitor` in the shell is
@@ -614,10 +622,16 @@ impl Shell {
     /// of the request, and it is what makes a launcher or a password prompt
     /// typeable. Below it sits a layer surface the user clicked into, and below
     /// that the focused window.
-    // TODO: a lock surface has to outrank all three once `session_lock` tracks
-    // them — a locked session must not be typeable into anything else.
+    /// A locked session outranks all of it: nothing but the lock surface is
+    /// typeable, and before it maps, nothing at all is.
     pub fn keyboard_focus(&self) -> Option<KeyboardFocusTarget> {
         let focused = self.focused_output();
+        if self.session_lock.is_active() {
+            return focused
+                .and_then(|output| self.session_lock.surface_on(output))
+                .or_else(|| self.session_lock.any_surface())
+                .map(|lock| lock.clone().into());
+        }
         let exclusive = focused
             .into_iter()
             .chain(
@@ -954,6 +968,16 @@ impl Shell {
         let output = monitor.output();
         let origin = monitor.geometry().loc;
         let local = location - origin.to_f64();
+
+        if self.session_lock.is_active() {
+            let lock = self.session_lock.surface_on(output)?;
+            let (surface, offset) =
+                under_from_surface_tree(lock.wl_surface(), local, (0, 0), WindowSurfaceType::ALL)?;
+            return Some((
+                PointerFocusTarget::LockScreen { surface },
+                (offset + origin).to_f64(),
+            ));
+        }
 
         layer_under(output, origin, local, &[Layer::Overlay, Layer::Top])
             .or_else(|| self.window_under_pointer(location))
@@ -1532,15 +1556,43 @@ impl Shell {
             .flat_map(|(workspace, _)| workspace.stacking_order())
     }
 
-    /// Drops tiles whose window is gone. This is the logic the old
-    /// `IsAlive for WindowElement` got backwards.
-    pub fn reap_dead(&mut self) {
-        let dead: Vec<WindowId> = self
-            .monitors
+    /// Whether the tree rooted at `root` is drawn anywhere: a window on a
+    /// visible workspace, or a layer surface.
+    pub fn is_surface_visible(&self, root: &WlSurface) -> bool {
+        let Some(location) = self.window_id(root).and_then(|id| self.location(id)) else {
+            return self.tracks_layer(root);
+        };
+        self.monitor_by_id(location.output).is_some_and(|monitor| {
+            monitor
+                .visible_workspaces()
+                .any(|(workspace, _)| workspace.id() == location.workspace)
+        })
+    }
+
+    /// The output a window or layer surface tree is drawn on, by its root.
+    pub fn output_showing(&self, root: &WlSurface) -> Option<Output> {
+        match self.window_id(root).and_then(|id| self.location(id)) {
+            Some(location) => self
+                .monitor_by_id(location.output)
+                .map(|monitor| monitor.output().clone()),
+            None => self.output_for_layer(root).cloned(),
+        }
+    }
+
+    /// Every mapped window, on every output and the headless stash alike.
+    pub fn tiles(&self) -> impl Iterator<Item = &Tile> {
+        self.monitors
             .iter()
             .flat_map(Monitor::workspaces)
             .chain(self.headless.iter())
             .flat_map(Workspace::tiles)
+    }
+
+    /// Drops tiles whose window is gone. This is the logic the old
+    /// `IsAlive for WindowElement` got backwards.
+    pub fn reap_dead(&mut self) {
+        let dead: Vec<WindowId> = self
+            .tiles()
             .filter(|tile| !tile.alive())
             .map(Tile::id)
             .collect();

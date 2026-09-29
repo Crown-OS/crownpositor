@@ -8,10 +8,10 @@
 use std::time::Duration;
 
 use calloop::timer::{TimeoutAction, Timer};
-use config::{Compositor, OutputLayout, OutputSetting};
+use config::{Compositor, OutputLayout, OutputSetting, Vrr};
 use protocols::output_management::{
-    AdaptiveSync, HeadConfig, HeadId, HeadSnapshot, ModeRequest, ModeSnapshot,
-    OutputConfigRequest, VrrSupport,
+    AdaptiveSync, HeadConfig, HeadId, HeadSnapshot, ModeRequest, ModeSnapshot, OutputConfigRequest,
+    VrrSupport,
 };
 use smithay::{
     backend::drm::VrrSupport as DrmVrrSupport,
@@ -308,7 +308,9 @@ impl State {
             entry.mode = Some(format_mode(config.mode));
             // Position lives in the per-set layout; the flat entry keeps it
             // only as the fallback for a monitor set that has none.
-            entry.position.get_or_insert((config.position.x, config.position.y));
+            entry
+                .position
+                .get_or_insert((config.position.x, config.position.y));
         }
 
         settings
@@ -361,16 +363,15 @@ impl State {
             return;
         }
 
-        match crate::state::backend::BackendState::set_head_enabled(
-            self,
-            head.id.as_str(),
-            enabled,
-        ) {
+        match crate::state::backend::BackendState::set_head_enabled(self, head.id.as_str(), enabled)
+        {
             Ok(true) => {}
             // The head vanished between validation and here — a hotplug race,
             // not a failure worth undoing the rest of the configuration for.
             Ok(false) => tracing::debug!(head = %head.id, "head disappeared while applying"),
-            Err(err) => tracing::error!(%err, head = %head.id, enabled, "failed to switch a monitor"),
+            Err(err) => {
+                tracing::error!(%err, head = %head.id, enabled, "failed to switch a monitor")
+            }
         }
     }
 
@@ -388,14 +389,16 @@ impl State {
             };
             let output = monitor.output();
 
-            if head.mode != monitor.config().mode
-                && !self.backend.supports_mode(output, head.mode)
+            if head.mode != monitor.config().mode && !self.backend.supports_mode(output, head.mode)
             {
                 return Err(Rejection::NoSuchMode(head.id.to_string()));
             }
 
             if head.adaptive_sync
-                && matches!(self.backend.vrr_support(output), DrmVrrSupport::NotSupported)
+                && matches!(
+                    self.backend.vrr_support(output),
+                    DrmVrrSupport::NotSupported
+                )
             {
                 return Err(Rejection::Unsupported(format!(
                     "adaptive sync on head {}",
@@ -465,13 +468,20 @@ impl State {
             monitor.set_transform(head.transform);
             monitor.pin_position(head.position);
 
-            if mode_changed
-                && let Err(err) = self.backend.set_output_mode(&output, head.mode)
-            {
+            if mode_changed && let Err(err) = self.backend.set_output_mode(&output, head.mode) {
                 tracing::error!(%err, output = %head.id, "failed to set the mode");
             }
-            if let Err(err) = self.backend.set_output_vrr(&output, head.adaptive_sync) {
-                tracing::warn!(%err, output = %head.id, "failed to set adaptive sync");
+            // Clients echo the current state back with every change, so only a
+            // request that differs from it is the user choosing: it overrides
+            // the policy until the config is next applied.
+            if head.adaptive_sync != self.backend.vrr_enabled(&output)
+                && let Some(monitor) = self.shell.monitor_mut(&output)
+            {
+                monitor.config_mut().vrr = match head.adaptive_sync {
+                    true => Vrr::On,
+                    false => Vrr::Off,
+                };
+                self.backend.queue_redraw(Some(&output));
             }
         }
 
@@ -526,9 +536,8 @@ fn resolve_head(
 
     let mode = match mode {
         None => current.mode,
-        Some(request) => {
-            resolve_mode(request, &current.modes).ok_or_else(|| Rejection::NoSuchMode(id.to_string()))?
-        }
+        Some(request) => resolve_mode(request, &current.modes)
+            .ok_or_else(|| Rejection::NoSuchMode(id.to_string()))?,
     };
 
     Ok(ResolvedHead {
@@ -555,9 +564,7 @@ fn resolve_mode(request: &ModeRequest, modes: &[Mode]) -> Option<Mode> {
         ModeRequest::Custom { size, refresh } => {
             let matching = modes.iter().filter(|mode| mode.size == *size);
             match refresh {
-                None => matching
-                    .max_by_key(|mode| mode.refresh)
-                    .copied(),
+                None => matching.max_by_key(|mode| mode.refresh).copied(),
                 Some(wanted) => matching
                     .min_by_key(|mode| (mode.refresh - wanted).abs())
                     .filter(|mode| (mode.refresh - wanted).abs() <= REFRESH_TOLERANCE)
@@ -606,7 +613,9 @@ fn head_snapshot(
         .map(|mode| ModeSnapshot {
             size: mode.size,
             refresh: mode.refresh,
-            preferred: config.preferred_mode.is_some_and(|preferred| preferred == *mode),
+            preferred: config
+                .preferred_mode
+                .is_some_and(|preferred| preferred == *mode),
         })
         .collect::<Vec<_>>();
 

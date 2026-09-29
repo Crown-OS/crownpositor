@@ -214,21 +214,40 @@ impl Allocator for CrownAllocator {
 /// Smithay 0.7 only ships a `GbmBuffer` exporter, but unifying the two
 /// allocation APIs means the swapchain speaks `Dmabuf` — so this is the
 /// missing `ExportFramebuffer<Dmabuf>`: swapchain buffers are re-imported
-/// through GBM and attached with `ADDFB2`, and client buffers offered for
-/// direct scanout are accepted only when they already live on this GPU.
+/// through GBM and attached with `ADDFB2`, and client buffers are offered for
+/// direct scanout unless they are known to live on another GPU.
 #[derive(Debug)]
 pub struct DmabufExporter {
     gbm: GbmDevice<DrmDeviceFd>,
-    /// The render node clients allocate on. A dmabuf from any other device
-    /// cannot be scanned out here without a copy, so it is refused and takes
-    /// the composition path instead.
+    /// The render node clients allocate on. A dmabuf known to come from any
+    /// other device cannot be scanned out here without a copy, so it is
+    /// refused and takes the composition path instead.
     import_node: Option<DrmNode>,
+    /// `CROWN_DIRECT_SCANOUT=0` turns client scanout off, for drivers that
+    /// accept a buffer and then show garbage.
+    client_scanout: bool,
 }
 
 impl DmabufExporter {
     pub fn new(gbm: GbmDevice<DrmDeviceFd>, import_node: Option<DrmNode>) -> Self {
-        Self { gbm, import_node }
+        let client_scanout =
+            std::env::var_os("CROWN_DIRECT_SCANOUT").is_none_or(|value| value != "0");
+        Self {
+            gbm,
+            import_node,
+            client_scanout,
+        }
     }
+}
+
+/// Whether a client buffer from `buffer_node` may be tried on a plane of the
+/// GPU that renders on `import_node`.
+///
+/// Most clients never say which device they allocated on, so an unknown node
+/// is tried: `ADDFB2` and the atomic test commit reject what does not fit, and
+/// the rejection is remembered per element.
+fn accepts_client_node(buffer_node: Option<DrmNode>, import_node: Option<DrmNode>) -> bool {
+    buffer_node.is_none_or(|node| Some(node) == import_node)
 }
 
 impl ExportFramebuffer<Dmabuf> for DmabufExporter {
@@ -254,12 +273,9 @@ impl ExportFramebuffer<Dmabuf> for DmabufExporter {
     fn can_add_framebuffer(&self, buffer: &ExportBuffer<'_, Dmabuf>) -> bool {
         match buffer {
             ExportBuffer::Wayland(wl_buffer) => {
-                // Direct scanout of a client buffer: only when it is a dmabuf
-                // from the GPU this exporter scans out from.
-                smithay::wayland::dmabuf::get_dmabuf(wl_buffer)
-                    .ok()
-                    .and_then(|dmabuf| dmabuf.node())
-                    .is_some_and(|node| Some(node) == self.import_node)
+                self.client_scanout
+                    && smithay::wayland::dmabuf::get_dmabuf(wl_buffer)
+                        .is_ok_and(|dmabuf| accepts_client_node(dmabuf.node(), self.import_node))
             }
             // Swapchain buffers were allocated for exactly this.
             ExportBuffer::Allocator(_) => true,
@@ -294,6 +310,11 @@ mod tests {
     #[test]
     fn gles_satisfies_the_renderer_seam() {
         assert_renderable::<GlesRenderer>();
+    }
+
+    #[test]
+    fn client_buffers_from_an_unknown_device_are_tried() {
+        assert!(accepts_client_node(None, None));
     }
 
     #[test]

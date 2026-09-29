@@ -10,6 +10,7 @@ use config::Config;
 use crate::{
     input::capture::InputCaptureState,
     input::decoration::{FramePress, LastClick},
+    input::mouse::constraint::PointerLock,
     input::{
         shortcuts::{Bindings, GestureBindings, ModMask},
         trackpad::gestures::GestureState,
@@ -41,6 +42,8 @@ pub struct InputState {
     /// rather than per-output: the image cache is keyed on scale, so two
     /// monitors share every entry they have in common.
     pub cursor: Cursor,
+    /// The pointer constraint in force, if any.
+    pub pointer_lock: PointerLock,
 
     /// The window control the pointer is over, if any. Only the renderer reads
     /// it — a hovered control lifts rather than changing what a click does.
@@ -68,6 +71,7 @@ impl InputState {
             mod_chord_polluted: false,
             pointer_location: (0.0, 0.0).into(),
             cursor: Cursor::new(),
+            pointer_lock: PointerLock::default(),
             hovered_control: None,
             frame_press: None,
             last_frame_click: None,

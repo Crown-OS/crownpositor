@@ -1,15 +1,20 @@
+pub mod constraint;
+
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputTime,
         PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
-    input::pointer::{AxisFrame, ButtonEvent, MotionEvent},
+    input::pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
     wayland::{seat::WaylandFocus, shell::wlr_layer::KeyboardInteractivity},
 };
 
 use crate::{
-    handlers::seat::PointerFocusTarget, input::decoration, shell::monitor::Monitor, state::State,
+    handlers::seat::PointerFocusTarget,
+    input::{decoration, mouse::constraint::ConstrainedMotion},
+    shell::monitor::Monitor,
+    state::State,
     utils::id::WindowId,
 };
 
@@ -31,22 +36,51 @@ impl State {
 
         let location = event.position_transformed(geometry.size) + geometry.loc.to_f64();
 
-        self.motion(&pointer_serial_time::<I>(&event), location);
+        self.motion(&pointer_serial_time::<I>(&event), location, None);
     }
 
-    /// Relative motion, from libinput.
+    /// Relative motion, from libinput. Always forwarded as
+    /// `zwp_relative_pointer_v1` too, which is what mouse-look reads.
     pub(super) fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
-        let location = self.clamp_to_outputs(self.input.pointer_location + event.delta());
-        self.motion(&pointer_serial_time::<I>(&event), location);
+        let relative = RelativeMotionEvent {
+            delta: event.delta(),
+            delta_unaccel: event.delta_unaccel(),
+            time: event.time(),
+        };
+        let wanted = self.input.pointer_location + relative.delta;
+
+        match self.constrain_motion(wanted) {
+            ConstrainedMotion::Locked => self.locked_motion(&relative),
+            ConstrainedMotion::To(location) => {
+                let location = self.clamp_to_outputs(location);
+                self.motion(&pointer_serial_time::<I>(&event), location, Some(&relative));
+            }
+        }
     }
 
     /// Moves the pointer straight to `location`, as absolute motion would:
     /// injected absolute input and a released input capture arrive here.
     pub(crate) fn warp_pointer(&mut self, location: Point<f64, Logical>, time: InputTime) {
-        self.motion(&(SERIAL_COUNTER.next_serial(), time), location);
+        self.motion(&(SERIAL_COUNTER.next_serial(), time), location, None);
     }
 
-    fn motion(&mut self, (serial, time): &(Serial, InputTime), location: Point<f64, Logical>) {
+    /// A locked pointer does not move and draws nothing, so there is no
+    /// redraw: the client alone hears about it.
+    fn locked_motion(&mut self, relative: &RelativeMotionEvent) {
+        let Some(pointer) = self.wayland.seat.get_pointer() else {
+            return;
+        };
+        let under = self.shell.pointer_focus_under(self.input.pointer_location);
+        pointer.relative_motion(self, under, relative);
+        pointer.frame(self);
+    }
+
+    fn motion(
+        &mut self,
+        (serial, time): &(Serial, InputTime),
+        location: Point<f64, Logical>,
+        relative: Option<&RelativeMotionEvent>,
+    ) {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
@@ -79,14 +113,18 @@ impl State {
 
         pointer.motion(
             self,
-            under,
+            under.clone(),
             &MotionEvent {
                 location,
                 serial: *serial,
                 time: *time,
             },
         );
+        if let Some(relative) = relative {
+            pointer.relative_motion(self, under, relative);
+        }
         pointer.frame(self);
+        self.refresh_pointer_constraint();
 
         // The compositor draws the cursor, so a mouse move is damage like any
         // other. Both ends of the move: the output the pointer left still has
@@ -239,7 +277,7 @@ impl State {
     /// Only the *model* is moved here. `update_keyboard_focus` turns that into
     /// the seat's focus and `Shell::refresh` into the activation state, so a
     /// click and a keybinding cannot disagree about who is focused.
-    fn focus_under_pointer(&mut self) {
+    pub(in crate::input) fn focus_under_pointer(&mut self) {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
@@ -281,9 +319,10 @@ impl State {
                 }
             }
 
-            // Nothing under the pointer at all — no wallpaper, no window. There
-            // is nothing to move focus to, and nothing to take it from.
-            None => {}
+            // The lock surface already holds the keyboard; nothing to move.
+            // Nor with nothing under the pointer at all — no wallpaper, no
+            // window: there is nothing to move focus to, or take it from.
+            Some(PointerFocusTarget::LockScreen { .. }) | None => {}
         }
 
         self.update_keyboard_focus();

@@ -47,7 +47,12 @@ pub fn vrr_support(kms: &KmsState, output: &Output) -> VrrSupport {
         .values()
         .flat_map(|device| device.surfaces.values())
         .find(|surface| surface.output == *output)
-        .and_then(|surface| surface.compositor.vrr_supported(surface_connector(surface)?).ok())
+        .and_then(|surface| {
+            surface
+                .compositor
+                .vrr_supported(surface_connector(surface)?)
+                .ok()
+        })
         .unwrap_or(VrrSupport::NotSupported)
 }
 
@@ -79,6 +84,7 @@ pub fn set_mode(kms: &mut KmsState, output: &Output, mode: Mode) -> anyhow::Resu
     // Buffer ages are meaningless across a swapchain resize, so the next frame
     // has to be a full repaint.
     surface.compositor.reset_buffers();
+    surface.reset_tearing();
     surface.frame_clock = FrameClock::new(refresh_interval(mode), surface.compositor.vrr_enabled());
     surface.redraw_state = std::mem::take(&mut surface.redraw_state).queue();
 
@@ -94,37 +100,9 @@ pub fn vrr_enabled(kms: &KmsState, output: &Output) -> bool {
         .is_some_and(|surface| surface.compositor.vrr_enabled())
 }
 
-/// Turns adaptive sync on or off.
-pub fn set_vrr(kms: &mut KmsState, output: &Output, enabled: bool) -> anyhow::Result<()> {
-    let Some(surface) = surface_mut(kms, output) else {
-        anyhow::bail!("output {} has no surface to reconfigure", output.name());
-    };
-
-    if surface.compositor.vrr_enabled() == enabled {
-        return Ok(());
-    }
-
-    surface
-        .compositor
-        .use_vrr(enabled)
-        .with_context(|| format!("the driver refused adaptive sync on {}", output.name()))?;
-
-    // Driven from what the compositor *did*, not what was asked: the frame
-    // clock's presentation anchor was measured under the old pacing regime and
-    // resetting it against a request the driver ignored would mispredict every
-    // frame.
-    surface
-        .frame_clock
-        .set_vrr(surface.compositor.vrr_enabled());
-    surface.redraw_state = std::mem::take(&mut surface.redraw_state).queue();
-
-    Ok(())
-}
-
 fn refresh_interval(mode: Mode) -> Option<std::time::Duration> {
-    (mode.refresh > 0).then(|| {
-        std::time::Duration::from_nanos(1_000_000_000_000 / mode.refresh as u64)
-    })
+    (mode.refresh > 0)
+        .then(|| std::time::Duration::from_nanos(1_000_000_000_000 / mode.refresh as u64))
 }
 
 fn find_drm_mode(
@@ -254,7 +232,10 @@ fn identity_ramps(size: u32) -> GammaRamps {
 fn crtc_for<'a>(
     kms: &'a KmsState,
     output: &Output,
-) -> Option<(&'a DrmDevice, smithay::reexports::drm::control::crtc::Handle)> {
+) -> Option<(
+    &'a DrmDevice,
+    smithay::reexports::drm::control::crtc::Handle,
+)> {
     kms.devices.values().find_map(|device| {
         device
             .surfaces
@@ -300,5 +281,6 @@ pub fn set_output_power(kms: &mut KmsState, output: &Output, on: bool) -> bool {
         return false;
     }
     surface.powered = false;
+    surface.reset_tearing();
     true
 }

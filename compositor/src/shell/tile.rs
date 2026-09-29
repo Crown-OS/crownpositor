@@ -105,6 +105,7 @@ pub struct Tile {
     /// window maps so the render path never consults the config per frame. Zero
     /// turns decoration off entirely.
     titlebar_height: i32,
+    chrome: Chrome,
 
     anim: TileAnim,
     /// Whether the layout has positioned this window yet. The first placement
@@ -116,6 +117,15 @@ pub struct Tile {
     opacity: f32,
     min_size: Size<i32, Logical>,
     max_size: Size<i32, Logical>,
+}
+
+/// Who draws a window's frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chrome {
+    Compositor,
+    /// The client is a self-contained surface — an alert, a picker — and a
+    /// titlebar on it would be a second frame.
+    Client,
 }
 
 impl Tile {
@@ -152,6 +162,7 @@ impl Tile {
             decoration_commit: DecorationCommit::default(),
             title: String::new(),
             titlebar_height,
+            chrome: Chrome::Compositor,
             anim: TileAnim::new(Rectangle::default()),
             placed: false,
             rules,
@@ -193,6 +204,16 @@ impl Tile {
         &self.rules
     }
 
+    /// Takes the knobs a rule may change on a mapped window. Placement ones —
+    /// floating, workspace, output — stay as they were decided at map time.
+    pub fn apply_presentation_rules(&mut self, rules: &ResolvedRule, opacity: f32) {
+        self.rules.opacity = rules.opacity;
+        self.rules.corner_radius = rules.corner_radius;
+        self.rules.tearing = rules.tearing;
+        self.rules.vrr = rules.vrr;
+        self.set_opacity(opacity);
+    }
+
     /// The whole visible window, decoration included. What the layout assigns
     /// and what the renderer draws into.
     pub fn target(&self) -> Rectangle<i32, Logical> {
@@ -206,6 +227,7 @@ impl Tile {
     /// keeps whichever answer it will return to.
     pub fn is_decorated(&self) -> bool {
         self.titlebar_height > 0
+            && self.chrome == Chrome::Compositor
             && match self.state {
                 WindowState::Tiled | WindowState::Fullscreen => false,
                 WindowState::Floating | WindowState::Snapped(_) => true,
@@ -219,6 +241,10 @@ impl Tile {
         } else {
             Insets::NONE
         }
+    }
+
+    pub fn set_chrome(&mut self, chrome: Chrome) {
+        self.chrome = chrome;
     }
 
     pub fn set_titlebar_height(&mut self, height: i32) {

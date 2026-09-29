@@ -248,16 +248,6 @@ impl BackendState {
         }
     }
 
-    pub fn set_output_vrr(&mut self, output: &Output, enabled: bool) -> anyhow::Result<()> {
-        match self {
-            Self::Unset | Self::Winit(_) => {
-                anyhow::ensure!(!enabled, "this backend has no adaptive sync");
-                Ok(())
-            }
-            Self::Kms(kms) => reconfigure::set_vrr(kms, output, enabled),
-        }
-    }
-
     /// Only `backend/winit.rs` should call this. Everything else goes through the
     /// methods above, so a new backend does not ripple into unrelated code.
     pub(crate) fn winit(&mut self) -> Option<&mut WinitState> {

@@ -5,6 +5,7 @@ mod keyboard;
 pub mod libinput;
 pub mod mouse;
 pub mod shortcuts;
+mod tablet;
 pub mod trackpad;
 
 use smithay::backend::input::{InputBackend, InputEvent};
@@ -20,6 +21,12 @@ impl State {
             return;
         }
         match event {
+            // A locked session has no workspaces to swipe between and no
+            // overview to open: the lock screen is all there is.
+            InputEvent::GestureSwipeBegin { .. }
+            | InputEvent::GestureSwipeUpdate { .. }
+            | InputEvent::GestureSwipeEnd { .. }
+                if self.shell.session_lock.is_active() => {}
             // The overview owns the pointer while it is open. A scroll or a
             // pinch there is aimed at a thumbnail rather than at the window
             // inside it, and there is nothing a client could sensibly do with
@@ -54,7 +61,15 @@ impl State {
             // hand, so it takes the same route out.
             InputEvent::GestureHoldBegin { event, .. } => self.on_hold_begin::<I>(event),
             InputEvent::GestureHoldEnd { event, .. } => self.on_hold_end::<I>(event),
-            // TODO: touch, tablet and device hotplug.
+            InputEvent::DeviceAdded { device } => self.on_device_added::<I>(&device),
+            InputEvent::DeviceRemoved { device } => self.on_device_removed::<I>(&device),
+            InputEvent::TabletToolAxis { event, .. } => self.on_tablet_tool_axis::<I>(event),
+            InputEvent::TabletToolProximity { event, .. } => {
+                self.on_tablet_tool_proximity::<I>(event)
+            }
+            InputEvent::TabletToolTip { event, .. } => self.on_tablet_tool_tip::<I>(event),
+            InputEvent::TabletToolButton { event, .. } => self.on_tablet_tool_button::<I>(event),
+            // TODO: touch.
             _ => {}
         }
     }

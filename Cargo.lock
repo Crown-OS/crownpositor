@@ -299,6 +299,7 @@ dependencies = [
  "protocols",
  "regex",
  "serde",
+ "skrifa 0.40.0",
  "smithay",
  "smithay-drm-extras",
  "spacecontrol",

@@ -1,7 +1,10 @@
 use smithay::{
     desktop::{PopupKind, Window},
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+        wayland_protocols::xdg::{
+            decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+            shell::server::xdg_toplevel::ResizeEdge,
+        },
         wayland_server::protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
     },
     utils::{Logical, Serial, Size},
@@ -16,7 +19,7 @@ use smithay::{
 
 use crate::{
     layout::placement,
-    shell::tile::{Tile, WindowState},
+    shell::tile::{Chrome, Tile, WindowState},
     state::State,
     utils::id::WindowId,
 };
@@ -191,16 +194,34 @@ impl State {
     }
 
     /// Re-resolves window rules after `app_id` or `title` changed.
-    ///
-    /// Only the *presentation* knobs are re-applied. Re-running the float
-    /// decision would yank a window the user had placed by hand, so tiling state
-    /// is decided once, at map time, and left alone.
     fn refresh_rules(&mut self, surface: &ToplevelSurface) {
         let Some(id) = self.shell.window_id(surface.wl_surface()) else {
             return;
         };
+        if self.refresh_window_rules(id, surface.wl_surface()) {
+            self.queue_redraw();
+        }
+    }
 
-        let (app_id, title) = with_states(surface.wl_surface(), |states| {
+    /// Re-resolves every mapped window's rules, for an edited rule list.
+    pub fn reapply_window_rules(&mut self) {
+        let windows: Vec<_> = self
+            .shell
+            .tiles()
+            .map(|tile| (tile.id(), tile.surface().clone()))
+            .collect();
+        for (id, surface) in windows {
+            self.refresh_window_rules(id, &surface);
+        }
+    }
+
+    /// Only the *presentation* knobs are re-applied. Re-running the float
+    /// decision would yank a window the user had placed by hand, so tiling state
+    /// is decided once, at map time, and left alone.
+    ///
+    /// Returns whether the title changed, which the frame has to redraw for.
+    fn refresh_window_rules(&mut self, id: WindowId, surface: &WlSurface) -> bool {
+        let (app_id, title) = with_states(surface, |states| {
             let data = states
                 .data_map
                 .get::<XdgToplevelSurfaceData>()
@@ -215,14 +236,10 @@ impl State {
                 .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         let opacity = self.config.current.opacity_for(&rules);
 
-        // The frame draws the title, so a rename has to reach the screen.
-        let renamed = self.shell.tile_mut(id).is_some_and(|tile| {
-            tile.set_opacity(opacity);
+        self.shell.tile_mut(id).is_some_and(|tile| {
+            tile.apply_presentation_rules(&rules, opacity);
             tile.set_title(title.as_deref().unwrap_or_default())
-        });
-        if renamed {
-            self.queue_redraw();
-        }
+        })
     }
 
     /// Promotes a pending toplevel once its first buffer lands.
@@ -244,6 +261,9 @@ impl State {
             (data.app_id.clone(), data.title.clone(), data.parent.clone())
         });
 
+        // Not yet in the shell, so the commit handler skipped it: without this
+        // a client that sets no window geometry maps with a zero size.
+        unmapped.window.on_commit();
         let (min_size, max_size) = size_hints(surface);
         let location = self.shell.default_location()?;
         let area = self
@@ -272,6 +292,10 @@ impl State {
             self.config.current.appearance.titlebar_height.into(),
         );
         tile.set_size_hints(min_size, max_size);
+        let self_drawn = draws_own_chrome(&toplevel, min_size, max_size);
+        if self_drawn {
+            tile.set_chrome(Chrome::Client);
+        }
         tile.set_title(title.as_deref().unwrap_or_default());
 
         if tile.state().is_floating() {
@@ -279,7 +303,10 @@ impl State {
                 .as_ref()
                 .and_then(|parent| self.shell.window_id(parent))
                 .and_then(|parent| self.shell.tile(parent))
-                .map(Tile::target);
+                .map(Tile::target)
+                // An alert with nothing to sit over belongs in the middle of
+                // the screen, not at the head of the cascade.
+                .or(self_drawn.then_some(area));
             let cascade = self.shell.next_cascade();
             tile.set_floating_rect(placement::initial_rect(
                 unmapped.window.geometry().size,
@@ -339,6 +366,16 @@ fn auto_float(
     }
     // A max size small in both axes is a dialog by any other name.
     max.w > 0 && max.h > 0 && max.w * 2 < area.w && max.h * 2 < area.h
+}
+
+/// A window that cannot be resized and asked to decorate itself.
+fn draws_own_chrome(
+    toplevel: &ToplevelSurface,
+    min: Size<i32, Logical>,
+    max: Size<i32, Logical>,
+) -> bool {
+    let fixed = min != Size::default() && min == max;
+    fixed && toplevel.with_pending_state(|state| state.decoration_mode) == Some(Mode::ClientSide)
 }
 
 fn size_hints(surface: &WlSurface) -> (Size<i32, Logical>, Size<i32, Logical>) {

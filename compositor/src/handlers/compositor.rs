@@ -7,15 +7,15 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            CompositorClientState, CompositorHandler, CompositorState, get_parent,
-            is_sync_subsurface,
+            CompositorClientState, CompositorHandler, CompositorState, is_sync_subsurface,
         },
     },
 };
 
 use crate::{
-    handlers::{layer_shell, xdg_shell},
+    handlers::{drm_syncobj, layer_shell, xdg_shell},
     state::{ClientState, State},
+    utils::surface::root_surface,
 };
 
 impl CompositorHandler for State {
@@ -32,25 +32,22 @@ impl CompositorHandler for State {
 
     fn new_surface(&mut self, surface: &WlSurface) {
         layer_shell::shield_orphaned_layer_state(surface);
+        drm_syncobj::hold_commits_until_ready(surface);
     }
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
 
-        if !is_sync_subsurface(surface) {
-            let mut root = surface.clone();
-            while let Some(parent) = get_parent(&root) {
-                root = parent;
-            }
-            if let Some(window) = self.shell.window_for_surface(&root) {
-                window.on_commit();
-            }
+        if !is_sync_subsurface(surface)
+            && let Some(window) = self.shell.window_for_surface(&root_surface(surface))
+        {
+            window.on_commit();
         }
 
         xdg_shell::handle_commit(self, surface);
         self.handle_layer_commit(surface);
         self.shell.advertise_scale(surface);
-        self.queue_redraw();
+        self.queue_redraw_for_surface(surface);
     }
 
     fn destroyed(&mut self, _surface: &WlSurface) {}

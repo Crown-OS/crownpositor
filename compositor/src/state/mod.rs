@@ -4,13 +4,20 @@ mod client;
 mod common;
 mod config;
 mod display;
+mod idle;
 mod input;
-mod overview;
 pub mod outputs;
+mod overview;
+pub mod session_env;
 mod wayland;
 
 use calloop::EventLoop;
-use smithay::utils::{Logical, Point};
+use smithay::{
+    desktop::find_popup_root_surface,
+    input::pointer::CursorImageStatus,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    utils::{Logical, Point},
+};
 
 pub use crate::state::{
     backend::BackendState, client::ClientState, common::CommonState, config::ConfigState,
@@ -22,6 +29,7 @@ use crate::{
     backend::{capture::CaptureState, virtual_output::VirtualOutputs},
     rendering::decoration::TextRenderer,
     shell::Shell,
+    utils::surface::root_surface,
     xwayland::Xwayland,
 };
 
@@ -73,6 +81,28 @@ impl State {
             return;
         };
         self.backend.queue_redraw(Some(&output));
+    }
+
+    /// Schedules a frame on the output that shows `surface`, and nowhere else,
+    /// so a game on one monitor does not repaint the other at its frame rate.
+    /// A surface the shell cannot place repaints everything.
+    pub fn queue_redraw_for_surface(&mut self, surface: &WlSurface) {
+        let root = root_surface(surface);
+        if matches!(&self.input.cursor.status, CursorImageStatus::Surface(cursor) if *cursor == root)
+        {
+            self.queue_pointer_redraw();
+            return;
+        }
+        let root = self
+            .shell
+            .popups
+            .find_popup(&root)
+            .and_then(|popup| find_popup_root_surface(&popup).ok())
+            .unwrap_or(root);
+        match self.shell.output_showing(&root) {
+            Some(output) => self.backend.queue_redraw(Some(&output)),
+            None => self.queue_redraw(),
+        }
     }
 
     /// Schedules a frame wherever the cursor currently is.

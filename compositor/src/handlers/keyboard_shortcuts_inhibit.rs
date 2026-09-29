@@ -13,40 +13,44 @@ impl KeyboardShortcutsInhibitHandler for State {
     }
 
     fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
-        // TODO: only activate once the inhibiting surface holds keyboard focus.
-        self.wayland
-            .shortcuts_inhibiting_surfaces
-            .insert(inhibitor.wl_surface().clone());
-        inhibitor.activate();
+        self.wayland.shortcuts_inhibitors.push(inhibitor);
+        self.sync_shortcuts_inhibitors();
     }
 
     fn inhibitor_destroyed(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
         self.wayland
-            .shortcuts_inhibiting_surfaces
-            .remove(inhibitor.wl_surface());
+            .shortcuts_inhibitors
+            .retain(|held| held != &inhibitor);
     }
 }
 
 impl State {
     /// An inhibitor only applies while its own surface holds keyboard focus; a
     /// background client must not swallow the desktop's shortcuts for everyone.
-    pub fn shortcuts_inhibited(&self) -> bool {
-        if self.wayland.shortcuts_inhibiting_surfaces.is_empty() {
-            return false;
+    /// Follows the focus, so a game gets its shortcuts back when refocused.
+    pub fn sync_shortcuts_inhibitors(&mut self) {
+        let focus = self
+            .wayland
+            .seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus());
+        let focused = focus.as_ref().and_then(WaylandFocus::wl_surface);
+
+        for inhibitor in &self.wayland.shortcuts_inhibitors {
+            let wanted = focused.as_deref() == Some(inhibitor.wl_surface());
+            if wanted != inhibitor.is_active() {
+                match wanted {
+                    true => inhibitor.activate(),
+                    false => inhibitor.inactivate(),
+                }
+            }
         }
+    }
 
-        let Some(keyboard) = self.wayland.seat.get_keyboard() else {
-            return false;
-        };
-        let Some(focus) = keyboard.current_focus() else {
-            return false;
-        };
-        let Some(surface) = focus.wl_surface() else {
-            return false;
-        };
-
+    pub fn shortcuts_inhibited(&self) -> bool {
         self.wayland
-            .shortcuts_inhibiting_surfaces
-            .contains(surface.as_ref())
+            .shortcuts_inhibitors
+            .iter()
+            .any(KeyboardShortcutsInhibitor::is_active)
     }
 }

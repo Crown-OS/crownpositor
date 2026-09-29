@@ -26,12 +26,18 @@
 use std::time::Duration;
 
 use anyhow::Context as _;
+use config::Vrr;
+use protocols::tearing_control::wants_async_presentation;
 use smithay::{
     backend::drm::{
-        DrmDeviceFd, DrmEventMetadata, DrmEventTime, DrmNode,
+        DrmDeviceFd, DrmEventMetadata, DrmEventTime, DrmNode, VrrSupport,
         compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement},
     },
-    desktop::{layer_map_for_output, utils::OutputPresentationFeedback},
+    backend::renderer::{
+        ImportDma,
+        element::{Element, Id, RenderElement, UnderlyingStorage},
+    },
+    desktop::utils::OutputPresentationFeedback,
     output::{Output, PhysicalProperties},
     reexports::{
         calloop::{
@@ -48,7 +54,14 @@ use smithay::{
 use crate::{
     backend::{
         frame_clock::FrameClock,
-        kms::{KmsState, head::HeadState},
+        kms::{
+            KmsState,
+            feedback::SurfaceFeedback,
+            head::HeadState,
+            tearing::{BufferLayout, FlipOutcome, FrameShape, Tearing},
+            vrr::VrrGate,
+        },
+        present::{self, ReleasedClients},
         render::{CrownAllocator, DmabufExporter},
     },
     rendering::{
@@ -56,7 +69,7 @@ use crate::{
         blur::{BlurCache, BlurConfig, BlurSession},
         rounded::MultiDecorator,
     },
-    shell::{Shell, monitor::OutputDescriptor},
+    shell::{gaming, monitor::OutputDescriptor},
     state::State,
 };
 
@@ -131,12 +144,34 @@ pub struct Surface {
     pub redraw_state: RedrawState,
     /// Every backdrop's blur pyramid on this output, kept across frames.
     pub blur: BlurCache,
+    /// What clients shown here are told to allocate. `None` when the feedback
+    /// could not be built; they keep the global default then.
+    pub feedback: Option<SurfaceFeedback>,
+    /// A `wp_commit_timer_v1` commit is waiting for a later frame, so every
+    /// vblank has to render until it is due.
+    pub commit_timers_waiting: bool,
+    /// Async page flips for a game that asked to tear. `None` when the driver
+    /// cannot do them.
+    pub tearing: Option<Tearing>,
+    /// What the connector can do about adaptive sync, probed once.
+    pub vrr_support: VrrSupport,
+    pub vrr_gate: VrrGate,
     /// Whether the panel is powered.
     ///
     /// A blanked output keeps its `Output`, its workspaces and its windows —
     /// only scanout stops — which is what separates this from disabling the
     /// output altogether.
     pub powered: bool,
+}
+
+impl Surface {
+    /// The CRTC was reset or handed away, so nothing an async flip left on
+    /// it holds any more.
+    pub fn reset_tearing(&mut self) {
+        if let Some(tearing) = self.tearing.as_mut() {
+            tearing.reset();
+        }
+    }
 }
 
 /// Brings a head up on `crtc`, creating its surface and its `Output`.
@@ -184,6 +219,18 @@ pub fn enable_head(
         let gles: &mut smithay::backend::renderer::gles::GlesRenderer = renderer.as_mut();
         gles.egl_context().dmabuf_render_formats().clone()
     };
+
+    let compositing_node = kms.primary_render_node;
+    let sampled = kms
+        .gpu_manager
+        .single_renderer(&compositing_node)
+        .map(|renderer| renderer.dmabuf_formats())
+        .unwrap_or_default();
+    let rendered = kms
+        .gpu_manager
+        .single_renderer(&render_node)
+        .map(|renderer| renderer.dmabuf_formats())
+        .unwrap_or_default();
 
     let api = kms.api;
     let vulkan = kms.vulkan.as_ref();
@@ -256,7 +303,27 @@ pub fn enable_head(
     )
     .with_context(|| format!("failed to create the DRM compositor for {}", head.name))?;
 
-    tracing::info!(output = head.name, ?mode, %node, "monitor enabled");
+    let vrr_support = compositor
+        .vrr_supported(connector)
+        .unwrap_or(VrrSupport::NotSupported);
+    let tearing = Tearing::new(compositor.surface(), device.gbm.clone());
+    if tearing.is_none() {
+        tracing::info!(
+            output = head.name,
+            "no atomic async page flips; tearing is unavailable"
+        );
+    }
+    tracing::info!(output = head.name, ?mode, %node, ?vrr_support, "monitor enabled");
+
+    let feedback = SurfaceFeedback::new(
+        compositing_node,
+        sampled,
+        device.render_node,
+        rendered,
+        compositor.surface(),
+    )
+    .inspect_err(|err| tracing::warn!(%err, output = head.name, "no per-surface dmabuf feedback"))
+    .ok();
 
     device.surfaces.insert(
         crtc,
@@ -269,6 +336,11 @@ pub fn enable_head(
             // First frame right away.
             redraw_state: RedrawState::Queued,
             blur: BlurCache::default(),
+            feedback,
+            commit_timers_waiting: false,
+            tearing,
+            vrr_support,
+            vrr_gate: VrrGate::default(),
             powered: true,
         },
     );
@@ -388,12 +460,44 @@ pub fn redraw_queued_outputs(state: &mut State) {
         }) else {
             return;
         };
-        render_surface(state, node, crtc);
+        let released = signal_commit_timers(state, node, crtc);
+        state.clear_blockers(released);
+        let released = render_surface(state, node, crtc);
+        state.clear_blockers(released);
     }
 }
 
-/// One frame for one output.
-fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
+/// Lets through the timed commits due by the frame about to be rendered, so
+/// they make it into that frame.
+fn signal_commit_timers(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> ReleasedClients {
+    let mut released = ReleasedClients::default();
+    let State {
+        backend,
+        shell,
+        input,
+        ..
+    } = state;
+    let Some(surface) = backend
+        .kms()
+        .and_then(|kms| kms.devices.get_mut(&node))
+        .and_then(|device| device.surfaces.get_mut(&crtc))
+    else {
+        return released;
+    };
+    surface.commit_timers_waiting = present::signal_commit_timers(
+        shell,
+        &surface.output,
+        &input.cursor,
+        surface.frame_clock.next_presentation_time(),
+        &mut released,
+    );
+    released
+}
+
+/// One frame for one output. Returns the clients whose FIFO barriers it
+/// released.
+fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> ReleasedClients {
+    let mut released = ReleasedClients::default();
     let handle = state.common.event_loop_handle.clone();
 
     // The menu geometry is what both the renderer and the hit test read, so it
@@ -422,7 +526,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     } = state;
     let blur_config = BlurConfig::from(&config.current.appearance);
     let Some(kms) = backend.kms() else {
-        return;
+        return released;
     };
 
     // Field-split so the renderer (gpu_manager) and the surface (devices) can
@@ -434,17 +538,18 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         ..
     } = kms;
     let Some(device) = devices.get_mut(&node) else {
-        return;
+        return released;
     };
     let Some(surface) = device.surfaces.get_mut(&crtc) else {
-        return;
+        return released;
     };
 
     // A blanked panel has no CRTC to commit to. The request is dropped rather
     // than parked, because waking up queues its own redraw.
     if !surface.powered {
         surface.redraw_state = RedrawState::Idle;
-        return;
+        shell.session_lock.output_blanked(&surface.output);
+        return released;
     }
 
     // Consume the render request, keeping hold of a still-pending estimated
@@ -456,7 +561,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         other => {
             // Not queued; nothing asked for this frame.
             surface.redraw_state = other;
-            return;
+            return released;
         }
     };
 
@@ -465,7 +570,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         if let Some(token) = estimated_vblank {
             handle.remove(token);
         }
-        return;
+        return released;
     }
 
     // Animate to the instant this frame will *reach the screen*, not to
@@ -496,7 +601,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
                 target_presentation_time,
                 animating,
             );
-            return;
+            return released;
         }
     };
 
@@ -504,7 +609,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         if let Some(token) = estimated_vblank {
             handle.remove(token);
         }
-        return;
+        return released;
     };
     let scale = Scale::from(surface.output.current_scale().fractional_scale());
 
@@ -513,8 +618,17 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     let transform = surface.output.current_transform();
     let bounds: Rectangle<i32, Physical> =
         Rectangle::from_size(monitor.geometry().size.to_physical_precise_round(scale));
+    let scanout = gaming::scanout_tile(monitor);
+    let fullscreen = scanout.is_some();
+    let demand = shell.display_demand(monitor, &config.current.compositor.gaming, |tile| {
+        wants_async_presentation(tile.surface())
+    });
+    follow_vrr_demand(surface, monitor.config().vrr, demand.vrr);
+    let game = scanout
+        .filter(|_| demand.tearing)
+        .map(|tile| Id::from(tile.surface()));
     surface.blur.begin_frame();
-    let blur = blur_config.enabled.then_some(BlurSession {
+    let blur = (blur_config.enabled && !fullscreen).then_some(BlurSession {
         cache: &mut surface.blur,
         config: blur_config,
         transform,
@@ -540,13 +654,30 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     );
 
     let mut submitted = false;
-    match surface.compositor.render_frame(
-        &mut renderer,
-        &elements,
-        CLEAR_COLOR,
-        FrameFlags::DEFAULT,
-    ) {
+    // A fullscreen client's buffer may be in a format the swapchain is not;
+    // the plane only has to accept it.
+    let flags = match fullscreen {
+        true => FrameFlags::DEFAULT | FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY,
+        false => FrameFlags::DEFAULT,
+    };
+    match surface
+        .compositor
+        .render_frame(&mut renderer, &elements, CLEAR_COLOR, flags)
+    {
         Ok(result) => {
+            present::track_primary_scanout(shell, &surface.output, &input.cursor, &result.states);
+            if shell.session_lock.is_active() {
+                shell.session_lock.output_blanked(&surface.output);
+            }
+            if let Some(feedback) = &surface.feedback {
+                present::send_dmabuf_feedback(
+                    shell,
+                    &surface.output,
+                    &feedback.render,
+                    &feedback.scanout,
+                    &result.states,
+                );
+            }
             if result.needs_sync() {
                 // The swapchain buffer is still being written by the GPU;
                 // queueing it unfinished would tear.
@@ -558,14 +689,56 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
             }
 
             if !result.is_empty {
-                let feedback = take_presentation_feedbacks(shell, &surface.output);
-                match surface.compositor.queue_frame(feedback) {
-                    Ok(()) => {
+                let feedback =
+                    present::take_presentation_feedbacks(shell, &surface.output, &result.states);
+                let shape = FrameShape {
+                    game_on_primary: matches!(
+                        &result.primary_element,
+                        PrimaryPlaneElement::Element(element) if game.as_ref() == Some(element.id())
+                    ),
+                    other_planes_used: !result.overlay_elements.is_empty()
+                        || result.cursor_element.is_some(),
+                    commit_pending: surface.compositor.surface().commit_pending(),
+                };
+                let primary_buffer = match &result.primary_element {
+                    PrimaryPlaneElement::Element(element) => {
+                        match element.underlying_storage(&mut renderer) {
+                            Some(UnderlyingStorage::Wayland(buffer)) => Some(buffer.clone()),
+                            _ => None,
+                        }
+                    }
+                    PrimaryPlaneElement::Swapchain(_) => None,
+                };
+
+                let outcome = match (&game, surface.tearing.as_mut()) {
+                    (Some(_), Some(tearing)) => tearing.try_flip(
+                        surface.compositor.surface(),
+                        shape,
+                        primary_buffer.clone(),
+                        feedback,
+                    ),
+                    _ => FlipOutcome::Declined(feedback),
+                };
+                match outcome {
+                    FlipOutcome::Flipped => {
                         submitted = true;
                         capture.mark_output_damaged(&surface.output);
                     }
-                    Err(err) => {
-                        tracing::warn!(%err, "failed to queue frame");
+                    FlipOutcome::Declined(feedback) => {
+                        match surface.compositor.queue_frame(feedback) {
+                            Ok(()) => {
+                                submitted = true;
+                                capture.mark_output_damaged(&surface.output);
+                                if let Some(tearing) = surface.tearing.as_mut() {
+                                    let layout =
+                                        primary_buffer.as_deref().and_then(BufferLayout::of);
+                                    tearing.synced(shape, layout);
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(%err, "failed to queue frame");
+                            }
+                        }
                     }
                 }
             }
@@ -576,27 +749,9 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         }
     }
 
-    // Frame callbacks: what lets clients draw their *next* frame. Sent whether
-    // or not this frame had damage, so a client animation never stalls.
     let now = common.start_time.elapsed();
-    let throttle = Some(Duration::ZERO);
-    for tile in shell.visible_windows(monitor) {
-        tile.window()
-            .send_frame(&surface.output, now, throttle, |_, _| {
-                Some(surface.output.clone())
-            });
-    }
-    {
-        let map = layer_map_for_output(&surface.output);
-        for layer in map.layers() {
-            layer.send_frame(&surface.output, now, throttle, |_, _| {
-                Some(surface.output.clone())
-            });
-        }
-    }
-    // A client's cursor surface is in neither the shell model nor the layer
-    // map, so it needs its own callback or an animated cursor draws once.
-    input.cursor.send_frame(&surface.output, now, throttle);
+    present::send_frame_callbacks(shell, &surface.output, &input.cursor, now);
+    present::signal_fifo_barriers(shell, &surface.output, &input.cursor, &mut released);
 
     if submitted {
         // The real vblank takes over: it anchors the frame clock and decides
@@ -627,6 +782,43 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     // nothing else on screen changed, so no other source would schedule one.
     if surface.blur.wants_redraw() {
         surface.redraw_state = std::mem::take(&mut surface.redraw_state).queue();
+    }
+    released
+}
+
+/// Switches adaptive sync the way the content wants, within what the
+/// connector can do without a visible modeset.
+fn follow_vrr_demand(surface: &mut Surface, policy: Vrr, wanted: bool) {
+    let immediate = policy != Vrr::OnDemand;
+    let switchable = match surface.vrr_support {
+        VrrSupport::Supported => true,
+        VrrSupport::RequiresModeset => immediate,
+        VrrSupport::NotSupported => false,
+    };
+    let current = surface.compositor.vrr_enabled();
+    let now = surface.frame_clock.now();
+    let Some(target) = surface
+        .vrr_gate
+        .decide(wanted && switchable, current, immediate, now)
+    else {
+        return;
+    };
+
+    match surface.compositor.use_vrr(target) {
+        Ok(()) => {
+            surface
+                .frame_clock
+                .set_vrr(surface.compositor.vrr_enabled());
+            tracing::info!(
+                output = surface.output.name(),
+                enabled = target,
+                "adaptive sync switched"
+            );
+        }
+        Err(err) => {
+            tracing::warn!(%err, output = surface.output.name(), "the driver refused adaptive sync");
+            surface.vrr_support = VrrSupport::NotSupported;
+        }
     }
 }
 
@@ -698,7 +890,7 @@ fn on_estimated_vblank(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         }
     }
 
-    if shell.is_animating() {
+    if shell.is_animating() || surface.commit_timers_waiting || surface.vrr_gate.is_pending() {
         surface.redraw_state = RedrawState::Queued;
     }
 }
@@ -736,35 +928,50 @@ pub fn on_vblank(
         None => (Duration::ZERO, 0),
     };
 
-    match surface.compositor.frame_submitted() {
-        Ok(Some(mut feedback)) => {
-            let time = if presentation_time.is_zero() {
-                surface.frame_clock.now()
-            } else {
-                presentation_time
-            };
-            let refresh = surface
-                .frame_clock
-                .refresh_interval()
-                .map(Refresh::Fixed)
-                .unwrap_or(Refresh::Unknown);
-            let flags = wp_presentation_feedback::Kind::Vsync
-                | wp_presentation_feedback::Kind::HwCompletion
-                | wp_presentation_feedback::Kind::HwClock;
-            feedback.presented::<_, smithay::utils::Monotonic>(
-                time,
-                refresh,
-                sequence as u64,
-                flags,
-            );
-        }
-        Ok(None) => {}
-        Err(err) => {
-            tracing::warn!(%err, "failed to mark frame as submitted");
-        }
-    }
+    let time = if presentation_time.is_zero() {
+        surface.frame_clock.now()
+    } else {
+        presentation_time
+    };
 
-    surface.frame_clock.presented(presentation_time);
+    // An async flip is invisible to `DrmCompositor`, so its event must not be
+    // reported as the vsync frame it is waiting on. Nor does it anchor the
+    // frame clock: it did not land on a vblank.
+    if let Some(mut feedback) = surface.tearing.as_mut().and_then(Tearing::complete) {
+        feedback.presented::<_, smithay::utils::Monotonic>(
+            time,
+            Refresh::Unknown,
+            sequence as u64,
+            wp_presentation_feedback::Kind::HwCompletion,
+        );
+    } else {
+        match surface.compositor.frame_submitted() {
+            Ok(Some(mut feedback)) => {
+                let refresh = surface
+                    .frame_clock
+                    .refresh_interval()
+                    .map(Refresh::Fixed)
+                    .unwrap_or(Refresh::Unknown);
+                let flags = wp_presentation_feedback::Kind::Vsync
+                    | wp_presentation_feedback::Kind::HwCompletion
+                    | wp_presentation_feedback::Kind::HwClock;
+                feedback.presented::<_, smithay::utils::Monotonic>(
+                    time,
+                    refresh,
+                    sequence as u64,
+                    flags,
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(%err, "failed to mark frame as submitted");
+            }
+        }
+        if let Some(tearing) = surface.tearing.as_mut() {
+            tearing.vsync_presented();
+        }
+        surface.frame_clock.presented(presentation_time);
+    }
 
     let redraw_needed = match std::mem::take(&mut surface.redraw_state) {
         RedrawState::WaitingForVBlank { redraw_needed } => redraw_needed,
@@ -776,36 +983,13 @@ pub fn on_vblank(
         }
     };
 
-    if redraw_needed || shell.is_animating() {
+    if redraw_needed
+        || shell.is_animating()
+        || surface.commit_timers_waiting
+        || surface.vrr_gate.is_pending()
+    {
         surface.redraw_state = RedrawState::Queued;
     }
-}
-
-/// Collects every visible surface's presentation-feedback callback for this
-/// output, to be resolved when the frame's vblank arrives.
-fn take_presentation_feedbacks(shell: &Shell, output: &Output) -> OutputPresentationFeedback {
-    let mut feedback = OutputPresentationFeedback::new(output);
-
-    let flags = |_: &_, _: &_| {
-        wp_presentation_feedback::Kind::Vsync | wp_presentation_feedback::Kind::HwCompletion
-    };
-
-    if let Some(monitor) = shell.monitor(output) {
-        for tile in shell.visible_windows(monitor) {
-            tile.window().take_presentation_feedback(
-                &mut feedback,
-                |_, _| Some(output.clone()),
-                flags,
-            );
-        }
-    }
-
-    let map = layer_map_for_output(output);
-    for layer in map.layers() {
-        layer.take_presentation_feedback(&mut feedback, |_, _| Some(output.clone()), flags);
-    }
-
-    feedback
 }
 
 #[cfg(test)]

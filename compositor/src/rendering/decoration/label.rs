@@ -11,6 +11,8 @@
 
 use std::collections::HashMap;
 
+use std::sync::Arc;
+
 use cosmic_text::{
     Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight, fontdb,
 };
@@ -18,6 +20,13 @@ use smithay::{
     backend::renderer::element::memory::MemoryRenderBuffer,
     utils::{Buffer as BufferCoords, Size, Transform},
 };
+use tiny_skia::Pixmap;
+
+use super::glyphs;
+
+/// Family name the bundled Inter registers under.
+const INTER: &str = "Inter Variable";
+const INTER_FONT_DATA: &[u8] = include_bytes!("../../../resources/fonts/Inter.ttf");
 
 /// Nominal text size in logical pixels. Line height is the usual 1.25×.
 const FONT_SIZE: f32 = 13.0;
@@ -70,10 +79,15 @@ impl Default for TextRenderer {
 }
 
 impl TextRenderer {
-    /// Loads the system's fonts. Costs a fontconfig scan once, at startup.
+    /// Loads the bundled Inter and the system's fonts. Costs a fontconfig
+    /// scan once, at startup.
     pub fn new() -> Self {
+        let mut fonts = FontSystem::new();
+        fonts
+            .db_mut()
+            .load_font_source(fontdb::Source::Binary(Arc::new(INTER_FONT_DATA)));
         Self {
-            fonts: FontSystem::new(),
+            fonts,
             glyphs: SwashCache::new(),
             cache: HashMap::new(),
         }
@@ -118,11 +132,13 @@ impl TextRenderer {
         let metrics = Metrics::new(FONT_SIZE * scale, LINE_HEIGHT * scale);
 
         let mut buffer = Buffer::new(&mut self.fonts, metrics);
-        let attrs = Attrs::new().family(Family::SansSerif).weight(if key.bold {
-            Weight::SEMIBOLD
-        } else {
-            Weight::NORMAL
-        });
+        let attrs = Attrs::new()
+            .family(Family::Name(INTER))
+            .weight(if key.bold {
+                Weight::SEMIBOLD
+            } else {
+                Weight::NORMAL
+            });
 
         {
             let mut borrowed = buffer.borrow_with(&mut self.fonts);
@@ -139,42 +155,22 @@ impl TextRenderer {
             .max(1.0) as i32;
         let height = metrics.line_height.ceil().max(1.0) as i32;
 
-        // `Argb8888` little-endian is B, G, R, A in memory, which is the order
-        // the loop below writes.
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
-        let mut drew = false;
-
-        let [red, green, blue, alpha] = key.color;
-        buffer.draw(
+        let mut pixmap = Pixmap::new(width as u32, height as u32)?;
+        glyphs::paint(
+            &buffer,
             &mut self.fonts,
             &mut self.glyphs,
-            cosmic_text::Color::rgba(red, green, blue, alpha),
-            |x, y, w, h, color| {
-                let coverage = color.a() as u32;
-                if coverage == 0 {
-                    return;
-                }
-                for offset_y in 0..h as i32 {
-                    for offset_x in 0..w as i32 {
-                        let (px, py) = (x + offset_x, y + offset_y);
-                        if px < 0 || py < 0 || px >= width || py >= height {
-                            continue;
-                        }
-                        let index = ((py * width + px) * 4) as usize;
-                        // Premultiplied, which is what the renderer imports.
-                        let scale = |channel: u8| (channel as u32 * coverage / 255) as u8;
-                        pixels[index] = scale(color.b());
-                        pixels[index + 1] = scale(color.g());
-                        pixels[index + 2] = scale(color.r());
-                        pixels[index + 3] = coverage as u8;
-                        drew = true;
-                    }
-                }
-            },
+            &mut pixmap,
+            key.color,
         );
-
-        if !drew {
+        if pixmap.pixels().iter().all(|pixel| pixel.alpha() == 0) {
             return None;
+        }
+        // tiny-skia is premultiplied R, G, B, A; `Argb8888` little-endian is
+        // B, G, R, A in memory.
+        let mut pixels = pixmap.take();
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
         }
 
         let size = Size::from((width, height));

@@ -1,7 +1,8 @@
 use smithay::backend::renderer::{
     ImportAll, ImportMem,
     element::{
-        Wrap, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
+        Wrap, memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement,
+        surface::WaylandSurfaceRenderElement,
     },
 };
 
@@ -36,4 +37,7 @@ smithay::backend::renderer::element::render_elements! {
     /// thumbnail, a workspace preview, the wash over the wallpaper. Wrapped for
     /// the same reason the tile variant is.
     Overview = Wrap<OverviewElement<R, E>>,
+    /// A flat fill: what a locked output shows behind, or instead of, its
+    /// lock surface.
+    Solid = SolidColorRenderElement,
 }

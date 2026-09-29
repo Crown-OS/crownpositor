@@ -7,6 +7,7 @@
 //!
 //! [`Tile::is_decorated`]: crate::shell::tile::Tile::is_decorated
 
+mod glyphs;
 pub mod label;
 pub mod palette;
 pub mod shadow;

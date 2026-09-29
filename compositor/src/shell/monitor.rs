@@ -6,7 +6,7 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Size, Transform},
 };
 
-use config::{OutputSetting, OutputTransform};
+use config::{OutputSetting, OutputTransform, Vrr};
 
 use spacecontrol::animations::spring::SpringProfile;
 
@@ -78,6 +78,9 @@ pub struct OutputConfig {
     pub default_mode: Option<WorkspaceMode>,
     /// What the panel said about itself. See [`OutputDescriptor::edid`].
     pub edid: Option<EdidInfo>,
+    /// When the panel may run at a variable refresh rate. Unset in the config
+    /// means on demand.
+    pub vrr: Vrr,
 }
 
 /// Logical size after scale and transform. The one place this arithmetic
@@ -455,6 +458,7 @@ impl Monitor {
             changed = true;
         }
 
+        self.config.vrr = setting.and_then(|s| s.vrr).unwrap_or(Vrr::OnDemand);
         self.config.default_mode = setting.and_then(|s| s.layout);
         if let Some(mode) = self.config.default_mode {
             self.default_mode = mode;
@@ -692,6 +696,7 @@ mod tests {
                 refresh_interval: None,
                 default_mode: None,
                 edid: None,
+                vrr: Vrr::OnDemand,
             },
             workspaces: Vec::new(),
             active: 0,

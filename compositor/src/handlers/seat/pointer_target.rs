@@ -34,8 +34,6 @@ use crate::state::State;
 
 /// A surface under the pointer, together with the thing the compositor knows it
 /// by.
-// TODO: a `LockScreen` variant once `session_lock` tracks its surfaces, and an
-// `X11Surface` one once XWayland lands.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointerFocusTarget {
     /// Somewhere inside a toplevel's tree: the window's own surface, one of its
@@ -55,6 +53,9 @@ pub enum PointerFocusTarget {
     /// from one control to the next would otherwise change the target's
     /// identity, and the seat would read that as leaving one window for another.
     Decoration { window: Window },
+    /// A session-lock surface: the only thing the pointer reaches while the
+    /// session is locked.
+    LockScreen { surface: WlSurface },
 }
 
 impl PointerFocusTarget {
@@ -62,7 +63,9 @@ impl PointerFocusTarget {
     /// none: its pixels belong to the compositor.
     pub fn surface(&self) -> Option<&WlSurface> {
         match self {
-            Self::Window { surface, .. } | Self::LayerShell { surface, .. } => Some(surface),
+            Self::Window { surface, .. }
+            | Self::LayerShell { surface, .. }
+            | Self::LockScreen { surface } => Some(surface),
             Self::Decoration { .. } => None,
         }
     }
@@ -74,7 +77,7 @@ impl PointerFocusTarget {
     pub fn window(&self) -> Option<&Window> {
         match self {
             Self::Window { window, .. } | Self::Decoration { window } => Some(window),
-            Self::LayerShell { .. } => None,
+            Self::LayerShell { .. } | Self::LockScreen { .. } => None,
         }
     }
 
@@ -91,6 +94,7 @@ impl IsAlive for PointerFocusTarget {
             Self::Window { window, surface } => window.alive() && surface.alive(),
             Self::LayerShell { layer, surface } => layer.alive() && surface.alive(),
             Self::Decoration { window } => window.alive(),
+            Self::LockScreen { surface } => surface.alive(),
         }
     }
 }
@@ -101,9 +105,9 @@ impl WaylandFocus for PointerFocusTarget {
     /// `same_client_as` below is asking.
     fn wl_surface(&self) -> Option<Cow<'_, WlSurface>> {
         match self {
-            Self::Window { surface, .. } | Self::LayerShell { surface, .. } => {
-                Some(Cow::Borrowed(surface))
-            }
+            Self::Window { surface, .. }
+            | Self::LayerShell { surface, .. }
+            | Self::LockScreen { surface } => Some(Cow::Borrowed(surface)),
             Self::Decoration { window } => window.wl_surface(),
         }
     }

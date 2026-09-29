@@ -20,7 +20,11 @@ use smithay::{
 
 use protocols::crownos_virtual_output::{CloseReason, VirtualMode, VirtualOutput, full_name};
 
-use crate::{shell::monitor::OutputDescriptor, state::State};
+use crate::{
+    backend::present::{self, ReleasedClients},
+    shell::monitor::OutputDescriptor,
+    state::State,
+};
 
 struct VirtualHead {
     protocol: VirtualOutput,
@@ -34,6 +38,10 @@ pub struct VirtualOutputs {
 }
 
 impl VirtualOutputs {
+    pub fn contains(&self, output: &Output) -> bool {
+        self.heads.iter().any(|head| head.output == *output)
+    }
+
     fn position(&self, protocol: &VirtualOutput) -> Option<usize> {
         self.heads
             .iter()
@@ -224,4 +232,12 @@ pub fn end_frames(state: &mut State, outputs: &[Output]) {
             wp_presentation_feedback::Kind::empty(),
         );
     }
+
+    // Nothing tracks which output a virtual one's surfaces are shown on, so
+    // their FIFO barriers are released as "shown nowhere else".
+    let mut released = ReleasedClients::default();
+    for output in outputs {
+        present::signal_fifo_barriers(&state.shell, output, &state.input.cursor, &mut released);
+    }
+    state.clear_blockers(released);
 }

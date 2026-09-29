@@ -29,9 +29,8 @@ impl State {
         let code = event.key_code();
         let key_state = event.state();
 
-        // TODO: also bypass while the session is locked, once the shell tracks
-        // that — a lock screen must not be able to Super+Q out of itself.
-        let bypass = self.shortcuts_inhibited();
+        // A lock screen must not be able to Super+Q out of itself.
+        let bypass = self.shortcuts_inhibited() || self.shell.session_lock.is_active();
 
         let action = keyboard.input::<Action, _>(
             self,

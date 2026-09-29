@@ -7,14 +7,16 @@ use smithay::{
         renderer::{ImportDma, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
-    desktop::layer_map_for_output,
     output::{Mode, Output, PhysicalProperties, Subpixel},
     utils::{Physical, Rectangle, Scale, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
 };
 
 use crate::{
-    backend::render::CrownRenderer as _,
+    backend::{
+        present::{self, ReleasedClients},
+        render::CrownRenderer as _,
+    },
     rendering::{
         self, FrameStyle,
         blur::{BlurCache, BlurConfig, BlurSession},
@@ -118,8 +120,11 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
             }
             WinitEvent::Input(event) => state.process_input_event(event),
             WinitEvent::Redraw => {
-                if let Err(err) = render(state) {
-                    tracing::error!(?err, "Failed to render the winit output");
+                let released = signal_commit_timers(state);
+                state.clear_blockers(released);
+                match render(state) {
+                    Ok(released) => state.clear_blockers(released),
+                    Err(err) => tracing::error!(?err, "Failed to render the winit output"),
                 }
             }
             WinitEvent::CloseRequested => state.common.event_loop_signal.stop(),
@@ -169,13 +174,42 @@ fn init_dmabuf(
     }
 }
 
-fn render(state: &mut State) -> anyhow::Result<()> {
+/// Winit has no presentation clock, so "the frame about to be drawn" is now.
+/// A later timed commit still waiting keeps frames coming.
+fn signal_commit_timers(state: &mut State) -> ReleasedClients {
+    let mut released = ReleasedClients::default();
+    let State {
+        backend,
+        shell,
+        input,
+        wayland,
+        ..
+    } = state;
+    if let Some(winit) = backend.winit() {
+        let presentation_time = wayland.clock.now().into();
+        let waiting = present::signal_commit_timers(
+            shell,
+            &winit.output,
+            &input.cursor,
+            presentation_time,
+            &mut released,
+        );
+        if waiting {
+            winit.backend.window().request_redraw();
+        }
+    }
+    released
+}
+
+/// Draws the one window. Returns the clients whose FIFO barriers it released.
+fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
+    let mut released = ReleasedClients::default();
     let Some(scale) = state
         .backend
         .winit()
         .map(|winit| Scale::from(winit.output.current_scale().fractional_scale()))
     else {
-        return Ok(());
+        return Ok(released);
     };
 
     // The menu geometry is what both the renderer and the hit test read, so it
@@ -197,7 +231,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
     } = state;
 
     let Some(winit) = backend.winit() else {
-        return Ok(());
+        return Ok(released);
     };
 
     // A hardcoded age of 0 makes every frame a full repaint.
@@ -222,7 +256,7 @@ fn render(state: &mut State) -> anyhow::Result<()> {
             .map_err(|err| anyhow!("Failed to bind the winit framebuffer: {err}"))?;
 
         let Some(monitor) = shell.monitor(&winit.output) else {
-            return Ok(());
+            return Ok(released);
         };
 
         // Backdrops blur the framebuffer as they are drawn, so all the frame
@@ -261,6 +295,10 @@ fn render(state: &mut State) -> anyhow::Result<()> {
             .render_output(renderer, &mut framebuffer, age, &elements, CLEAR_COLOR)
             .with_context(|| "Failed to render the output")?;
 
+        present::track_primary_scanout(shell, &winit.output, &input.cursor, &result.states);
+        if shell.session_lock.is_active() {
+            shell.session_lock.output_blanked(&winit.output);
+        }
         let damage = result.damage.cloned();
         drop(elements);
         if damage.as_ref().is_some_and(|damage| !damage.is_empty()) {
@@ -299,27 +337,8 @@ fn render(state: &mut State) -> anyhow::Result<()> {
     }
 
     let now = common.start_time.elapsed();
-    let throttle = Some(Duration::ZERO);
-
-    if let Some(monitor) = shell.monitor(&winit.output) {
-        for tile in shell.visible_windows(monitor) {
-            tile.window()
-                .send_frame(&winit.output, now, throttle, |_, _| {
-                    Some(winit.output.clone())
-                });
-        }
-    }
-
-    // Without these a bar with a clock renders once and freezes.
-    {
-        let map = layer_map_for_output(&winit.output);
-        for layer in map.layers() {
-            layer.send_frame(&winit.output, now, throttle, |_, _| {
-                Some(winit.output.clone())
-            });
-        }
-    }
-    input.cursor.send_frame(&winit.output, now, throttle);
+    present::send_frame_callbacks(shell, &winit.output, &input.cursor, now);
+    present::signal_fifo_barriers(shell, &winit.output, &input.cursor, &mut released);
 
     // Winit only redraws on demand. Scheduling only while something is moving is
     // what takes an idle desktop from a permanent 60 Hz loop to ~0% CPU; a client
@@ -329,5 +348,5 @@ fn render(state: &mut State) -> anyhow::Result<()> {
         winit.backend.window().request_redraw();
     }
 
-    Ok(())
+    Ok(released)
 }

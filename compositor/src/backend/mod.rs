@@ -34,6 +34,7 @@ pub mod capture;
 pub mod debug_frames;
 pub mod frame_clock;
 pub mod kms;
+pub mod present;
 pub mod render;
 pub mod virtual_output;
 pub mod winit;

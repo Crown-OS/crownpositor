@@ -20,3 +20,4 @@ pub mod gamma_control;
 pub mod output_management;
 pub mod output_power;
 pub mod region;
+pub mod tearing_control;

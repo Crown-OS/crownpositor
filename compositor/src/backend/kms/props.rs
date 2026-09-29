@@ -9,7 +9,7 @@
 use std::ops::RangeInclusive;
 
 use smithay::reexports::drm::control::{
-    Device as ControlDevice, connector,
+    Device as ControlDevice, ResourceHandle, connector,
     property::{self, Value, ValueType},
 };
 
@@ -29,6 +29,19 @@ fn find(
     properties.iter().find_map(|(handle, raw)| {
         let info = device.get_property(*handle).ok()?;
         (info.name().to_str() == Ok(name)).then(|| (info.value_type(), *raw))
+    })
+}
+
+/// The handle of any DRM object's property, found by name.
+pub fn property_handle(
+    device: &impl ControlDevice,
+    object: impl ResourceHandle,
+    name: &str,
+) -> Option<property::Handle> {
+    let properties = device.get_properties(object).ok()?;
+    properties.iter().find_map(|(handle, _)| {
+        let info = device.get_property(*handle).ok()?;
+        (info.name().to_str() == Ok(name)).then_some(*handle)
     })
 }
 

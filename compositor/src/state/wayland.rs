@@ -13,16 +13,23 @@ use smithay::{
     },
     utils::{Clock, Monotonic},
     wayland::{
+        alpha_modifier::AlphaModifierState,
+        commit_timing::CommitTimingManagerState,
         compositor::CompositorState,
+        content_type::ContentTypeState,
         cursor_shape::CursorShapeManagerState,
         dmabuf::DmabufState,
+        drm_syncobj::DrmSyncobjState,
+        fifo::FifoManagerState,
         fractional_scale::FractionalScaleManagerState,
         idle_inhibit::IdleInhibitManagerState,
         idle_notify::IdleNotifierState,
-        keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
+        keyboard_shortcuts_inhibit::{KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor},
         output::OutputManagerState,
+        pointer_constraints::PointerConstraintsState,
         pointer_gestures::PointerGesturesState,
         presentation::PresentationState,
+        relative_pointer::RelativePointerManagerState,
         security_context::SecurityContextState,
         selection::{
             data_device::DataDeviceState,
@@ -33,7 +40,10 @@ use smithay::{
         session_lock::SessionLockManagerState,
         shell::{kde::decoration::KdeDecorationState, xdg::decoration::XdgDecorationState},
         shm::ShmState,
+        single_pixel_buffer::SinglePixelBufferState,
+        tablet_manager::TabletManagerState,
         viewporter::ViewporterState,
+        xdg_activation::XdgActivationState,
     },
 };
 
@@ -51,6 +61,7 @@ use protocols::{
     gamma_control::GammaControlState,
     output_management::OutputManagementState,
     output_power::OutputPowerState,
+    tearing_control::TearingControlState,
 };
 
 use crate::{state::State, utils::privilege::is_privileged};
@@ -69,6 +80,11 @@ pub struct WaylandState {
     // pub corner_radius_state: CornerRadiusState,
     pub data_device_state: DataDeviceState,
     pub dmabuf_state: DmabufState,
+    /// `wp_linux_drm_syncobj_manager_v1`, once the primary GPU is known to
+    /// support timeline eventfds.
+    pub drm_syncobj_state: Option<DrmSyncobjState>,
+    pub fifo_manager_state: FifoManagerState,
+    pub commit_timing_manager_state: CommitTimingManagerState,
     pub fractional_scale_state: FractionalScaleManagerState,
     pub keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     pub output_state: OutputManagerState,
@@ -82,6 +98,8 @@ pub struct WaylandState {
     /// `zwp_pointer_gestures_v1`. Held only to keep the global alive — the
     /// events themselves go out through the seat's pointer.
     pub pointer_gestures_state: PointerGesturesState,
+    pub pointer_constraints_state: PointerConstraintsState,
+    pub relative_pointer_state: RelativePointerManagerState,
     pub presentation_state: PresentationState,
     pub primary_selection_state: PrimarySelectionState,
     pub ext_data_control_state: ExtDataControlState,
@@ -107,12 +125,19 @@ pub struct WaylandState {
     pub idle_notifier_state: IdleNotifierState<State>,
     pub idle_inhibit_manager_state: IdleInhibitManagerState,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
-    /// Surfaces holding an active `zwp_keyboard_shortcuts_inhibitor`.
-    pub shortcuts_inhibiting_surfaces: HashSet<WlSurface>,
+    /// Every live `zwp_keyboard_shortcuts_inhibitor`, active only while its
+    /// surface holds the keyboard.
+    pub shortcuts_inhibitors: Vec<KeyboardShortcutsInhibitor>,
     pub shm_state: ShmState,
     pub cursor_shape_manager_state: CursorShapeManagerState,
     // pub wl_drm_state: Option<WlDrmState<Option<DrmNode>>>,
     pub viewporter_state: ViewporterState,
+    pub content_type_state: ContentTypeState,
+    pub single_pixel_buffer_state: SinglePixelBufferState,
+    pub alpha_modifier_state: AlphaModifierState,
+    pub xdg_activation_state: XdgActivationState,
+    pub tearing_control_state: TearingControlState,
+    pub tablet_manager_state: TabletManagerState,
     pub kde_decoration_state: KdeDecorationState,
     pub xdg_decoration_state: XdgDecorationState,
     // pub overlap_notify_state: OverlapNotifyState,
@@ -173,6 +198,9 @@ impl WaylandState {
             data_device_state: DataDeviceState::new::<State>(display),
             // TODO: `create_global` once the render node's formats are known.
             dmabuf_state: DmabufState::new(),
+            drm_syncobj_state: None,
+            fifo_manager_state: FifoManagerState::new::<State>(display),
+            commit_timing_manager_state: CommitTimingManagerState::new::<State>(display),
             fractional_scale_state: FractionalScaleManagerState::new::<State>(display),
             keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState::new::<State>(display),
             output_state: OutputManagerState::new_with_xdg_output::<State>(display),
@@ -180,6 +208,8 @@ impl WaylandState {
             output_management_state: OutputManagementState::new::<State, _>(display, is_privileged),
             output_power_state: OutputPowerState::new::<State, _>(display, is_privileged),
             pointer_gestures_state: PointerGesturesState::new::<State>(display),
+            pointer_constraints_state: PointerConstraintsState::new::<State>(display),
+            relative_pointer_state: RelativePointerManagerState::new::<State>(display),
             presentation_state: PresentationState::new::<State>(display, clock.id() as u32),
             ext_data_control_state: ExtDataControlState::new::<State, _>(
                 display,
@@ -205,10 +235,16 @@ impl WaylandState {
             idle_notifier_state: IdleNotifierState::new(display, loop_handle),
             idle_inhibit_manager_state: IdleInhibitManagerState::new::<State>(display),
             idle_inhibiting_surfaces: HashSet::new(),
-            shortcuts_inhibiting_surfaces: HashSet::new(),
+            shortcuts_inhibitors: Vec::new(),
             shm_state: ShmState::new::<State>(display, shm_formats),
             cursor_shape_manager_state: CursorShapeManagerState::new::<State>(display),
             viewporter_state: ViewporterState::new::<State>(display),
+            content_type_state: ContentTypeState::new::<State>(display),
+            single_pixel_buffer_state: SinglePixelBufferState::new::<State>(display),
+            alpha_modifier_state: AlphaModifierState::new::<State>(display),
+            xdg_activation_state: XdgActivationState::new::<State>(display),
+            tearing_control_state: TearingControlState::new::<State>(display),
+            tablet_manager_state: TabletManagerState::new::<State>(display),
             kde_decoration_state: KdeDecorationState::new::<State>(display, KdeDefaultMode::Server),
             xdg_decoration_state: XdgDecorationState::new::<State>(display),
             clock,

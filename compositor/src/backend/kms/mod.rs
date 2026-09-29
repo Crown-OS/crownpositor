@@ -13,10 +13,13 @@
 
 pub mod crtc_pool;
 pub mod device;
+pub mod feedback;
 pub mod head;
 pub mod props;
 pub mod reconfigure;
 pub mod surface;
+pub mod tearing;
+pub mod vrr;
 pub mod vulkan;
 
 use std::{
@@ -26,7 +29,6 @@ use std::{
 
 use anyhow::Context as _;
 use smithay::{
-    wayland::drm_lease::DrmLeaseState,
     backend::{
         allocator::gbm::GbmDevice,
         drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType},
@@ -41,15 +43,19 @@ use smithay::{
     reexports::{input::Libinput, rustix::fs::OFlags},
     utils::DeviceFd,
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
+    wayland::{
+        drm_lease::DrmLeaseState,
+        drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd},
+    },
 };
 
 pub use crate::backend::kms::surface::redraw_queued_outputs;
-use smithay::reexports::drm::control::{connector, crtc};
 pub use crate::backend::kms::{device::Device, vulkan::VulkanContext};
 use crate::{
     backend::render::{CrownRenderer, GraphicsApi, KmsGpuManager, KmsRenderer},
     state::{BackendState, State},
 };
+use smithay::reexports::drm::control::{connector, crtc};
 
 /// KMS-specific failures, typed so callers can tell "this GPU is unusable"
 /// (skip it) from "the seat is unusable" (abort the backend).
@@ -211,6 +217,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         }
     }
     init_dmabuf(state)?;
+    init_syncobj(state);
 
     let handle = state.common.event_loop_handle.clone();
     handle
@@ -239,6 +246,9 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                     kms.libinput.suspend();
                     for device in kms.devices.values_mut() {
                         device.drm.pause();
+                        for surface in device.surfaces.values_mut() {
+                            surface.reset_tearing();
+                        }
                         // A leased client must not keep driving hardware that
                         // now belongs to another VT.
                         if let Some(lease_state) = device.lease_state.as_mut() {
@@ -259,6 +269,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                             // The other VT scribbled over the planes; buffer
                             // ages are meaningless now, so force full redraws.
                             surface.compositor.reset_buffers();
+                            surface.reset_tearing();
                             // A panel blanked before the switch stays blanked,
                             // but its CRTC was reset, so the state has to be
                             // re-asserted rather than assumed.
@@ -515,7 +526,10 @@ fn offer_for_lease(
         return;
     };
 
-    tracing::info!(output = head.name, "connector is non-desktop, offering it for lease");
+    tracing::info!(
+        output = head.name,
+        "connector is non-desktop, offering it for lease"
+    );
     lease_state.add_connector::<State>(
         connector,
         head.name.clone(),
@@ -566,7 +580,10 @@ fn bring_up_head(state: &mut State, node: DrmNode, connector: connector::Handle)
         .cloned();
 
     if setting.as_ref().and_then(|setting| setting.enabled) == Some(false) {
-        tracing::info!(output = head.name, "monitor stays off; the config disables it");
+        tracing::info!(
+            output = head.name,
+            "monitor stays off; the config disables it"
+        );
         state.refresh_output_heads();
         return;
     }
@@ -657,6 +674,32 @@ fn device_removed(state: &mut State, node: DrmNode) {
     kms.gpu_manager.as_mut().remove_node(&device.render_node);
     handle.remove(device.drm_token);
     tracing::info!(%node, "GPU removed");
+}
+
+/// Advertises explicit sync when the primary GPU can wait on timeline points.
+/// Syncobjs are shareable across devices, so one global serves clients
+/// rendering on any GPU.
+fn init_syncobj(state: &mut State) {
+    let display = state.common.display_handle.clone();
+    let State {
+        backend, wayland, ..
+    } = state;
+    let Some(kms) = backend.kms() else {
+        return;
+    };
+    let Some(fd) = kms
+        .devices
+        .get(&kms.primary_node)
+        .map(|device| device.drm.device_fd().clone())
+    else {
+        return;
+    };
+    if !supports_syncobj_eventfd(&fd) {
+        tracing::info!("the primary GPU cannot wait on syncobj timelines; no explicit sync");
+        return;
+    }
+    wayland.drm_syncobj_state = Some(DrmSyncobjState::new::<State>(&display, fd));
+    tracing::info!("explicit sync enabled");
 }
 
 /// Advertises the primary GPU's formats to clients, preferring v4 feedback.
