@@ -213,6 +213,9 @@ pub struct Location {
 pub struct UnmappedWindow {
     pub window: Window,
     pub surface: WlSurface,
+    /// What the client asked to become before it mapped: SDL sets fullscreen
+    /// on an X11 window before mapping it.
+    pub requested_state: Option<WindowState>,
 }
 
 pub struct Shell {
@@ -794,7 +797,28 @@ impl Shell {
     }
 
     pub fn push_unmapped(&mut self, window: Window, surface: WlSurface) {
-        self.unmapped.push(UnmappedWindow { window, surface });
+        self.unmapped.push(UnmappedWindow {
+            window,
+            surface,
+            requested_state: None,
+        });
+    }
+
+    /// Returns whether `surface` was an unmapped window to record it on.
+    pub fn request_unmapped_state(
+        &mut self,
+        surface: &WlSurface,
+        state: Option<WindowState>,
+    ) -> bool {
+        let Some(entry) = self
+            .unmapped
+            .iter_mut()
+            .find(|entry| &entry.surface == surface)
+        else {
+            return false;
+        };
+        entry.requested_state = state;
+        true
     }
 
     pub fn take_unmapped(&mut self, surface: &WlSurface) -> Option<UnmappedWindow> {
@@ -956,7 +980,9 @@ impl Shell {
     ///
     /// Walks the scene in the order `rendering::output_elements` builds it —
     /// Overlay and Top layers, then the workspaces, then Bottom and Background
-    /// — so what answers a click is what is drawn under it. A miss at one level
+    /// — so what answers a click is what is drawn under it. A settled
+    /// fullscreen window hides the Overlay and Top layers, so they cannot take
+    /// the pointer from it either. A miss at one level
     /// falls through to the next rather than swallowing the event: a layer
     /// surface anchored across the whole output is usually transparent, and
     /// input-region-less, over most of it.
@@ -979,7 +1005,12 @@ impl Shell {
             ));
         }
 
-        layer_under(output, origin, local, &[Layer::Overlay, Layer::Top])
+        let panels: &[Layer] = if gaming::scanout_tile(monitor).is_some() {
+            &[]
+        } else {
+            &[Layer::Overlay, Layer::Top]
+        };
+        layer_under(output, origin, local, panels)
             .or_else(|| self.window_under_pointer(location))
             .or_else(|| layer_under(output, origin, local, &[Layer::Bottom, Layer::Background]))
     }

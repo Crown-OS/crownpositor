@@ -407,6 +407,7 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 [[package]]
 name = "crownos-config"
 version = "0.1.0"
+source = "git+https://github.com/crown-os/crownos-config#1aef41fdea624f1db75a4b1187bcff73c848d88d"
 dependencies = [
  "dirs",
  "notify",
@@ -417,6 +418,7 @@ dependencies = [
 [[package]]
 name = "crownos-protocols"
 version = "0.1.0"
+source = "git+https://github.com/crown-os/crownos-protocols#69e80faed815379a039aace8bc981bae6ef6d7ca"
 dependencies = [
  "bitflags",
  "wayland-backend",

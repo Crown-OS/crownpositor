@@ -180,6 +180,8 @@ impl State {
     /// sit waiting.
     fn request_state(&mut self, surface: &ToplevelSurface, state: Option<WindowState>) {
         let Some(id) = self.shell.window_id(surface.wl_surface()) else {
+            self.shell
+                .request_unmapped_state(surface.wl_surface(), state);
             surface.send_configure();
             return;
         };
@@ -317,9 +319,17 @@ impl State {
             ));
         }
 
-        if rules.fullscreen.unwrap_or(false) {
+        let requested = unmapped.requested_state;
+        let maximizable = tile.state().is_floating();
+        if rules
+            .fullscreen
+            .unwrap_or(requested == Some(WindowState::Fullscreen))
+        {
             tile.set_state(WindowState::Fullscreen);
-        } else if rules.maximized.unwrap_or(false) {
+        } else if rules
+            .maximized
+            .unwrap_or(maximizable && requested == Some(WindowState::Maximized))
+        {
             tile.set_state(WindowState::Maximized);
         }
 
