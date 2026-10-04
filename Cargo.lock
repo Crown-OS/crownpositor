@@ -295,6 +295,7 @@ dependencies = [
  "cosmic-text",
  "crownos-config",
  "crownos-protocols",
+ "getrandom 0.3.4",
  "parking_lot",
  "protocols",
  "regex",
@@ -418,7 +419,6 @@ dependencies = [
 [[package]]
 name = "crownos-protocols"
 version = "0.1.0"
-source = "git+https://github.com/crown-os/crownos-protocols#69e80faed815379a039aace8bc981bae6ef6d7ca"
 dependencies = [
  "bitflags",
  "wayland-backend",
@@ -772,6 +772,10 @@ dependencies = [
  "typenum",
  "version_check",
 ]
+
+[[package]]
+name = "geometry"
+version = "0.1.0"
 
 [[package]]
 name = "gethostname"
@@ -1227,6 +1231,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "motion"
+version = "0.1.0"
+dependencies = [
+ "geometry",
+]
+
+[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1603,6 +1614,7 @@ name = "protocols"
 version = "0.1.0"
 dependencies = [
  "crownos-protocols",
+ "motion",
  "smithay",
  "thiserror 2.0.20",
  "tracing",

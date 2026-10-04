@@ -181,6 +181,7 @@ pub fn begin_frames(state: &mut State) -> Vec<Output> {
     let now: Duration = state.wayland.clock.now().into();
     let dt = state.clock.tick_to(now);
     state.shell.advance_animations(dt);
+    state.shell.surface_animations.advance(now);
     if !state.shell.is_animating() {
         state.shell.settle_animations();
     }

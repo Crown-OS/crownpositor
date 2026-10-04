@@ -1,4 +1,5 @@
 pub mod constraint;
+mod scroll_pinch;
 
 use smithay::{
     backend::input::{
@@ -84,6 +85,8 @@ impl State {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
+
+        self.end_scroll_pinch(*time);
 
         let previous = self.input.pointer_location;
         self.input.pointer_location = location;
@@ -249,13 +252,15 @@ impl State {
             return;
         };
 
+        if self.scroll_as_pinch(axis_amount::<I>(&event, Axis::Vertical), event.time()) {
+            return;
+        }
+
         let source = event.source();
         let mut frame = AxisFrame::new(event.time()).source(source);
 
         for axis in [Axis::Horizontal, Axis::Vertical] {
-            let amount = event
-                .amount(axis)
-                .unwrap_or_else(|| event.amount_v120(axis).unwrap_or(0.0) * 15.0 / 120.0);
+            let amount = axis_amount::<I>(&event, axis);
 
             if amount != 0.0 {
                 frame = frame.value(axis, amount);
@@ -350,6 +355,13 @@ fn clamp_to_rectangle(
         location.x.clamp(min_x, max_x),
         location.y.clamp(min_y, max_y),
     ))
+}
+
+/// Logical pixels, with a wheel that reports only notches counted at 15 a notch.
+fn axis_amount<I: InputBackend>(event: &I::PointerAxisEvent, axis: Axis) -> f64 {
+    event
+        .amount(axis)
+        .unwrap_or_else(|| event.amount_v120(axis).unwrap_or(0.0) * 15.0 / 120.0)
 }
 
 #[cfg(test)]

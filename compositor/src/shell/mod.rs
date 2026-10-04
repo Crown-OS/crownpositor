@@ -13,6 +13,7 @@ pub mod session_lock;
 pub mod snap;
 pub mod tile;
 pub mod transaction;
+pub mod visibility;
 pub mod workspace;
 pub mod workspace_switch;
 
@@ -37,6 +38,7 @@ use smithay::{
 
 use config::{Config, ResolvedRule};
 
+use protocols::crownos_surface_animation::SurfaceAnimations;
 use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
@@ -260,6 +262,9 @@ pub struct Shell {
     /// `State` because hit-testing has to see it: an open menu is on top of
     /// every window, and a click has to reach it before anything else.
     pub menus: Menus,
+    /// `crownos_surface_animation_v1` springs. Here so `is_animating` keeps the
+    /// frame loop running while a client's subsurface is still moving.
+    pub surface_animations: SurfaceAnimations,
 }
 
 impl Shell {
@@ -289,6 +294,7 @@ impl Shell {
             snap_previews: SnapPreviews::default(),
             session_lock: SessionLock::default(),
             menus: Menus::default(),
+            surface_animations: SurfaceAnimations::default(),
         })
     }
 
@@ -1554,6 +1560,7 @@ impl Shell {
     /// frame to decide whether to schedule another.
     pub fn is_animating(&self) -> bool {
         self.snap_previews.is_animating()
+            || self.surface_animations.is_animating()
             || self.monitors.iter().any(|monitor| {
                 monitor.is_switching()
                     || monitor.spacecontrol().is_active()

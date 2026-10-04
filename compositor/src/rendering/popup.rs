@@ -6,7 +6,7 @@ use smithay::{
             surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
         },
     },
-    desktop::{PopupManager, Window},
+    desktop::{LayerSurface, PopupManager, Window},
     utils::{Physical, Point, Scale},
 };
 
@@ -39,6 +39,36 @@ where
                 location,
                 scale,
                 alpha,
+                Kind::Unspecified,
+            )
+        })
+        .collect()
+}
+
+/// A layer surface's popups, placed the way smithay's `LayerSurface` places
+/// them, for callers that draw the surface tree itself separately.
+pub fn layer_popup_elements<R>(
+    renderer: &mut R,
+    layer: &LayerSurface,
+    location: Point<i32, Physical>,
+    scale: Scale<f64>,
+) -> Vec<WaylandSurfaceRenderElement<R>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    PopupManager::popups_for_surface(layer.wl_surface())
+        .flat_map(|(popup, popup_offset)| {
+            let offset = (popup_offset - popup.geometry().loc)
+                .to_f64()
+                .to_physical(scale)
+                .to_i32_round();
+            render_elements_from_surface_tree(
+                renderer,
+                popup.wl_surface(),
+                location + offset,
+                scale,
+                1.0,
                 Kind::Unspecified,
             )
         })

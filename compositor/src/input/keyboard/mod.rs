@@ -112,6 +112,10 @@ impl State {
             },
         );
 
+        if key_state == KeyState::Released && !self.alt_held() {
+            self.end_scroll_pinch(time);
+        }
+
         // Dispatch after `keyboard.input` returns, not inside the filter:
         // `handle_action` calls back into this same `KeyboardHandle`.
         if !bypass {

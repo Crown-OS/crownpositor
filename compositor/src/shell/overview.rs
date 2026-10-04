@@ -231,6 +231,21 @@ impl SpaceControl {
         )
     }
 
+    /// The scale `window` of workspace `workspace` settles at while the
+    /// overview is open: its grid cell on the active workspace, its
+    /// workspace's preview in the bar otherwise.
+    pub fn thumbnail_scale(&self, workspace: usize, window: WindowId) -> Option<f64> {
+        let page = self.pages.get(workspace)?;
+        if workspace != self.active {
+            let preview = self.bar.get(workspace)?;
+            return Some(preview.thumb.size.w / f64::from(self.canvas.output.size.w.max(1)));
+        }
+        let slot = page.windows.iter().position(|id| *id == window)?;
+        let cell = page.grid.get(slot)?;
+        let desktop = page.desktop.get(slot)?;
+        Some(cell.size.w / f64::from(desktop.size.w.max(1)))
+    }
+
     /// The window a grid index refers to, on the workspace the pointer is
     /// working in.
     pub fn window(&self, index: usize) -> Option<WindowId> {
@@ -452,6 +467,29 @@ mod tests {
         space.windows_hover.resize(windows);
         space.workspaces_hover.resize(workspaces);
         space
+    }
+
+    #[test]
+    fn a_grid_window_reports_its_cell_against_its_desktop_size() {
+        let space = laid_out(2, 2);
+        let window = space.pages[0].windows[1];
+        assert_eq!(space.thumbnail_scale(0, window), Some(0.25));
+    }
+
+    #[test]
+    fn a_window_on_another_workspace_reports_its_preview_scale() {
+        let space = laid_out(2, 2);
+        let window = space.pages[1].windows[0];
+        let preview = space.bar()[1].thumb.size.w / 1920.0;
+        assert_eq!(space.thumbnail_scale(1, window), Some(preview));
+        assert!(preview < 0.25);
+    }
+
+    #[test]
+    fn an_unknown_window_has_no_thumbnail() {
+        let space = laid_out(2, 2);
+        assert_eq!(space.thumbnail_scale(0, WindowId::next()), None);
+        assert_eq!(space.thumbnail_scale(5, WindowId::next()), None);
     }
 
     #[test]

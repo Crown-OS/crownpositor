@@ -5,18 +5,15 @@
 //! no composition at all.
 
 use smithay::{
-    backend::renderer::{
-        ImportAll, ImportMem, Renderer,
-        element::{
-            Kind,
-            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
-        },
-    },
+    backend::renderer::{ImportAll, ImportMem, Renderer, element::Kind},
     utils::{Physical, Point, Scale},
 };
 
 use crate::{
-    rendering::{Elements, decorate::TileDecorator, element::CrownElement, popup},
+    rendering::{
+        Elements, decorate::TileDecorator, element::CrownElement, popup,
+        surface_tree::transformed_surface_elements,
+    },
     shell::tile::Tile,
 };
 
@@ -36,13 +33,16 @@ pub fn fullscreen_elements<R, D>(
             .into_iter()
             .map(CrownElement::Surface),
     );
-    let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
-        renderer,
-        tile.surface(),
-        origin,
-        scale,
-        1.0,
-        Kind::ScanoutCandidate,
+    elements.extend(
+        transformed_surface_elements(
+            renderer,
+            tile.surface(),
+            origin,
+            scale,
+            1.0,
+            Kind::ScanoutCandidate,
+        )
+        .into_iter()
+        .map(CrownElement::Transformed),
     );
-    elements.extend(surfaces.into_iter().map(CrownElement::Surface));
 }

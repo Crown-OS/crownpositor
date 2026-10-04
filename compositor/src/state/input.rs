@@ -58,6 +58,8 @@ pub struct InputState {
     pub capture: InputCaptureState,
     /// The injected touch point being emulated as the primary button.
     pub emulated_touch: Option<i32>,
+    /// The scale of the pinch Alt + scroll is emulating, while one is going.
+    pub scroll_pinch_scale: Option<f64>,
 }
 
 impl InputState {
@@ -77,6 +79,7 @@ impl InputState {
             last_frame_click: None,
             capture: InputCaptureState::default(),
             emulated_touch: None,
+            scroll_pinch_scale: None,
         }
     }
 }

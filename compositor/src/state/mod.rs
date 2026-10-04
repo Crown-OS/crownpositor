@@ -1,4 +1,5 @@
 mod actions;
+pub mod agent_access;
 mod backend;
 mod client;
 mod common;
@@ -9,6 +10,7 @@ mod input;
 pub mod outputs;
 mod overview;
 pub mod session_env;
+mod visibility;
 mod wayland;
 
 use calloop::EventLoop;

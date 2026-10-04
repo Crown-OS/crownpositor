@@ -20,14 +20,14 @@ pub mod lock;
 pub mod overview;
 pub mod popup;
 pub mod rounded;
+pub mod surface_tree;
 
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
         element::{
-            AsRenderElements, Kind, Wrap,
+            Kind, Wrap,
             memory::MemoryRenderBufferRenderElement,
-            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             utils::{CropRenderElement, RescaleRenderElement},
         },
         utils::CommitCounter,
@@ -361,7 +361,7 @@ fn tile_elements<R, D>(
         None => corner_radii(radius, inset > 0),
     };
 
-    let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+    let surfaces = surface_tree::transformed_surface_elements(
         renderer,
         tile.surface(),
         clip.loc,
@@ -370,7 +370,7 @@ fn tile_elements<R, D>(
         Kind::Unspecified,
     );
 
-    for surface in surfaces {
+    for scaled in surfaces {
         // A client's buffer is whatever size it last committed — during a shrink
         // still the *old* size — so without the clip it bleeds over its
         // neighbour. `from_element` returns `None` when the element falls
@@ -380,9 +380,8 @@ fn tile_elements<R, D>(
         //         continue;
         //     }
         // }
-        // Drawn at its own size here; the overview passes a smaller factor
-        // through the very same wrapper.
-        let scaled = RescaleRenderElement::from_element(surface, clip.loc, 1.0);
+        // Drawn at its own size here, unless a subsurface animates its own;
+        // the overview passes a smaller factor through the very same wrapper.
         let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip) else {
             continue;
         };
@@ -1078,16 +1077,25 @@ fn layer_elements<R, D>(
             let location: Point<i32, Physical> = geometry.loc.to_physical_precise_round(scale);
             let clip = Rectangle::new(location, geometry.size.to_physical_precise_round(scale));
             let radius = blur::surface_corner_radius(surface.wl_surface(), scale.x);
-            let layers: Vec<WaylandSurfaceRenderElement<R>> =
-                surface.render_elements(renderer, location, scale, 1.0);
+            let popups = popup::layer_popup_elements(renderer, surface, location, scale);
+            let tree = surface_tree::transformed_surface_elements(
+                renderer,
+                surface.wl_surface(),
+                location,
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
 
             match radius {
                 // A panel that asked to be rounded is clipped to its own
                 // radius, which costs it the decorator's wrapper per element.
                 Some(radius) => {
                     let size = (clip.size.w as f32, clip.size.h as f32);
-                    for layer in layers {
-                        let scaled = RescaleRenderElement::from_element(layer, clip.loc, 1.0);
+                    let popups = popups
+                        .into_iter()
+                        .map(|popup| RescaleRenderElement::from_element(popup, clip.loc, 1.0));
+                    for scaled in popups.chain(tree) {
                         let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip)
                         else {
                             continue;
@@ -1099,9 +1107,12 @@ fn layer_elements<R, D>(
                         }
                     }
                 }
-                // Nothing to round, so nothing to wrap: the surfaces go into
-                // the frame exactly as the client committed them.
-                None => elements.extend(layers.into_iter().map(CrownElement::Surface)),
+                // Nothing to round, so nothing to crop: the surfaces go into
+                // the frame as the client committed them, animations applied.
+                None => {
+                    elements.extend(popups.into_iter().map(CrownElement::Surface));
+                    elements.extend(tree.into_iter().map(CrownElement::Transformed));
+                }
             }
 
             // Panels and notifications are what actually wants glass, so layer

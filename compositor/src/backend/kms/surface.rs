@@ -579,6 +579,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
     let target_presentation_time = surface.frame_clock.next_presentation_time();
     let dt = clock.tick_to(target_presentation_time);
     shell.advance_animations(dt);
+    shell.surface_animations.advance(target_presentation_time);
     let animating = shell.is_animating();
     if !animating {
         shell.settle_animations();

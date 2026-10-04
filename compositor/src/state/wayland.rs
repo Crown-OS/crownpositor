@@ -51,12 +51,15 @@ use protocols::{
     appmenu::AppmenuState,
     background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
     color_management::ColorManagementState,
+    crownos_agent_access::AgentAccessState,
     crownos_background_effects::{
         BackgroundEffectsState as CrownosBackgroundEffectsState,
         Capability as CrownosEffectCapability,
     },
     crownos_input::InputState as CrownosInputState,
     crownos_screencast::ScreencastState,
+    crownos_surface_animation::SurfaceAnimationState,
+    crownos_surface_visibility::SurfaceVisibilityState,
     crownos_virtual_output::VirtualOutputState,
     gamma_control::GammaControlState,
     output_management::OutputManagementState,
@@ -64,9 +67,17 @@ use protocols::{
     tearing_control::TearingControlState,
 };
 
-use crate::{state::State, utils::privilege::is_privileged};
+use crate::{
+    state::{State, agent_access::AgentAccessPolicy},
+    utils::privilege::is_privileged,
+};
 
 pub struct WaylandState {
+    /// `crownos_agent_access_v1`. Privileged: a grant lets an app hand its
+    /// whole UI to an AI agent.
+    pub agent_access_state: AgentAccessState,
+    /// Who answers `crownos_agent_access_v1` requests.
+    pub agent_access_policy: AgentAccessPolicy,
     pub appmenu_state: AppmenuState,
     pub background_effect_state: BackgroundEffectState,
     /// `wp_color_management_v1`. Unprivileged: any client may describe its own
@@ -112,6 +123,12 @@ pub struct WaylandState {
     /// `crownos_input_v1`. Privileged: an injector types into any window and
     /// a capture sees every keystroke.
     pub crownos_input_state: CrownosInputState,
+    /// `crownos_surface_animation_v1`. Unprivileged: a client only animates
+    /// its own subsurfaces. The running springs live on the shell.
+    pub surface_animation_state: SurfaceAnimationState,
+    /// `crownos_surface_visibility_v1`. Unprivileged: a client only learns
+    /// about surfaces it owns.
+    pub surface_visibility_state: SurfaceVisibilityState,
     // pub cosmic_image_capture_source_state: CosmicImageCaptureSourceState,
     // pub output_capture_source_state: OutputCaptureSourceState,
     // pub toplevel_capture_source_state: ToplevelCaptureSourceState,
@@ -178,6 +195,8 @@ impl WaylandState {
         seat.add_pointer();
 
         Ok(Self {
+            agent_access_state: AgentAccessState::new::<State, _>(display, is_privileged),
+            agent_access_policy: AgentAccessPolicy::from_env(),
             // Everything the renderer can do, which the config then narrows
             // to what it will do — see
             // `State::sync_background_effect_capabilities`. A renderer whose
@@ -225,6 +244,8 @@ impl WaylandState {
             screencast_state: ScreencastState::new::<State, _>(display, is_privileged),
             virtual_output_state: VirtualOutputState::new::<State, _>(display, is_privileged),
             crownos_input_state: CrownosInputState::new::<State, _>(display, is_privileged),
+            surface_animation_state: SurfaceAnimationState::new::<State>(display),
+            surface_visibility_state: SurfaceVisibilityState::new::<State>(display),
             security_context_state: SecurityContextState::new::<State, _>(display, is_privileged),
             seat_state,
             seat,

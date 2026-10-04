@@ -8,7 +8,7 @@ use smithay::{
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    utils::{Physical, Rectangle, Scale, Transform},
+    utils::{Clock as MonotonicClock, Monotonic, Physical, Rectangle, Scale, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
 };
 
@@ -239,6 +239,9 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
 
     let dt = clock.tick();
     shell.advance_animations(dt);
+    shell
+        .surface_animations
+        .advance(MonotonicClock::<Monotonic>::new().now().into());
     let animating = shell.is_animating();
     if !animating {
         // Land the last frame on exact integers rather than resting a fraction

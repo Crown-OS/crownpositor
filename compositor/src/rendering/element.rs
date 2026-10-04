@@ -2,7 +2,7 @@ use smithay::backend::renderer::{
     ImportAll, ImportMem,
     element::{
         Wrap, memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement,
-        surface::WaylandSurfaceRenderElement,
+        surface::WaylandSurfaceRenderElement, utils::RescaleRenderElement,
     },
 };
 
@@ -40,4 +40,7 @@ smithay::backend::renderer::element::render_elements! {
     /// A flat fill: what a locked output shows behind, or instead of, its
     /// lock surface.
     Solid = SolidColorRenderElement,
+    /// A surface tree drawn whole with its `crownos_surface_animation_v1`
+    /// transforms applied: an undecorated panel or a fullscreen window.
+    Transformed = RescaleRenderElement<WaylandSurfaceRenderElement<R>>,
 }

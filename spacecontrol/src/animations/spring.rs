@@ -30,6 +30,9 @@ const MAX_DT: f32 = 1.0 / 30.0;
 /// Settle thresholds.
 const EPSILON_POS: f32 = 0.0005;
 const EPSILON_VEL: f32 = 0.01;
+/// f32 steps per unit of magnitude the settle threshold must cover: at large values (window
+/// sizes in the thousands) the integrator's last increments fall below one ULP and stall.
+const SETTLE_ULPS: f32 = 16.0;
 
 /// Named stiffness/damping pair. `damping ≈ 2 * sqrt(stiffness)` keeps the
 /// response critically damped — no overshoot, gentle ease-out.
@@ -147,13 +150,16 @@ impl Spring {
             self.position += self.velocity * h;
             remaining -= h;
         }
+        if self.at_rest() {
+            self.snap_to_target();
+        }
     }
 
     pub fn at_rest(&self) -> bool {
-        (self.position - self.target).abs() < EPSILON_POS && self.velocity.abs() < EPSILON_VEL
+        let position_tolerance = EPSILON_POS.max(self.target.abs() * f32::EPSILON * SETTLE_ULPS);
+        (self.position - self.target).abs() < position_tolerance && self.velocity.abs() < EPSILON_VEL
     }
 
-    #[allow(dead_code)]
     pub fn snap_to_target(&mut self) {
         self.position = self.target;
         self.velocity = 0.0;
@@ -442,5 +448,16 @@ mod tests {
         assert!(clock.tick() <= MAX_DT);
         clock.reset();
         assert_eq!(clock.tick(), 1.0 / 60.0);
+    }
+
+    #[test]
+    fn large_targets_settle_exactly_despite_f32_resolution() {
+        let mut spring = Spring::with_profile(800.0, SpringProfile::SNAPPY);
+        spring.set_target(1135.0);
+        for _ in 0..600 {
+            spring.step(1.0 / 144.0);
+        }
+        assert!(spring.at_rest());
+        assert_eq!(spring.position, 1135.0);
     }
 }

@@ -66,6 +66,8 @@ pub fn run() -> anyhow::Result<()> {
             // events that requested them has been fully drained.
             backend::kms::redraw_queued_outputs(state);
             backend::render_offscreen(state);
+            // After rendering, so springs that landed this frame are seen.
+            state.refresh_surface_visibility();
             let _ = state.common.display_handle.flush_clients();
         })
         .with_context(|| "The event loop stopped unexpectedly")
