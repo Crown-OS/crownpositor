@@ -1,7 +1,7 @@
 pub mod capture;
 pub mod decoration;
 pub mod injected;
-mod keyboard;
+pub mod keyboard;
 pub mod libinput;
 pub mod mouse;
 pub mod shortcuts;

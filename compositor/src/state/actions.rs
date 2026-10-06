@@ -80,6 +80,10 @@ impl State {
                     self.shell.switch_workspace(WorkspaceRef::Index(index));
                 }
             }
+            Action::Control(control) => {
+                self.common.controls.apply(control);
+                return;
+            }
             Action::RemoveWorkspace => {
                 if let Some((output, workspace)) = self
                     .shell

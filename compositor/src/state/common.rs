@@ -9,6 +9,7 @@ use smithay::{
 };
 
 use crate::{
+    controls::Controls,
     state::{State, client::ClientState},
     utils::runtime::TaskSender,
 };
@@ -22,6 +23,8 @@ pub struct CommonState {
     /// Spawns async work on the Tokio pool; completions come back through the
     /// event loop, so the rendering thread never blocks on them.
     pub tasks: TaskSender,
+    /// Volume, brightness and media keys, applied off the compositor thread.
+    pub controls: Controls,
 
     pub ready: Once,
 }
@@ -34,6 +37,7 @@ impl CommonState {
 
         let socket_name = Self::init_wayland_display(display, event_loop)?;
         let tasks = TaskSender::init(&event_loop.handle())?;
+        let controls = Controls::start(&tasks);
 
         Ok(Self {
             event_loop_signal: event_loop.get_signal(),
@@ -42,6 +46,7 @@ impl CommonState {
             socket_name,
             start_time: Instant::now(),
             tasks,
+            controls,
             ready: Once::new(),
         })
     }
