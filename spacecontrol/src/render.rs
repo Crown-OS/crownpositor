@@ -149,6 +149,8 @@ pub struct Thumb<'a> {
 
 /// One workspace's preview along the bottom.
 pub struct Preview<'a> {
+    /// Its place in the bar, which its identities are kept under.
+    pub index: usize,
     pub slot: Slot,
     /// The part of the output the workspace's windows live in — the usable
     /// area, with whatever panels reserved left out — which their positions
@@ -161,6 +163,16 @@ pub struct Preview<'a> {
     pub windows: &'a [(&'a Window, Rectangle<i32, Logical>)],
     pub active: bool,
     /// How far the pointer has lifted it, 0 to 1.
+    pub lift: f64,
+    /// How visible its '×' is, 0 to 1.
+    pub close: f64,
+}
+
+/// The '+' tile after the last preview.
+#[derive(Debug, Clone, Copy)]
+pub struct AddTile {
+    /// Its box in the bar, before the bar's climb.
+    pub thumb: Rectangle<f64, Logical>,
     pub lift: f64,
 }
 
@@ -192,6 +204,8 @@ struct SlotIds {
     glass: Id,
     shadow: Id,
     ring: Id,
+    /// The '×' disc on a preview, and the '+' tile's two bars.
+    accent: [Id; 3],
 }
 
 impl SlotIds {
@@ -200,6 +214,7 @@ impl SlotIds {
             glass: Id::new(),
             shadow: Id::new(),
             ring: Id::new(),
+            accent: [Id::new(), Id::new(), Id::new()],
         }
     }
 }
@@ -209,6 +224,9 @@ pub struct Chrome {
     dim: Id,
     backdrop: Id,
     slots: Vec<SlotIds>,
+    /// The '+' tile's own, so adding a workspace never hands a preview's
+    /// identities to the tile or the other way round.
+    add: SlotIds,
 }
 
 impl Default for Chrome {
@@ -223,6 +241,7 @@ impl Chrome {
             dim: Id::new(),
             backdrop: Id::new(),
             slots: Vec::new(),
+            add: SlotIds::new(),
         }
     }
 
@@ -251,6 +270,41 @@ impl Chrome {
     /// `None` before [`Chrome::ensure`] has been told the slot exists.
     fn slot(&self, index: usize) -> Option<&SlotIds> {
         self.slots.get(index)
+    }
+}
+
+/// The '+' on the new-workspace tile: two bars, crisp at any size.
+fn plus<R, E>(
+    out: &mut Vec<OverviewElement<R, E>>,
+    ids: &SlotIds,
+    tile: Rectangle<f64, Logical>,
+    alpha: f32,
+    scale: Scale<f64>,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    E: RenderElement<R>,
+{
+    const GLYPH: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
+    let arm = (tile.size.h * 0.32).min(tile.size.w * 0.32);
+    let stroke = (arm * 0.12).max(2.0);
+    let centre = (
+        tile.loc.x + tile.size.w / 2.0,
+        tile.loc.y + tile.size.h / 2.0,
+    );
+    let bars = [
+        Rectangle::new(
+            (centre.0 - arm / 2.0, centre.1 - stroke / 2.0).into(),
+            (arm, stroke).into(),
+        ),
+        Rectangle::new(
+            (centre.0 - stroke / 2.0, centre.1 - arm / 2.0).into(),
+            (stroke, arm).into(),
+        ),
+    ];
+    for (id, bar) in ids.accent[..2].iter().zip(bars) {
+        if let Some(element) = fill(id.clone(), bar, GLYPH, alpha, scale) {
+            out.push(OverviewElement::Fill(element));
+        }
     }
 }
 
@@ -369,6 +423,7 @@ pub fn elements<R, P>(
     canvas: Canvas,
     grid: &[Thumb<'_>],
     previews: &[Preview<'_>],
+    add: Option<AddTile>,
     carried: Option<Carried<'_>>,
     overview: &Overview,
     metrics: &Metrics,
@@ -384,17 +439,45 @@ pub fn elements<R, P>(
     let bar = overview.bar();
     let climb = scene::climb(canvas, metrics, bar);
 
-    for (index, preview) in previews.iter().enumerate() {
-        let Some(ids) = chrome.slot(index) else {
+    // First, because the list runs nearest the eye first: the carried window
+    // rides above the bar it is being dropped onto.
+    if let Some(carried) = carried {
+        window_at(
+            out,
+            renderer,
+            painter,
+            carried.window,
+            carried.rect,
+            None,
+            scale,
+            radius,
+            carried.alpha,
+        );
+    }
+
+    for preview in previews {
+        let Some(ids) = chrome.slot(preview.index) else {
             continue;
         };
-        let thumb = scene::lift(
-            Rectangle::new(
-                (preview.slot.thumb.loc.x, preview.slot.thumb.loc.y + climb).into(),
-                preview.slot.thumb.size,
-            ),
-            metrics.hover * preview.lift,
-        );
+        let thumb = scene::shown(preview.slot.thumb, climb, preview.lift, metrics);
+
+        if preview.close > 0.0 {
+            let button = scene::close_button(thumb);
+            painter.pane(
+                renderer,
+                Pane {
+                    glass: ids.accent[0].clone(),
+                    shadow: ids.accent[1].clone(),
+                    ring: ids.accent[2].clone(),
+                    rect: button,
+                    radius: (button.size.w * scale.x / 2.0) as f32,
+                    shrink: 1.0,
+                    alpha: (bar * preview.close) as f32,
+                    ring_colour: None,
+                },
+                &mut |element| out.push(OverviewElement::Window(Wrap::from(element))),
+            );
+        }
 
         let shrink = thumb.size.w / f64::from(preview.area.size.w.max(1));
         let card: Rectangle<i32, Physical> = Rectangle::new(
@@ -433,18 +516,24 @@ pub fn elements<R, P>(
         );
     }
 
-    // The carried window rides above the bar it is being dropped onto.
-    if let Some(carried) = carried {
-        window_at(
-            out,
+    // Behind the previews, so one lifted and dragged over it stays in front.
+    if let Some(add) = add {
+        let ids = &chrome.add;
+        let tile = scene::shown(add.thumb, climb, add.lift, metrics);
+        plus(out, ids, tile, bar as f32, scale);
+        painter.pane(
             renderer,
-            painter,
-            carried.window,
-            carried.rect,
-            None,
-            scale,
-            radius,
-            carried.alpha,
+            Pane {
+                glass: ids.glass.clone(),
+                shadow: ids.shadow.clone(),
+                ring: ids.ring.clone(),
+                rect: tile,
+                radius: radius * 0.5,
+                shrink: tile.size.w / canvas.usable.size.w.max(1) as f64,
+                alpha: bar as f32,
+                ring_colour: None,
+            },
+            &mut |element| out.push(OverviewElement::Window(Wrap::from(element))),
         );
     }
 

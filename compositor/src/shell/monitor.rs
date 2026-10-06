@@ -252,6 +252,23 @@ impl Monitor {
         self.workspaces.len() - 1
     }
 
+    /// Moves the workspace at `from` to `to`, shifting the ones between. The
+    /// workspace on screen stays on screen, whatever its number becomes.
+    pub fn move_workspace(&mut self, from: usize, to: usize) -> bool {
+        let last = self.workspaces.len().saturating_sub(1);
+        if from > last || from == to {
+            return false;
+        }
+        let active_id = self.workspaces[self.active].id();
+        let previous_id = self.workspaces[self.previous].id();
+        let workspace = self.workspaces.remove(from);
+        self.workspaces.insert(to.min(last), workspace);
+        self.active = self.index_of(active_id).unwrap_or(0);
+        self.previous = self.index_of(previous_id).unwrap_or(self.active);
+        self.switch.snap_to(self.active);
+        true
+    }
+
     pub(super) fn take_workspace(&mut self, id: WorkspaceId) -> Option<Workspace> {
         let index = self.index_of(id)?;
         let active_id = self.workspaces[self.active].id();
@@ -744,6 +761,22 @@ mod tests {
         assert!(monitor.take_workspace(first).is_some());
         assert_eq!(monitor.active().id(), active);
         assert_eq!(monitor.switch().position(), 1.0);
+    }
+
+    #[test]
+    fn moving_a_workspace_keeps_the_one_on_screen_on_screen() {
+        let mut monitor = monitor(4);
+        monitor.activate(1);
+        settle(&mut monitor);
+        let ids: Vec<_> = monitor.workspaces().iter().map(Workspace::id).collect();
+
+        assert!(monitor.move_workspace(0, 3));
+        let moved: Vec<_> = monitor.workspaces().iter().map(Workspace::id).collect();
+        assert_eq!(moved, [ids[1], ids[2], ids[3], ids[0]]);
+        assert_eq!(monitor.active().id(), ids[1]);
+        assert_eq!(monitor.switch().position(), 0.0);
+        assert!(!monitor.move_workspace(2, 2));
+        assert!(!monitor.move_workspace(9, 0));
     }
 
     /// The rules `Shell::assert_invariants` enforces, for one monitor.

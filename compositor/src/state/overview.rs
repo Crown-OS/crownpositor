@@ -126,12 +126,37 @@ impl State {
                 monitor.switch_to(WorkspaceRef::Index(index));
                 monitor.spacecontrol_mut().close();
             }
+            // A new workspace is added and shown in the bar, not switched to:
+            // the user is arranging, and usually has windows to drop on it.
+            Release::Click(Target::NewWorkspace) => {
+                monitor.add_workspace();
+                monitor.with_spacecontrol(|space, monitor| space.resolve(monitor));
+            }
+            Release::Click(Target::Close(index)) => {
+                if let Some(workspace) = monitor.workspaces().get(index).map(|it| it.id()) {
+                    self.shell.remove_workspace(id, workspace);
+                }
+                self.resolve_overview(id);
+            }
             Release::Dropped { window, workspace } => {
                 self.drop_window(id, window, workspace);
             }
-            // The carried window simply stops being carried, and the grid it
-            // came from is still where it belongs.
-            Release::Returned { .. } | Release::None => {}
+            Release::DroppedOnNew { window } => {
+                let workspace = monitor.add_workspace();
+                self.drop_window(id, window, workspace);
+            }
+            Release::Returned {
+                window,
+                from,
+                velocity,
+            } => monitor
+                .spacecontrol_mut()
+                .return_window(window, from, velocity),
+            Release::Reordered { from, to, .. } => {
+                monitor.move_workspace(from, to);
+                monitor.with_spacecontrol(|space, monitor| space.resolve(monitor));
+            }
+            Release::None => {}
         }
 
         self.shell.refresh();
@@ -158,6 +183,16 @@ impl State {
         else {
             return;
         };
+        let location = Location {
+            output,
+            workspace: target,
+        };
+        // Dropped back where it lives: nothing moves in the model, and the
+        // relayout glides it home from where the hand let go.
+        if self.shell.location(window) == Some(location) {
+            self.resolve_overview(output);
+            return;
+        }
 
         self.shell.move_tile(
             window,
@@ -169,6 +204,11 @@ impl State {
 
         // The active workspace just lost a window, so the grid it was laid out
         // from no longer describes it.
+        self.resolve_overview(output);
+    }
+
+    /// Lays the overview out again after the model changed under it.
+    fn resolve_overview(&mut self, output: OutputId) {
         if let Some(monitor) = self.shell.monitor_by_id_mut(output) {
             monitor.with_spacecontrol(|space, monitor| space.resolve(monitor));
         }

@@ -30,7 +30,9 @@ use smithay::{
 };
 
 use spacecontrol::{
-    render::{self, Behind, Carried, OverviewElement, Painter, Pane, Preview, Scaled, Thumb},
+    render::{
+        self, AddTile, Behind, Carried, OverviewElement, Painter, Pane, Preview, Scaled, Thumb,
+    },
     scene,
 };
 
@@ -39,7 +41,7 @@ use crate::{
         Elements, FrameStyle, backdrop_elements,
         blur::{self, GlassKind, ShadowPiece},
         decorate::{Backdrop, Shadow, TileDecorator},
-        decoration::window::Border,
+        decoration::{label::Label, window::Border},
         element::CrownElement,
         logical,
     },
@@ -136,7 +138,6 @@ pub fn overview_elements<R, D>(
             continue;
         };
         let offset = Point::from((offset * monitor.page_stride(), 0.0));
-        let rects = space.page_grid(index);
         let active = index == monitor.active_index();
 
         // Stacking order, topmost first: the overview has to stack the way the
@@ -145,7 +146,7 @@ pub fn overview_elements<R, D>(
             let Some(slot) = workspace.tiles().iter().position(|it| it.id() == tile.id()) else {
                 continue;
             };
-            let Some(target) = rects.get(slot) else {
+            let Some(target) = space.grid_rect(index, slot) else {
                 continue;
             };
 
@@ -161,7 +162,7 @@ pub fn overview_elements<R, D>(
             grid.push(Thumb {
                 window: tile.window(),
                 live: offset_rect(tile.render_rect(), offset),
-                grid: offset_rect(*target, offset),
+                grid: offset_rect(target, offset),
                 alpha: tile.render_alpha(),
                 lift: space.window_lift(index, slot),
             });
@@ -182,21 +183,34 @@ pub fn overview_elements<R, D>(
         })
         .collect();
 
-    let previews: Vec<Preview<'_>> = monitor
-        .workspaces()
+    // Nearest the eye first: a preview being dragged rides above the rest.
+    let lifted = space.lifted_preview();
+    let mut previews: Vec<Preview<'_>> = windows
         .iter()
-        .zip(space.bar())
-        .zip(&windows)
         .enumerate()
-        .map(|(index, ((_, slot), windows))| Preview {
-            slot: *slot,
-            area: monitor.usable(),
-            inset: f64::from(monitor.gaps().outer),
-            windows,
-            active: index == nearest,
-            lift: space.workspace_lift(index),
+        .filter_map(|(index, windows)| {
+            Some(Preview {
+                index,
+                slot: space.preview_slot(index)?,
+                area: monitor.usable(),
+                inset: f64::from(monitor.gaps().outer),
+                windows,
+                active: index == nearest,
+                lift: space.workspace_lift(index),
+                close: space.close_visibility(index),
+            })
         })
         .collect();
+    if let Some(lifted) = lifted
+        && let Some(at) = previews.iter().position(|preview| preview.index == lifted)
+    {
+        let preview = previews.remove(at);
+        previews.insert(0, preview);
+    }
+    let add = space.add_tile().map(|thumb| AddTile {
+        thumb,
+        lift: space.add_lift(),
+    });
 
     let mut overview: Vec<OverviewElement<R, D::Element>> = Vec::new();
     let mut painter = Decorated {
@@ -213,6 +227,7 @@ pub fn overview_elements<R, D>(
         space.canvas(),
         &grid,
         &previews,
+        add,
         carried,
         space.overview(),
         space.metrics(),
@@ -461,7 +476,7 @@ pub fn background_elements<R, D>(
     }
 }
 
-/// The workspaces' names, under their previews.
+/// The workspaces' names, under their previews wherever those are drawn.
 pub fn label_elements<R, D>(
     elements: &mut Elements<R, D>,
     monitor: &Monitor,
@@ -482,32 +497,99 @@ pub fn label_elements<R, D>(
     let climb = scene::climb(space.canvas(), space.metrics(), reveal);
     let colour = [1.0, 1.0, 1.0, 1.0];
 
-    for (index, slot) in space.bar().iter().enumerate() {
+    for index in 0..space.bar().len() {
+        let Some(slot) = space.preview_slot(index) else {
+            continue;
+        };
         let name = (index + 1).to_string();
         let Some(label) = style.text.label(&name, scale.x, colour, true) else {
             continue;
         };
-        let size = logical(label.size);
-
-        // Centred in the space the slot reserved for it, which travels with the
-        // preview while the bar is still climbing.
-        let centre = Point::<i32, Physical>::from((
-            ((slot.label.loc.x + (slot.label.size.w - f64::from(size.w)) / 2.0) * scale.x).round()
-                as i32,
-            ((slot.label.loc.y + climb + (slot.label.size.h - f64::from(size.h)) / 2.0) * scale.y)
-                .round() as i32,
+        let centre = Point::<f64, Logical>::from((
+            slot.label.loc.x + slot.label.size.w / 2.0,
+            slot.label.loc.y + climb + slot.label.size.h / 2.0,
         ));
-
-        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
-            renderer,
-            centre.to_f64(),
-            &label.buffer,
-            Some(reveal as f32),
-            Some(Rectangle::from_size(size.to_f64())),
-            Some(size),
-            Kind::Unspecified,
-        ) {
+        if let Some(element) = centred_label(renderer, label, centre, scale, reveal as f32) {
             elements.push(CrownElement::Memory(element));
         }
     }
+}
+
+/// The '×' on each preview showing one, in front of its disc — so pushed
+/// before the overview's own elements.
+pub fn close_glyph_elements<R, D>(
+    elements: &mut Elements<R, D>,
+    monitor: &Monitor,
+    renderer: &mut R,
+    scale: Scale<f64>,
+    style: &mut FrameStyle<'_>,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+    D: TileDecorator<R>,
+{
+    let space = monitor.spacecontrol();
+    let reveal = space.overview().bar();
+    if reveal <= 0.0 {
+        return;
+    }
+    let climb = scene::climb(space.canvas(), space.metrics(), reveal);
+
+    for index in 0..space.bar().len() {
+        let close = space.close_visibility(index);
+        if close <= 0.0 {
+            continue;
+        }
+        let Some(slot) = space.preview_slot(index) else {
+            continue;
+        };
+        let thumb = scene::shown(
+            slot.thumb,
+            climb,
+            space.workspace_lift(index),
+            space.metrics(),
+        );
+        let button = scene::close_button(thumb);
+        let Some(glyph) = style.text.label("×", scale.x, [1.0, 1.0, 1.0, 1.0], true) else {
+            continue;
+        };
+        let centre = Point::<f64, Logical>::from((
+            button.loc.x + button.size.w / 2.0,
+            button.loc.y + button.size.h / 2.0,
+        ));
+        if let Some(element) =
+            centred_label(renderer, glyph, centre, scale, (reveal * close) as f32)
+        {
+            elements.push(CrownElement::Memory(element));
+        }
+    }
+}
+
+/// A rasterised label centred on `centre`, which is logical and output-local.
+fn centred_label<R>(
+    renderer: &mut R,
+    label: &Label,
+    centre: Point<f64, Logical>,
+    scale: Scale<f64>,
+    alpha: f32,
+) -> Option<MemoryRenderBufferRenderElement<R>>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    let size = logical(label.size);
+    let origin = Point::<i32, Physical>::from((
+        ((centre.x - f64::from(size.w) / 2.0) * scale.x).round() as i32,
+        ((centre.y - f64::from(size.h) / 2.0) * scale.y).round() as i32,
+    ));
+    MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        origin.to_f64(),
+        &label.buffer,
+        Some(alpha),
+        Some(Rectangle::from_size(size.to_f64())),
+        Some(size),
+        Kind::Unspecified,
+    )
+    .ok()
 }
