@@ -137,6 +137,13 @@ where
         Glass::default()
     }
 
+    /// How strongly to blur glass shown at `shrink` of its size, so a
+    /// thumbnail's glass is the desktop's blurred that much less.
+    fn blur_strength_for(&self, shrink: f64) -> f32 {
+        let _ = shrink;
+        1.0
+    }
+
     /// Identifies the settings this decorator would draw backdrops with,
     /// changing whenever one of them does.
     ///

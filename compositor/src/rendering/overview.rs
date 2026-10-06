@@ -284,6 +284,7 @@ fn window_backdrop<R, D>(
         behind.radius,
         behind.alpha,
         GlassKind::Window,
+        decorator.blur_strength_for(shrink.x.min(shrink.y) / scale.x),
     );
 }
 
@@ -371,7 +372,7 @@ fn preview_pane<R, D>(
             radius,
             glass: decorator.glass(scale.x * pane.shrink, GlassKind::Window),
             alpha: pane.alpha,
-            strength: 1.0,
+            strength: decorator.blur_strength_for(pane.shrink),
         },
     ) {
         out(glass);

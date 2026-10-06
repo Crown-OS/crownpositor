@@ -418,6 +418,7 @@ fn tile_elements<R, D>(
             client_radius.unwrap_or(radius),
             alpha,
             GlassKind::Window,
+            1.0,
         );
     }
 
@@ -954,6 +955,7 @@ pub(crate) fn backdrop_elements<R, D>(
     radius: f32,
     alpha: f32,
     kind: GlassKind,
+    strength: f32,
 ) where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Clone + 'static,
@@ -976,6 +978,7 @@ pub(crate) fn backdrop_elements<R, D>(
             fingerprint,
             effects,
             alpha,
+            strength,
         );
         return;
     }
@@ -997,7 +1000,7 @@ pub(crate) fn backdrop_elements<R, D>(
                 radius,
                 glass,
                 alpha,
-                strength: 1.0,
+                strength,
             },
         ) {
             out(backdrop);
@@ -1019,6 +1022,7 @@ fn surface_effect_elements<R, D>(
     fingerprint: u64,
     effects: blur::SurfaceEffects,
     alpha: f32,
+    strength: f32,
 ) where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Clone + 'static,
@@ -1061,7 +1065,7 @@ fn surface_effect_elements<R, D>(
                 radius: piece.radius,
                 glass: effects.glass,
                 alpha,
-                strength: effects.strength,
+                strength: effects.strength * strength,
             },
         ) {
             out(backdrop);
@@ -1142,6 +1146,7 @@ fn layer_elements<R, D>(
                 radius.unwrap_or(0.0),
                 1.0,
                 GlassKind::Panel,
+                1.0,
             );
         }
     }
