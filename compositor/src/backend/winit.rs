@@ -268,6 +268,7 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
         let bounds: Rectangle<i32, Physical> =
             Rectangle::from_size(monitor.geometry().size.to_physical_precise_round(scale));
         winit.blur.begin_frame();
+        let content = winit.blur.content();
         let blur = blur_config.enabled.then_some(BlurSession {
             cache: &mut winit.blur,
             config: blur_config,
@@ -293,6 +294,10 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
             ),
         );
 
+        content.observe(
+            || OutputDamageTracker::from_output(&winit.output),
+            &elements,
+        );
         let result = winit
             .damage_tracker
             .render_output(renderer, &mut framebuffer, age, &elements, CLEAR_COLOR)

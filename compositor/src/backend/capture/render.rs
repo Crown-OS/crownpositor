@@ -184,15 +184,20 @@ where
     };
 
     blur.begin_frame();
+    let content = blur.content();
     let blur_config = BlurConfig::from(scene.appearance);
     let blur_session = blur_config.enabled.then_some(BlurSession {
-        cache: blur,
+        cache: &mut *blur,
         config: blur_config,
         transform: Transform::Normal,
         output: Rectangle::from_size(size),
     });
     let mut decorator = R::decorator(blur_session);
     let elements = scene_elements(renderer, &mut decorator, cursor_mode, scene, scale);
+    content.observe(
+        || OutputDamageTracker::new(size, Scale::from(scale), Transform::Normal),
+        &elements,
+    );
 
     let mut target = slot.dmabuf.clone();
     let rendered = if target.format().code == Fourcc::Nv12 {

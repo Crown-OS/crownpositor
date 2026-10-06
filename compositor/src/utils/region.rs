@@ -29,6 +29,69 @@ pub fn subtract(
     remaining
 }
 
+/// Merging two rectangles is worth it while their bounding box wastes at most
+/// this fraction over the area they really cover.
+const MERGE_SLACK: f64 = 1.25;
+/// Past this many pieces, per-piece overhead outweighs the pixels saved.
+const MAX_PIECES: usize = 12;
+
+/// Disjoint rectangles covering the union of `rects` for drawing over: pairs
+/// whose bounding box wastes little are merged, overlaps are cut away so no
+/// pixel is covered twice, and a set that stays fragmented falls back to one
+/// bounding box.
+pub fn coalesce(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
+    let mut merged: Vec<Rect> = rects.into_iter().filter(|rect| !rect.is_empty()).collect();
+    while let Some((a, b)) = cheapest_merge(&merged) {
+        let union = merged[a].merge(merged[b]);
+        merged.swap_remove(b);
+        merged[a] = union;
+    }
+
+    let mut disjoint: Vec<Rect> = Vec::with_capacity(merged.len());
+    for rect in merged {
+        let pieces = subtract([rect], disjoint.iter().copied());
+        disjoint.extend(pieces);
+    }
+    if disjoint.len() > MAX_PIECES {
+        return disjoint
+            .into_iter()
+            .reduce(Rect::merge)
+            .into_iter()
+            .collect();
+    }
+    disjoint
+}
+
+/// The pair whose merge wastes least, if any wastes little enough. `a < b`.
+fn cheapest_merge(rects: &[Rect]) -> Option<(usize, usize)> {
+    let area = |rect: Rect| rect.size.w as f64 * rect.size.h as f64;
+    let mut best: Option<(f64, usize, usize)> = None;
+    for a in 0..rects.len() {
+        for b in a + 1..rects.len() {
+            let overlap = rects[a].intersection(rects[b]).map_or(0.0, area);
+            let covered = area(rects[a]) + area(rects[b]) - overlap;
+            let ratio = area(rects[a].merge(rects[b])) / covered.max(1.0);
+            if ratio <= MERGE_SLACK && best.is_none_or(|(cost, ..)| ratio < cost) {
+                best = Some((ratio, a, b));
+            }
+        }
+    }
+    best.map(|(_, a, b)| (a, b))
+}
+
+/// Where `rects` and `others` overlap. Pieces may overlap each other when
+/// `others` do.
+pub fn intersect(rects: &[Rect], others: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
+    others
+        .into_iter()
+        .flat_map(|other| {
+            rects
+                .iter()
+                .filter_map(move |rect| rect.intersection(other))
+        })
+        .collect()
+}
+
 /// The up to four pieces of `rect` that lie outside `overlap`, which it
 /// contains: full-width bands above and below, and the two sides between.
 fn around(rect: Rect, overlap: Rect) -> impl Iterator<Item = Rect> {
@@ -74,6 +137,45 @@ mod tests {
             [other],
         );
         assert!(!left.iter().any(|piece| piece.overlaps(other)), "{left:?}");
+    }
+
+    #[test]
+    fn coalescing_covers_the_union_exactly_once() {
+        let rects = [
+            rect(0, 0, 40, 40),
+            rect(30, 30, 40, 40),
+            rect(200, 0, 10, 10),
+            rect(5, 5, 10, 10),
+        ];
+        let coalesced = coalesce(rects);
+        let covered: usize = coalesced
+            .iter()
+            .map(|r| (r.size.w * r.size.h) as usize)
+            .sum();
+        assert_eq!(covered, points(&coalesced).len(), "pieces overlap");
+        assert!(points(&rects).is_subset(&points(&coalesced)));
+    }
+
+    #[test]
+    fn distant_rectangles_stay_apart() {
+        let coalesced = coalesce([rect(0, 0, 10, 10), rect(500, 500, 10, 10)]);
+        assert_eq!(coalesced.len(), 2);
+    }
+
+    #[test]
+    fn a_ring_is_not_filled_in() {
+        // What a lower piece of glass is left with around an opaque one above.
+        let ring = [
+            rect(0, 0, 300, 20),
+            rect(0, 280, 300, 20),
+            rect(0, 20, 20, 260),
+            rect(280, 20, 20, 260),
+        ];
+        let covered: usize = coalesce(ring)
+            .iter()
+            .map(|r| (r.size.w * r.size.h) as usize)
+            .sum();
+        assert!(covered < 300 * 300 / 2, "the hole was blurred: {covered}");
     }
 
     #[test]

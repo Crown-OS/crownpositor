@@ -51,6 +51,7 @@ impl RenderTargets {
         ));
         self.ages.forget();
         self.nv12.forget();
+        self.blur = BlurCache::default();
     }
 }
 

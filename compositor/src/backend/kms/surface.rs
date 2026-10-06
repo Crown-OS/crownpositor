@@ -35,6 +35,7 @@ use smithay::{
     },
     backend::renderer::{
         ImportDma,
+        damage::OutputDamageTracker,
         element::{Element, Id, RenderElement, UnderlyingStorage},
     },
     desktop::utils::OutputPresentationFeedback,
@@ -629,6 +630,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         .filter(|_| demand.tearing)
         .map(|tile| Id::from(tile.surface()));
     surface.blur.begin_frame();
+    let content = surface.blur.content();
     let blur = (blur_config.enabled && !fullscreen).then_some(BlurSession {
         cache: &mut surface.blur,
         config: blur_config,
@@ -652,6 +654,11 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
             shell.focused_window_id(),
             input.hovered_control,
         ),
+    );
+
+    content.observe(
+        || OutputDamageTracker::from_output(&surface.output),
+        &elements,
     );
 
     let mut submitted = false;
