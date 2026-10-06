@@ -1,6 +1,6 @@
 //! One rectangle of blurred glass, blurred out of the live framebuffer.
 
-use std::{cell::RefCell, mem, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use smithay::{
     backend::renderer::{
@@ -22,6 +22,7 @@ use crate::{
         blur::{
             BlurConfig, Glass,
             cache::{BlurSession, Halo},
+            content::ContentDamage,
             scene::{BlurScene, grow},
         },
         decorate::Backdrop,
@@ -53,6 +54,7 @@ pub struct BlurBackdrop {
     occluders: Vec<Rectangle<i32, Physical>>,
     scene: Rc<BlurScene>,
     halo: Rc<RefCell<Halo>>,
+    content: ContentDamage,
     shaders: BlurShaders,
 }
 
@@ -96,6 +98,7 @@ impl BlurBackdrop {
         scene.stand(geometry);
         let occluders = session.cache.stack().occlude(&params, geometry);
         let halo = session.cache.halo(&params.id);
+        let content = session.cache.content();
 
         Some(Self {
             id: params.id,
@@ -109,6 +112,7 @@ impl BlurBackdrop {
             occluders,
             scene,
             halo,
+            content,
             shaders,
         })
     }
@@ -178,7 +182,8 @@ impl BlurBackdrop {
     /// twice.
     fn owe_halo(&self, dst: Rectangle<i32, Physical>, damage: &[Rectangle<i32, Physical>]) {
         let mut halo = self.halo.borrow_mut();
-        let fresh = region::subtract(damage.iter().copied(), mem::take(&mut halo.reported));
+        halo.reported.clear();
+        let fresh = self.content.changed(damage, dst.loc);
 
         let bounds = Rectangle::from_size(dst.size);
         let radius = self.reach();
@@ -252,8 +257,17 @@ impl BlurBackdrop {
                 .filter_map(|rect| space.rect(rect).intersection(frame)),
         );
 
-        let footprint = dirty.into_iter().reduce(Rectangle::merge)?;
-        let footprint = grow(footprint, radius).intersection(frame)?;
+        // Each damaged rectangle and the reach of the taps around it, kept
+        // apart where they are apart: a bounding box would fill in the hole a
+        // piece of glass above leaves in this one, and blur it twice.
+        let footprint = region::coalesce(
+            dirty
+                .iter()
+                .filter_map(|rect| grow(*rect, radius).intersection(frame)),
+        );
+        if footprint.is_empty() {
+            return None;
+        }
         let offset = self.config.offset.max(0.0);
 
         unsafe {
@@ -290,13 +304,13 @@ impl BlurBackdrop {
             let (down, up) = (&self.shaders.down, &self.shaders.up);
             let mut source = &self.scene.scene;
             for (index, level) in levels.iter().enumerate() {
-                pass(gl, down, source, level, footprint, index, offset);
+                pass(gl, down, source, level, &footprint, index, offset);
                 source = level;
             }
             for index in (0..levels.len().saturating_sub(1)).rev() {
                 let source = &levels[index + 1];
                 let level = &levels[index];
-                pass(gl, up, source, level, footprint, index, offset);
+                pass(gl, up, source, level, &footprint, index, offset);
             }
 
             gl.BindFramebuffer(ffi::FRAMEBUFFER, previous as ffi::types::GLuint);
@@ -374,8 +388,8 @@ impl FramebufferSpace {
     }
 }
 
-/// One pyramid pass: attach `destination`, clip to the footprint at its level,
-/// draw. `index` is the level `destination` sits at.
+/// One pyramid pass: attach `destination`, then draw each piece of the
+/// footprint at its level. `index` is the level `destination` sits at.
 ///
 /// # Safety
 ///
@@ -385,12 +399,11 @@ unsafe fn pass(
     program: &KawaseProgram,
     source: &GlesTexture,
     destination: &GlesTexture,
-    footprint: Rectangle<i32, Physical>,
+    footprint: &[Rectangle<i32, Physical>],
     index: usize,
     offset: f32,
 ) {
     let size = destination.size();
-    let area = level_area(footprint, index as u32 + 1, size);
     unsafe {
         gl.FramebufferTexture2D(
             ffi::FRAMEBUFFER,
@@ -400,14 +413,18 @@ unsafe fn pass(
             0,
         );
         gl.Viewport(0, 0, size.w, size.h);
-        gl.Scissor(area.loc.x, area.loc.y, area.size.w, area.size.h);
-        program.run(
+        program.bind(
             gl,
             source,
             (size.w as f32, size.h as f32),
             half_pixel(source.size(), size),
             offset,
         );
+        for piece in footprint {
+            let area = level_area(*piece, index as u32 + 1, size);
+            gl.Scissor(area.loc.x, area.loc.y, area.size.w, area.size.h);
+            KawaseProgram::draw(gl);
+        }
     }
 }
 

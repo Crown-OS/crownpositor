@@ -63,13 +63,14 @@ impl KawaseProgram {
         }
     }
 
-    /// Fills the currently attached framebuffer from `source`.
+    /// Makes this pass current, reading `source`. Each [`Self::draw`] after
+    /// it then fills whatever the scissor leaves of the attached framebuffer.
     ///
     /// # Safety
     ///
     /// `gl` must belong to the current context, with a complete draw
     /// framebuffer bound and the viewport covering `destination_size`.
-    pub unsafe fn run(
+    pub unsafe fn bind(
         &self,
         gl: &ffi::Gles2,
         source: &GlesTexture,
@@ -100,8 +101,14 @@ impl KawaseProgram {
             );
             gl.Uniform2f(self.half_pixel, half_pixel.0, half_pixel.1);
             gl.Uniform1f(self.offset, offset);
-            gl.DrawArrays(ffi::TRIANGLES, 0, 3);
         }
+    }
+
+    /// # Safety
+    ///
+    /// A [`Self::bind`] must be current.
+    pub unsafe fn draw(gl: &ffi::Gles2) {
+        unsafe { gl.DrawArrays(ffi::TRIANGLES, 0, 3) };
     }
 }
 

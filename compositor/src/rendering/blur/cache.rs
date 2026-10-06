@@ -17,7 +17,9 @@ use smithay::{
     utils::{Buffer as BufferCoords, Physical, Rectangle, Size, Transform},
 };
 
-use crate::rendering::blur::{BlurConfig, scene::BlurScene, stack::GlassStack};
+use crate::rendering::blur::{
+    BlurConfig, content::ContentDamage, scene::BlurScene, stack::GlassStack,
+};
 
 /// The band a blur still owes, element-local.
 ///
@@ -29,8 +31,7 @@ use crate::rendering::blur::{BlurConfig, scene::BlurScene, stack::GlassStack};
 pub struct Halo {
     /// Owed by this frame's draw, offered at the start of the next one.
     pub(super) pending: Vec<Rectangle<i32, Physical>>,
-    /// This frame's offer, so the draw can tell a repaint it asked for from
-    /// genuinely new content. Offered whether or not the element is still
+    /// This frame's offer. Offered whether or not the element is still
     /// visible, so a band nobody claims expires with the frame instead of
     /// keeping the output awake.
     pub(super) reported: Vec<Rectangle<i32, Physical>>,
@@ -46,6 +47,7 @@ pub struct BlurCache {
     stack: GlassStack,
     current: HashMap<Id, Rc<RefCell<Halo>>>,
     previous: HashMap<Id, Rc<RefCell<Halo>>>,
+    content: ContentDamage,
 }
 
 impl BlurCache {
@@ -59,9 +61,16 @@ impl BlurCache {
             halo.reported = mem::take(&mut halo.pending);
         }
         self.stack.clear();
+        self.content.begin_frame();
         if let Some(scene) = &self.scene {
             scene.begin_frame();
         }
+    }
+
+    /// The handle a backend observes this frame's elements through, taken
+    /// before the elements borrow the cache.
+    pub fn content(&self) -> ContentDamage {
+        self.content.clone()
     }
 
     /// This output's scene and pyramid, reallocated only when the framebuffer
@@ -85,6 +94,7 @@ impl BlurCache {
     }
 
     pub(super) fn halo(&mut self, id: &Id) -> Rc<RefCell<Halo>> {
+        self.content.add_glass(id);
         let halo = self.previous.remove(id).unwrap_or_default();
         self.current.insert(id.clone(), Rc::clone(&halo));
         halo
