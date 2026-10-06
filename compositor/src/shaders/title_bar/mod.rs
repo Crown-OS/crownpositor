@@ -13,7 +13,10 @@ use smithay::backend::renderer::gles::{
     GlesError, GlesPixelProgram, GlesRenderer, Uniform, UniformName, UniformType,
 };
 
-static TITLE_BAR_SHADER: &str = include_str!("./title_bar.frag");
+static TITLE_BAR_SHADER: &str = concat!(
+    include_str!("./title_bar.frag"),
+    include_str!("../common/rounded_box.glsl"),
+);
 
 /// Everything one titlebar's pixels are generated from.
 ///

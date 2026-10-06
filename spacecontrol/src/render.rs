@@ -89,11 +89,13 @@ where
 
     /// Rounds, shadows or otherwise finishes one scaled window, or hands it
     /// straight back. `None` drops it.
+    /// `shape` is the window's rect on the output, the one its corners are cut
+    /// from.
     fn decorate(
         &mut self,
         renderer: &mut R,
         element: Scaled<R>,
-        size: (f32, f32),
+        shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element>;
 
@@ -300,17 +302,20 @@ fn window_at<R, P>(
         rect.size.w / f64::from(natural.w),
         rect.size.h / f64::from(natural.h),
     ));
-    let size = (clip.size.w as f32, clip.size.h as f32);
 
+    // The geometry's corner is what lands on `origin`; the client's own origin
+    // sits the geometry's offset before it, and scaling about `origin` keeps
+    // the corner where it is.
+    let surface_origin = origin - window.geometry().loc.to_physical_precise_round(scale);
     let surfaces: Vec<WaylandSurfaceRenderElement<R>> =
-        window.render_elements(renderer, origin, scale, alpha);
+        window.render_elements(renderer, surface_origin, scale, alpha);
 
     for surface in surfaces {
         let scaled = RescaleRenderElement::from_element(surface, origin, shrink);
         let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip) else {
             continue;
         };
-        if let Some(decorated) = painter.decorate(renderer, cropped, size, [radius; 4]) {
+        if let Some(decorated) = painter.decorate(renderer, cropped, clip, [radius; 4]) {
             out.push(OverviewElement::Window(Wrap::from(decorated)));
         }
     }

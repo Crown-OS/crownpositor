@@ -36,12 +36,8 @@ uniform float thickness;
 // inner edge derived below traces the window's curve exactly.
 uniform float radius;
 
-// Signed distance to a rounded box, after Inigo Quilez. One radius rather than
-// the rounded-corner shader's four: nothing rounds a border unevenly.
-float rounded_box(in vec2 p, in vec2 b, in float r) {
-    vec2 q = abs(p) - b + r;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-}
+// Defined in `shaders/common/rounded_box.glsl`, concatenated after this file.
+float rounded_box(in vec2 p, in vec2 b, in float r);
 
 void main() {
     vec2 half_size = size * 0.5;

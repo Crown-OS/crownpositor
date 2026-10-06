@@ -27,7 +27,9 @@ pub fn fullscreen_elements<R, D>(
     R::TextureId: Send + Clone + 'static,
     D: TileDecorator<R>,
 {
-    let origin: Point<i32, Physical> = tile.render_rect().loc.to_physical_precise_round(scale);
+    let origin: Point<i32, Physical> = (tile.render_rect().loc
+        - tile.window().geometry().loc.to_f64())
+    .to_physical_precise_round(scale);
     elements.extend(
         popup::popup_elements(renderer, tile.window(), origin, scale, 1.0)
             .into_iter()

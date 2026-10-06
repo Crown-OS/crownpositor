@@ -11,10 +11,12 @@
 
 pub mod blur;
 pub mod color;
+pub mod corners;
 pub mod cursor;
 pub mod decorate;
 pub mod decoration;
 pub mod element;
+pub mod framebuffer;
 pub mod fullscreen;
 pub mod lock;
 pub mod overview;
@@ -330,11 +332,19 @@ fn tile_elements<R, D>(
         frame_loc + Point::from((0, inset)),
         Size::from((frame.size.w, (frame.size.h - inset).max(1))),
     );
-    let size = (clip.size.w as f32, clip.size.h as f32);
     let alpha = tile.render_alpha();
+    // The client's own origin, which sits its window geometry's offset up and
+    // to the left of the clip: a client that draws its own shadows keeps them
+    // in its buffer, outside the rect it asked to be framed.
+    let surface_origin = clip.loc
+        - tile
+            .window()
+            .geometry()
+            .loc
+            .to_physical_precise_round(scale);
 
     elements.extend(
-        popup::popup_elements(renderer, tile.window(), clip.loc, scale, alpha)
+        popup::popup_elements(renderer, tile.window(), surface_origin, scale, alpha)
             .into_iter()
             .map(CrownElement::Surface),
     );
@@ -365,7 +375,7 @@ fn tile_elements<R, D>(
     let surfaces = surface_tree::transformed_surface_elements(
         renderer,
         tile.surface(),
-        clip.loc,
+        surface_origin,
         scale,
         alpha,
         Kind::Unspecified,
@@ -386,23 +396,23 @@ fn tile_elements<R, D>(
         let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip) else {
             continue;
         };
-        if let Some(decorated) = decorator.decorate(renderer, cropped, size, radii) {
+        if let Some(decorated) = decorator.decorate(renderer, cropped, clip, radii) {
             elements.push(CrownElement::Tile(Wrap::from(decorated)));
         }
     }
 
     // The blurred glass goes in *after* the window's surfaces — later in the
-    // list is further from the eye, so it sits directly behind them. `clip.loc`
-    // is where the surface's own origin lands, which is the space the client
-    // expressed its blur region in; `clip` is both the mask the corners are cut
-    // from and the bound the region is clipped to.
+    // list is further from the eye, so it sits directly behind them. The
+    // surface origin is the space the client expressed its blur region in;
+    // `clip` is both the mask the corners are cut from and the bound the region
+    // is clipped to.
     if let Some(surface) = surface {
         backdrop_elements(
             &mut |element| elements.push(CrownElement::Tile(Wrap::from(element))),
             renderer,
             decorator,
             &surface,
-            clip.loc,
+            surface_origin,
             scale,
             clip,
             client_radius.unwrap_or(radius),
@@ -1095,7 +1105,6 @@ fn layer_elements<R, D>(
                 // A panel that asked to be rounded is clipped to its own
                 // radius, which costs it the decorator's wrapper per element.
                 Some(radius) => {
-                    let size = (clip.size.w as f32, clip.size.h as f32);
                     let popups = popups
                         .into_iter()
                         .map(|popup| RescaleRenderElement::from_element(popup, clip.loc, 1.0));
@@ -1105,7 +1114,7 @@ fn layer_elements<R, D>(
                             continue;
                         };
                         if let Some(decorated) =
-                            decorator.decorate(renderer, cropped, size, [radius; 4])
+                            decorator.decorate(renderer, cropped, clip, [radius; 4])
                         {
                             elements.push(CrownElement::Tile(Wrap::from(decorated)));
                         }

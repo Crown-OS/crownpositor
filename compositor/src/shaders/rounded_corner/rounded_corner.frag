@@ -34,11 +34,16 @@ uniform float tint;
 #endif
 
 // Additional uniforms, declared on the Rust side by `RoundedCornerShader`.
-// Element size in pixels, in the same space as `v_coords`.
-uniform vec2 size;
-// Corner radii in pixels, one per corner: right-bottom, right-top,
-// left-bottom, left-top — the order `rounded_box` reads them in. A decorated
-// window squares its top pair, because its titlebar rounds those instead.
+// The shape the element is clipped to — the window, not this one surface of
+// it — in framebuffer pixels, the space `gl_FragCoord` is in. Measuring there
+// rather than from `v_coords` is what keeps the corners on the window when a
+// buffer is cropped (a client's own shadow margin, a resize in flight) or a
+// subsurface covers only part of it: `v_coords` is texture UV, not position.
+uniform vec2 shape_origin;
+uniform vec2 shape_size;
+// Corner radii in pixels for the (+x, +y), (+x, -y), (-x, +y) and (-x, -y)
+// framebuffer corners — the order `rounded_box` reads them in. A decorated
+// window squares the pair under its titlebar, which rounds those instead.
 uniform vec4 radius;
 
 // Defined in `shaders/common/rounded_box.glsl`, concatenated after this file
@@ -52,11 +57,11 @@ void main() {
     color = vec4(color.rgb, 1.0);
 #endif
 
-    vec2 half_size = size * 0.5;
-    // A radius wider than the element would fold the distance field inside out.
+    vec2 half_size = shape_size * 0.5;
+    // A radius wider than the shape would fold the distance field inside out.
     float limit = min(half_size.x, half_size.y);
     vec4 r = min(radius, vec4(limit));
-    float distance = rounded_box(v_coords * size - half_size, half_size, r);
+    float distance = rounded_box(gl_FragCoord.xy - shape_origin - half_size, half_size, r);
 
 #if defined(GL_OES_standard_derivatives)
     // Width of one screen pixel in distance-field units, so the edge stays one

@@ -72,10 +72,10 @@ where
         &mut self,
         renderer: &mut R,
         element: Scaled<R>,
-        size: (f32, f32),
+        shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element> {
-        self.decorator.decorate(renderer, element, size, radius)
+        self.decorator.decorate(renderer, element, shape, radius)
     }
 
     fn behind(&mut self, renderer: &mut R, behind: Behind<'_>, out: &mut dyn FnMut(Self::Element)) {
@@ -264,8 +264,13 @@ fn window_backdrop<R, D>(
         scale.x * behind.rect.size.w / f64::from(behind.natural.w),
         scale.y * behind.rect.size.h / f64::from(behind.natural.h),
     ));
-    let origin: Point<i32, Physical> = behind.rect.loc.to_physical_precise_round(scale);
-    let mask = Rectangle::new(origin, behind.rect.size.to_physical_precise_round(scale));
+    let corner: Point<i32, Physical> = behind.rect.loc.to_physical_precise_round(scale);
+    let mask = Rectangle::new(corner, behind.rect.size.to_physical_precise_round(scale));
+    // The surface's own origin, the geometry offset before the corner at the
+    // thumbnail's size: the space the client's blur region is in.
+    let offset = behind.window.geometry().loc.to_f64();
+    let origin = corner
+        - Point::<f64, Physical>::from((offset.x * shrink.x, offset.y * shrink.y)).to_i32_round();
 
     backdrop_elements(
         out,

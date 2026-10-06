@@ -28,7 +28,10 @@ use smithay::{
 
 static DOWN_SHADER: &str = include_str!("./blur_down.frag");
 static UP_SHADER: &str = include_str!("./blur_up.frag");
-static FINISH_SHADER: &str = include_str!("./blur_finish.frag");
+static FINISH_SHADER: &str = concat!(
+    include_str!("./blur_finish.frag"),
+    include_str!("../common/rounded_box.glsl"),
+);
 
 /// The compiled blur programs for one GL context.
 #[derive(Debug, Clone)]

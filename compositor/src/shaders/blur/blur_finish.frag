@@ -88,11 +88,8 @@ vec2 cl(vec2 uv) {
     return clamp(uv, half_pixel, vec2(1.0) - half_pixel);
 }
 
-// Signed distance to a rounded box, after Inigo Quilez. Negative inside.
-float rounded_box(vec2 p, vec2 b, float r) {
-    vec2 q = abs(p) - b + r;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-}
+// Defined in `shaders/common/rounded_box.glsl`, concatenated after this file.
+float rounded_box(in vec2 p, in vec2 b, in float r);
 
 // Cheap screen-space hash (Dave Hoskins) for the dither.
 float hash(vec2 p) {

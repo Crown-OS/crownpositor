@@ -63,7 +63,12 @@ uniform vec4 control_glyph;
 // none. Held as a float because that is what a `_1f` uniform carries.
 uniform float control_hover;
 
-float rounded_box(in vec2 p, in vec2 b, in float r) {
+// Defined in `shaders/common/rounded_box.glsl`, concatenated after this file.
+float rounded_box(in vec2 p, in vec2 b, in float r);
+
+// A circular-cornered box, for the glyph strokes: a glyph is a drawing, not a
+// window, so it keeps the round ends of the pen that drew it.
+float pen_box(in vec2 p, in vec2 b, in float r) {
     vec2 q = abs(p) - b + r;
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 }
@@ -91,8 +96,8 @@ vec4 over(in vec4 dst, in vec4 src) {
 float glyph(in vec2 p, in float index, in float h, in float stroke) {
     if (index < 0.5) {
         // Maximize: a square outline.
-        float outer = rounded_box(p, vec2(h), stroke * 0.5);
-        float inner = rounded_box(p, vec2(h - stroke), 0.0);
+        float outer = pen_box(p, vec2(h), stroke * 0.5);
+        float inner = pen_box(p, vec2(h - stroke), 0.0);
         return max(outer, -inner);
     }
     if (index < 1.5) {

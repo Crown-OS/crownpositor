@@ -19,6 +19,7 @@ use smithay::{
 use config::{Appearance, GlassSettings};
 use protocols::crownos_screencast::{ClaimedSlot, CursorMode};
 
+use crate::rendering::corners::CornerMemory;
 use crate::{
     backend::{
         capture::{
@@ -50,15 +51,21 @@ pub trait CaptureRenderer: CrownRenderer + Bind<Dmabuf> + Bind<GlesTexture>
 where
     Self::TextureId: Send + Clone + 'static,
 {
-    fn decorator(blur: Option<BlurSession<'_>>) -> Self::Decorator<'_>;
+    fn decorator<'a>(
+        blur: Option<BlurSession<'a>>,
+        corners: &'a mut CornerMemory,
+    ) -> Self::Decorator<'a>;
 
     /// The GLES renderer underneath, for the conversion passes.
     fn gles(&mut self) -> &mut GlesRenderer;
 }
 
 impl CaptureRenderer for GlesRenderer {
-    fn decorator(blur: Option<BlurSession<'_>>) -> GlesDecorator<'_> {
-        GlesDecorator::new(blur)
+    fn decorator<'a>(
+        blur: Option<BlurSession<'a>>,
+        corners: &'a mut CornerMemory,
+    ) -> GlesDecorator<'a> {
+        GlesDecorator::new(blur, corners)
     }
 
     fn gles(&mut self) -> &mut GlesRenderer {
@@ -67,8 +74,11 @@ impl CaptureRenderer for GlesRenderer {
 }
 
 impl<'render> CaptureRenderer for KmsRenderer<'render> {
-    fn decorator(blur: Option<BlurSession<'_>>) -> MultiDecorator<'_> {
-        MultiDecorator::new(blur)
+    fn decorator<'a>(
+        blur: Option<BlurSession<'a>>,
+        corners: &'a mut CornerMemory,
+    ) -> MultiDecorator<'a> {
+        MultiDecorator::new(blur, corners)
     }
 
     fn gles(&mut self) -> &mut GlesRenderer {
@@ -178,6 +188,7 @@ where
         damage,
         ages,
         blur,
+        corners,
         nv12,
     } = targets;
     let Some(damage_tracker) = damage.as_mut() else {
@@ -185,6 +196,7 @@ where
     };
 
     blur.begin_frame();
+    corners.begin_frame();
     let content = blur.content();
     let blur_config = BlurConfig::new(scene.appearance, scene.glass);
     let blur_session = blur_config.enabled.then_some(BlurSession {
@@ -193,7 +205,7 @@ where
         transform: Transform::Normal,
         output: Rectangle::from_size(size),
     });
-    let mut decorator = R::decorator(blur_session);
+    let mut decorator = R::decorator(blur_session, corners);
     let elements = scene_elements(renderer, &mut decorator, cursor_mode, scene, scale);
     content.observe(
         || OutputDamageTracker::new(size, Scale::from(scale), Transform::Normal),

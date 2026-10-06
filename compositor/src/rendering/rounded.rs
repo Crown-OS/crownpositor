@@ -28,8 +28,10 @@ use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
         blur::{BlurBackdrop, BlurSession, Glass, GlassKind},
+        corners::CornerMemory,
         decorate::{Backdrop, Cropped, Shadow, TileDecorator},
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
+        framebuffer::FramebufferSpace,
     },
     shaders::rounded_corner::RoundedCornerShader,
 };
@@ -42,41 +44,50 @@ pub struct Rounded<E> {
     /// never compiled — the element then draws square, because square corners
     /// beat a dropped window.
     program: Option<GlesTexProgram>,
-    /// The window's size in physical pixels; the shader needs it to know where
-    /// the corners are.
-    size: (f32, f32),
+    /// The window the corners are cut from, output-local. Not this element's
+    /// own rect: a subsurface or a cropped buffer covers only part of it.
+    shape: Rectangle<i32, Physical>,
     /// One radius per corner, so a decorated window can keep its top two square
     /// where the titlebar covers them.
     radius: [f32; 4],
+    /// The last frame clipped this element to a different shape, so pixels the
+    /// client never damaged changed: the whole element is repainted.
+    reshaped: bool,
 }
 
 impl<E> Rounded<E> {
     pub fn new(
         inner: E,
         program: Option<GlesTexProgram>,
-        size: (f32, f32),
+        shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
+        reshaped: bool,
     ) -> Self {
         Self {
             inner,
             program,
-            size,
+            shape,
             radius,
+            reshaped,
         }
     }
 
     /// Binds the override on `frame` and returns whether it needs unbinding.
+    /// The shape goes to the shader in framebuffer pixels, where it measures
+    /// from `gl_FragCoord`.
     fn bind(&self, frame: &mut GlesFrame<'_, '_>) -> bool {
-        match &self.program {
-            Some(program) => {
-                frame.override_default_tex_program(
-                    program.clone(),
-                    RoundedCornerShader::uniform_values(self.size, self.radius).to_vec(),
-                );
-                true
-            }
-            None => false,
-        }
+        let Some(program) = &self.program else {
+            return false;
+        };
+        let Ok(space) = FramebufferSpace::current(frame) else {
+            return false;
+        };
+        frame.override_default_tex_program(
+            program.clone(),
+            RoundedCornerShader::uniform_values(space.rect(self.shape), space.corners(self.radius))
+                .to_vec(),
+        );
+        true
     }
 }
 
@@ -110,6 +121,9 @@ impl<E: Element> Element for Rounded<E> {
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
+        if self.reshaped {
+            return DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)]);
+        }
         self.inner.damage_since(scale, commit)
     }
 
@@ -460,11 +474,12 @@ where
 #[derive(Debug)]
 pub struct GlesDecorator<'a> {
     blur: Option<BlurSession<'a>>,
+    corners: &'a mut CornerMemory,
 }
 
 impl<'a> GlesDecorator<'a> {
-    pub fn new(blur: Option<BlurSession<'a>>) -> Self {
-        Self { blur }
+    pub fn new(blur: Option<BlurSession<'a>>, corners: &'a mut CornerMemory) -> Self {
+        Self { blur, corners }
     }
 }
 
@@ -475,14 +490,15 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
         &mut self,
         renderer: &mut GlesRenderer,
         element: Cropped<GlesRenderer>,
-        size: (f32, f32),
+        shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element> {
         // A missing program (shader never compiled) squares the corners; it
         // must not drop the window.
         let program = RoundedCornerShader::get(renderer);
+        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
         Some(Decorated::Window(Rounded::new(
-            element, program, size, radius,
+            element, program, shape, radius, reshaped,
         )))
     }
 
@@ -526,11 +542,12 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
 #[derive(Debug)]
 pub struct MultiDecorator<'a> {
     blur: Option<BlurSession<'a>>,
+    corners: &'a mut CornerMemory,
 }
 
 impl<'a> MultiDecorator<'a> {
-    pub fn new(blur: Option<BlurSession<'a>>) -> Self {
-        Self { blur }
+    pub fn new(blur: Option<BlurSession<'a>>, corners: &'a mut CornerMemory) -> Self {
+        Self { blur, corners }
     }
 }
 
@@ -541,12 +558,13 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
         &mut self,
         renderer: &mut KmsRenderer<'render>,
         element: Cropped<KmsRenderer<'render>>,
-        size: (f32, f32),
+        shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element> {
         let program = RoundedCornerShader::get(renderer.as_mut());
+        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
         Some(Decorated::Window(Rounded::new(
-            element, program, size, radius,
+            element, program, shape, radius, reshaped,
         )))
     }
 

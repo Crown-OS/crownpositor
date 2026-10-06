@@ -1,5 +1,8 @@
-use smithay::backend::renderer::gles::{
-    GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, UniformValue,
+use smithay::{
+    backend::renderer::gles::{
+        GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, UniformValue,
+    },
+    utils::{Physical, Rectangle},
 };
 
 use crate::color::pipeline::SurfaceTransform;
@@ -17,9 +20,10 @@ pub static COLOR_WINDOW_SHADER: &str = concat!(
 pub struct ColorWindowShader(pub GlesTexProgram);
 
 impl ColorWindowShader {
-    fn uniforms() -> [UniformName<'static>; 6] {
+    fn uniforms() -> [UniformName<'static>; 7] {
         [
-            UniformName::new("size", UniformType::_2f),
+            UniformName::new("shape_origin", UniformType::_2f),
+            UniformName::new("shape_size", UniformType::_2f),
             UniformName::new("radius", UniformType::_4f),
             UniformName::new("tf_kind", UniformType::_1i),
             UniformName::new("tf_param", UniformType::_1f),
@@ -50,13 +54,16 @@ impl ColorWindowShader {
             .map(|shader| shader.0.clone())
     }
 
+    /// `shape` and `radius` are in framebuffer pixels, as for
+    /// [`RoundedCornerShader`](crate::shaders::rounded_corner::RoundedCornerShader).
     pub fn uniform_values(
-        size: (f32, f32),
+        shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
         transform: SurfaceTransform,
-    ) -> [Uniform<'static>; 6] {
+    ) -> [Uniform<'static>; 7] {
         [
-            Uniform::new("size", (size.0, size.1)),
+            Uniform::new("shape_origin", (shape.loc.x as f32, shape.loc.y as f32)),
+            Uniform::new("shape_size", (shape.size.w as f32, shape.size.h as f32)),
             Uniform::new("radius", radius),
             Uniform::new("tf_kind", transform.transfer as i32),
             Uniform::new("tf_param", transform.transfer_param),

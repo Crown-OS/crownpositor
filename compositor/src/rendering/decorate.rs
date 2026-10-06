@@ -86,11 +86,13 @@ where
 
     /// `None` drops the element. Returning the input undecorated is the right
     /// answer when an effect is unavailable — square corners beat no window.
+    /// `shape` is the window the element belongs to, output-local: the rect
+    /// its corners are cut from, whatever part of it this one surface covers.
     fn decorate(
         &mut self,
         renderer: &mut R,
         element: Cropped<R>,
-        size: (f32, f32),
+        shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element>;
 
@@ -160,7 +162,7 @@ where
         &mut self,
         _renderer: &mut R,
         element: Cropped<R>,
-        _size: (f32, f32),
+        _shape: Rectangle<i32, Physical>,
         _radius: [f32; 4],
     ) -> Option<Self::Element> {
         Some(element)

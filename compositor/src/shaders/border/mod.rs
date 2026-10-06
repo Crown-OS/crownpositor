@@ -14,7 +14,10 @@ use smithay::backend::renderer::gles::{
     GlesError, GlesPixelProgram, GlesRenderer, Uniform, UniformName, UniformType,
 };
 
-static BORDER_SHADER: &str = include_str!("./border.frag");
+static BORDER_SHADER: &str = concat!(
+    include_str!("./border.frag"),
+    include_str!("../common/rounded_box.glsl"),
+);
 
 /// The compiled border program for one GL context.
 #[derive(Debug, Clone)]

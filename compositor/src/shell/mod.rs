@@ -51,7 +51,7 @@ use crate::{
         },
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
-        tile::{Tile, WindowState},
+        tile::{Chrome, Tile, WindowState},
         transaction::Transaction,
         workspace::{Workspace, WorkspaceRef},
     },
@@ -947,7 +947,7 @@ impl Shell {
                     WindowHit {
                         id: tile.id(),
                         frame: (tile.target().loc.to_f64() + shift).to_i32_round(),
-                        content_origin: (tile.content_rect().loc.to_f64() + shift).to_i32_round(),
+                        content_origin: (tile.surface_origin().to_f64() + shift).to_i32_round(),
                         part,
                     }
                 };
@@ -1290,6 +1290,24 @@ impl Shell {
             return false;
         }
         tile.restore();
+        self.mark_dirty(id);
+        true
+    }
+
+    /// Follows the decoration mode a client negotiated: one that draws its own
+    /// frame gets no titlebar from us, and its clip is rounded all the way
+    /// round. Returns whether the frame changed hands.
+    pub fn set_window_chrome(&mut self, surface: &WlSurface, chrome: Chrome) -> bool {
+        let Some(id) = self.window_id(surface) else {
+            return false;
+        };
+        let Some(tile) = self.tile_mut(id) else {
+            return false;
+        };
+        if tile.chrome() == chrome {
+            return false;
+        }
+        tile.set_chrome(chrome);
         self.mark_dirty(id);
         true
     }

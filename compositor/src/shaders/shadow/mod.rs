@@ -15,7 +15,10 @@ use smithay::{
     utils::{Physical, Rectangle},
 };
 
-static SHADOW_SHADER: &str = include_str!("./shadow.frag");
+static SHADOW_SHADER: &str = concat!(
+    include_str!("./shadow.frag"),
+    include_str!("../common/rounded_box.glsl"),
+);
 
 /// The compiled shadow program for one GL context.
 #[derive(Debug, Clone)]

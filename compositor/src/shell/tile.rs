@@ -1,7 +1,10 @@
 use smithay::{
     desktop::Window,
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{Logical, Rectangle, Serial, Size},
+    reexports::{
+        wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+        wayland_server::protocol::wl_surface::WlSurface,
+    },
+    utils::{Logical, Point, Rectangle, Serial, Size},
     wayland::shell::xdg::ToplevelSurface,
 };
 
@@ -123,9 +126,20 @@ pub struct Tile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chrome {
     Compositor,
-    /// The client is a self-contained surface — an alert, a picker — and a
-    /// titlebar on it would be a second frame.
+    /// The client negotiated client-side decorations and draws its own
+    /// titlebar: one from us would be a second frame.
     Client,
+}
+
+impl Chrome {
+    /// Who draws the frame under an `xdg-decoration` mode. A client that never
+    /// asked keeps ours.
+    pub fn for_mode(mode: Option<Mode>) -> Self {
+        match mode {
+            Some(Mode::ClientSide) => Self::Client,
+            _ => Self::Compositor,
+        }
+    }
 }
 
 impl Tile {
@@ -243,6 +257,10 @@ impl Tile {
         }
     }
 
+    pub fn chrome(&self) -> Chrome {
+        self.chrome
+    }
+
     pub fn set_chrome(&mut self, chrome: Chrome) {
         self.chrome = chrome;
     }
@@ -282,6 +300,13 @@ impl Tile {
     /// The part of the frame the client actually draws into.
     pub fn content_rect(&self) -> Rectangle<i32, Logical> {
         self.insets().content(self.target)
+    }
+
+    /// Where the client's own `(0, 0)` lands: its window geometry is what
+    /// fills the content rect, and a client that draws shadows around itself
+    /// puts that geometry some way into its buffer.
+    pub fn surface_origin(&self) -> Point<i32, Logical> {
+        self.content_rect().loc - self.window.geometry().loc
     }
 
     pub fn content_size(&self) -> Size<i32, Logical> {
@@ -340,17 +365,21 @@ impl Tile {
         }
     }
 
-    /// Follows a client that resized itself while it owned the decision.
+    /// Follows a floating client that resized itself: one that still owns the
+    /// decision, or one that took our size and committed another anyway.
     ///
     /// Returns whether anything moved, which is what the caller turns into a
     /// relayout — the new size still has to be clamped onto the screen.
     pub fn adopt_client_size(&mut self) -> bool {
-        if self.size_authority != SizeAuthority::Client || !self.state.is_floating() {
+        if !self.state.is_floating() {
             return false;
         }
         // The client speaks in content sizes; `floating_rect` is a frame.
         let requested = self.window.geometry().size;
         if requested.w <= 0 || requested.h <= 0 {
+            return false;
+        }
+        if self.size_authority == SizeAuthority::Compositor && !self.refused(requested) {
             return false;
         }
         let frame = self.insets().frame_size(requested);
@@ -406,6 +435,21 @@ impl Tile {
     /// Opacity times the fade-in, so a new window appears rather than pops.
     pub fn render_alpha(&self) -> f32 {
         self.opacity * self.anim.alpha()
+    }
+
+    /// Whether the client acked the size we last sent and committed another.
+    /// A floating window's size is only ever a hint, and one below the
+    /// client's minimum is not taken: clipping it to ours would cut it off.
+    /// A client still catching up with a resize has not acked the latest size
+    /// yet, so this does not fight a drag.
+    fn refused(&self, committed: Size<i32, Logical>) -> bool {
+        let Some((sent, _)) = self.sent else {
+            return false;
+        };
+        let acked = self.window.toplevel().and_then(|toplevel| {
+            toplevel.with_committed_state(|state| state.and_then(|state| state.size))
+        });
+        acked == Some(sent) && committed != sent
     }
 
     pub fn record_sent(&mut self, size: Size<i32, Logical>, serial: Serial) {

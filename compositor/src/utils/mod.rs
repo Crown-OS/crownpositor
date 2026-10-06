@@ -6,6 +6,7 @@ pub mod privilege;
 pub mod region;
 pub mod runtime;
 pub mod scale;
+pub mod squircle;
 pub mod surface;
 pub mod syncobj;
 pub mod token;
