@@ -53,15 +53,25 @@ impl SeatHandler for State {
             _ => None,
         };
 
+        self.offer_selections_to(seat, focused);
+    }
+
+    fn led_state_changed(&mut self, _seat: &Seat<Self>, _led_state: LedState) {}
+}
+
+impl State {
+    /// Hands the clipboard and primary selection to `focus`'s client. A no-op
+    /// when that client already holds them, so calling it both before
+    /// `wl_keyboard.enter` (where the protocol wants the offer) and again from
+    /// `focus_changed` sends each offer once.
+    pub fn offer_selections_to(&self, seat: &Seat<Self>, focus: Option<&KeyboardFocusTarget>) {
         let display_handle = &self.common.display_handle;
-        let client = focused
+        let client = focus
             .and_then(WaylandFocus::wl_surface)
             .and_then(|surface| display_handle.get_client(surface.id()).ok());
         set_data_device_focus(display_handle, seat, client.clone());
         set_primary_focus(display_handle, seat, client);
     }
-
-    fn led_state_changed(&mut self, _seat: &Seat<Self>, _led_state: LedState) {}
 }
 
 impl TabletSeatHandler for State {

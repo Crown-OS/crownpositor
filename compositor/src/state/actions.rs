@@ -156,6 +156,10 @@ impl State {
         }
 
         tracing::debug!(?target, "keyboard focus moved");
+        // `wl_data_device.selection` must reach a client before its
+        // `wl_keyboard.enter`, and smithay only reports focus after the enter.
+        let seat = self.wayland.seat.clone();
+        self.offer_selections_to(&seat, target.as_ref());
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
         self.sync_shortcuts_inhibitors();
         self.release_unfocused_pointer_constraint();
