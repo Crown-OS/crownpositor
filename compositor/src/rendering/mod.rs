@@ -226,6 +226,7 @@ where
     // windows, on their way to or from their thumbnails, so drawing both would
     // be drawing every window twice.
     if monitor.spacecontrol().is_visible() {
+        overview::close_glyph_elements::<R, D>(&mut elements, monitor, renderer, scale, style);
         overview::overview_elements(
             &mut elements,
             monitor,

@@ -1,3 +1,4 @@
+pub mod glide;
 pub mod hover;
 pub mod rubber_band;
 pub mod spring;

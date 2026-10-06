@@ -173,6 +173,29 @@ pub fn bar(canvas: Canvas, count: usize, metrics: &Metrics, out: &mut Vec<Slot>)
     }
 }
 
+/// The '×' that removes a workspace, tucked into its preview's upper-left
+/// corner: big enough to hit, small enough not to hide the preview, and never
+/// smaller than a fingertip's worth of logical pixels.
+pub fn close_button(thumb: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
+    let diameter = (thumb.size.h * 0.22).clamp(14.0, 26.0);
+    let inset = diameter * 0.25;
+    Rectangle::new(
+        (thumb.loc.x + inset, thumb.loc.y + inset).into(),
+        (diameter, diameter).into(),
+    )
+}
+
+/// The slot whose centre is nearest `x`: where a preview dragged along the bar
+/// would land.
+pub fn nearest_slot(slots: &[Slot], x: f64) -> Option<usize> {
+    slots
+        .iter()
+        .map(|slot| (slot.thumb.loc.x + slot.thumb.size.w / 2.0 - x).abs())
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(index, _)| index)
+}
+
 /// How far the workspace bar still has to rise, given how far it has arrived.
 ///
 /// The bar enters from below the bottom edge rather than fading in on the spot,
@@ -214,6 +237,20 @@ pub fn between(
     Rectangle::new(
         (lerp(from.loc.x, to.loc.x), lerp(from.loc.y, to.loc.y)).into(),
         (lerp(from.size.w, to.size.w), lerp(from.size.h, to.size.h)).into(),
+    )
+}
+
+/// A preview's box as drawn: risen by however much of the bar's climb is
+/// left, and grown by the pointer's lift.
+pub fn shown(
+    thumb: Rectangle<f64, Logical>,
+    climb: f64,
+    lift: f64,
+    metrics: &Metrics,
+) -> Rectangle<f64, Logical> {
+    self::lift(
+        Rectangle::new((thumb.loc.x, thumb.loc.y + climb).into(), thumb.size),
+        metrics.hover * lift,
     )
 }
 
