@@ -375,6 +375,10 @@ impl Monitor {
         true
     }
 
+    pub fn gaps(&self) -> Gaps {
+        self.gaps
+    }
+
     pub fn set_gaps(&mut self, gaps: Gaps) {
         if self.gaps != gaps {
             self.gaps = gaps;
