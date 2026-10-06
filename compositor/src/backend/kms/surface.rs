@@ -52,6 +52,7 @@ use smithay::{
     wayland::presentation::Refresh,
 };
 
+use crate::rendering::corners::CornerMemory;
 use crate::{
     backend::{
         frame_clock::FrameClock,
@@ -145,6 +146,7 @@ pub struct Surface {
     pub redraw_state: RedrawState,
     /// Every backdrop's blur pyramid on this output, kept across frames.
     pub blur: BlurCache,
+    pub corners: CornerMemory,
     /// What clients shown here are told to allocate. `None` when the feedback
     /// could not be built; they keep the global default then.
     pub feedback: Option<SurfaceFeedback>,
@@ -337,6 +339,7 @@ pub fn enable_head(
             // First frame right away.
             redraw_state: RedrawState::Queued,
             blur: BlurCache::default(),
+            corners: CornerMemory::default(),
             feedback,
             commit_timers_waiting: false,
             tearing,
@@ -630,6 +633,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         .filter(|_| demand.tearing)
         .map(|tile| Id::from(tile.surface()));
     surface.blur.begin_frame();
+    surface.corners.begin_frame();
     let content = surface.blur.content();
     let blur = (blur_config.enabled && !fullscreen).then_some(BlurSession {
         cache: &mut surface.blur,
@@ -642,7 +646,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         shell,
         monitor,
         &mut renderer,
-        &mut MultiDecorator::new(blur),
+        &mut MultiDecorator::new(blur, &mut surface.corners),
         &mut input.cursor,
         input.pointer_location,
         scale,

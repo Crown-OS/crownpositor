@@ -11,8 +11,7 @@ use smithay::{
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
-        Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Size, Transform,
-        user_data::UserDataMap,
+        Buffer as BufferCoords, Physical, Rectangle, Scale, Size, Transform, user_data::UserDataMap,
     },
 };
 
@@ -26,6 +25,7 @@ use crate::{
             scene::{BlurScene, grow},
         },
         decorate::Backdrop,
+        framebuffer::FramebufferSpace,
     },
     shaders::blur::{BlurShaders, KawaseProgram},
     utils::region,
@@ -217,13 +217,10 @@ impl BlurBackdrop {
             gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING, &mut previous);
         }
 
-        let space = FramebufferSpace {
-            projection,
-            viewport: Size::from((viewport[2], viewport[3])),
-        };
+        let space = FramebufferSpace::new(projection, Size::from((viewport[2], viewport[3])));
         let size = self.scene.scene.size();
         let frame = Rectangle::from_size(Size::<i32, Physical>::from((size.w, size.h)));
-        if frame.size != space.viewport {
+        if frame.size != space.viewport() {
             return None;
         }
         // Only the levels this backdrop's strength reaches: a blur on its way
@@ -334,56 +331,6 @@ impl BlurBackdrop {
             // place a rotated or flipped output has to be accounted for.
             space.direction(self.glass.shading.light),
         ))
-    }
-}
-
-/// Maps output-local physical coordinates to framebuffer pixels.
-///
-/// The frame's projection already carries the output transform, so this is the
-/// single place a rotated or flipped output is dealt with: every rotation and
-/// flip keeps rectangles axis-aligned, which is all the blit and the scissor
-/// ask for.
-struct FramebufferSpace {
-    projection: [f32; 9],
-    viewport: Size<i32, Physical>,
-}
-
-impl FramebufferSpace {
-    fn point(&self, point: Point<i32, Physical>) -> Point<i32, Physical> {
-        let matrix = &self.projection;
-        let (x, y) = (point.x as f32, point.y as f32);
-        let ndc = (
-            matrix[0] * x + matrix[3] * y + matrix[6],
-            matrix[1] * x + matrix[4] * y + matrix[7],
-        );
-        Point::from((
-            ((ndc.0 + 1.0) * 0.5 * self.viewport.w as f32).round() as i32,
-            ((ndc.1 + 1.0) * 0.5 * self.viewport.h as f32).round() as i32,
-        ))
-    }
-
-    /// A direction in output-local coordinates, as a unit vector in
-    /// framebuffer pixels. Only the projection's linear part is involved: a
-    /// direction has no origin to translate.
-    fn direction(&self, delta: (f32, f32)) -> (f32, f32) {
-        let matrix = &self.projection;
-        let x = (matrix[0] * delta.0 + matrix[3] * delta.1) * self.viewport.w as f32;
-        let y = (matrix[1] * delta.0 + matrix[4] * delta.1) * self.viewport.h as f32;
-        let length = x.hypot(y);
-        if length > 0.0 {
-            (x / length, y / length)
-        } else {
-            (0.0, 0.0)
-        }
-    }
-
-    fn rect(&self, rect: Rectangle<i32, Physical>) -> Rectangle<i32, Physical> {
-        let start = self.point(rect.loc);
-        let end = self.point(rect.loc + rect.size.to_point());
-        Rectangle::from_extremities(
-            (start.x.min(end.x), start.y.min(end.y)),
-            (start.x.max(end.x), start.y.max(end.y)),
-        )
     }
 }
 

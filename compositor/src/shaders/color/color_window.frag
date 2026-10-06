@@ -32,7 +32,8 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-uniform vec2 size;
+uniform vec2 shape_origin;
+uniform vec2 shape_size;
 uniform vec4 radius;
 
 // Which curve to decode with. Must match `color::pipeline::TransferKind`.
@@ -148,10 +149,10 @@ void main() {
     color = vec4(primaries * linear, color.a);
     color.rgb *= color.a;
 
-    vec2 half_size = size * 0.5;
+    vec2 half_size = shape_size * 0.5;
     float limit = min(half_size.x, half_size.y);
     vec4 r = min(radius, vec4(limit));
-    float distance = rounded_box(v_coords * size - half_size, half_size, r);
+    float distance = rounded_box(gl_FragCoord.xy - shape_origin - half_size, half_size, r);
 
 #if defined(GL_OES_standard_derivatives)
     float aa = max(fwidth(distance), 0.0001);

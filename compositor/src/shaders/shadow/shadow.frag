@@ -39,11 +39,8 @@ uniform float shape_radius;
 // Standard deviation of the gaussian, in pixels.
 uniform float sigma;
 
-// Signed distance to a rounded box, after Inigo Quilez.
-float rounded_box(vec2 p, vec2 b, float r) {
-    vec2 q = abs(p) - b + r;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-}
+// Defined in `shaders/common/rounded_box.glsl`, concatenated after this file.
+float rounded_box(in vec2 p, in vec2 b, in float r);
 
 // Abramowitz & Stegun 7.1.26. Six multiplies for the gaussian's integral, which
 // is what turns a hard silhouette into a soft one without a single extra tap.

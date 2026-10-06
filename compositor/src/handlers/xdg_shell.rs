@@ -1,10 +1,7 @@
 use smithay::{
     desktop::{PopupKind, Window},
     reexports::{
-        wayland_protocols::xdg::{
-            decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
-            shell::server::xdg_toplevel::ResizeEdge,
-        },
+        wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
         wayland_server::protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
     },
     utils::{Logical, Serial, Size},
@@ -294,10 +291,12 @@ impl State {
             self.config.current.appearance.titlebar_height.into(),
         );
         tile.set_size_hints(min_size, max_size);
-        let self_drawn = draws_own_chrome(&toplevel, min_size, max_size);
-        if self_drawn {
-            tile.set_chrome(Chrome::Client);
-        }
+        tile.set_chrome(Chrome::for_mode(
+            toplevel.with_pending_state(|state| state.decoration_mode),
+        ));
+        // A fixed-size window that draws its own frame is an alert or a picker.
+        let alert =
+            min_size != Size::default() && min_size == max_size && tile.chrome() == Chrome::Client;
         tile.set_title(title.as_deref().unwrap_or_default());
 
         if tile.state().is_floating() {
@@ -308,7 +307,7 @@ impl State {
                 .map(Tile::target)
                 // An alert with nothing to sit over belongs in the middle of
                 // the screen, not at the head of the cascade.
-                .or(self_drawn.then_some(area));
+                .or(alert.then_some(area));
             let cascade = self.shell.next_cascade();
             tile.set_floating_rect(placement::initial_rect(
                 unmapped.window.geometry().size,
@@ -376,16 +375,6 @@ fn auto_float(
     }
     // A max size small in both axes is a dialog by any other name.
     max.w > 0 && max.h > 0 && max.w * 2 < area.w && max.h * 2 < area.h
-}
-
-/// A window that cannot be resized and asked to decorate itself.
-fn draws_own_chrome(
-    toplevel: &ToplevelSurface,
-    min: Size<i32, Logical>,
-    max: Size<i32, Logical>,
-) -> bool {
-    let fixed = min != Size::default() && min == max;
-    fixed && toplevel.with_pending_state(|state| state.decoration_mode) == Some(Mode::ClientSide)
 }
 
 fn size_hints(surface: &WlSurface) -> (Size<i32, Logical>, Size<i32, Logical>) {

@@ -1,5 +1,8 @@
-use smithay::backend::renderer::gles::{
-    GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
+use smithay::{
+    backend::renderer::gles::{
+        GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
+    },
+    utils::{Physical, Rectangle},
 };
 
 pub static CLIPPING_SHADER: &str = concat!(
@@ -9,9 +12,10 @@ pub static CLIPPING_SHADER: &str = concat!(
 pub struct RoundedCornerShader(pub GlesTexProgram);
 
 impl RoundedCornerShader {
-    fn uniforms() -> [UniformName<'static>; 2] {
+    fn uniforms() -> [UniformName<'static>; 3] {
         [
-            UniformName::new("size", UniformType::_2f),
+            UniformName::new("shape_origin", UniformType::_2f),
+            UniformName::new("shape_size", UniformType::_2f),
             UniformName::new("radius", UniformType::_4f),
         ]
     }
@@ -37,10 +41,15 @@ impl RoundedCornerShader {
             .map(|shader| shader.0.clone())
     }
 
-    /// `radius` is per corner: right-bottom, right-top, left-bottom, left-top.
-    pub fn uniform_values(size: (f32, f32), radius: [f32; 4]) -> [Uniform<'static>; 2] {
+    /// `shape` and `radius` are in framebuffer pixels, the radii per
+    /// framebuffer corner: (+x, +y), (+x, -y), (-x, +y), (-x, -y).
+    pub fn uniform_values(
+        shape: Rectangle<i32, Physical>,
+        radius: [f32; 4],
+    ) -> [Uniform<'static>; 3] {
         [
-            Uniform::new("size", (size.0, size.1)),
+            Uniform::new("shape_origin", (shape.loc.x as f32, shape.loc.y as f32)),
+            Uniform::new("shape_size", (shape.size.w as f32, shape.size.h as f32)),
             Uniform::new("radius", radius),
         ]
     }

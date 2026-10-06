@@ -12,7 +12,7 @@
 
 use smithay::utils::{Physical, Rectangle};
 
-use crate::rendering::decorate::Backdrop;
+use crate::{rendering::decorate::Backdrop, utils::squircle};
 
 /// A pixel of slack around a shape, so the antialiased edge is never counted as
 /// opaque. Below that the seam between the two pieces shows.
@@ -49,8 +49,8 @@ impl GlassStack {
 
 /// Where a backdrop is opaque enough to hide what is under it.
 ///
-/// A rounded rectangle is two bands — the shape inset by its radius along one
-/// axis — plus four corner arcs, and only the bands are rectangles. The arcs
+/// A rounded rectangle is two bands — the shape inset by its corner's reach
+/// along one axis — plus four corner arcs, and only the bands are rectangles. The arcs
 /// are left out rather than approximated: a lower piece drawing through a
 /// corner costs one small doubly blurred sliver, while claiming a corner that
 /// is not there would leave a hole.
@@ -61,7 +61,7 @@ fn opaque_core(
     backdrop: &Backdrop,
     geometry: Rectangle<i32, Physical>,
 ) -> impl Iterator<Item = Rectangle<i32, Physical>> {
-    let radius = backdrop.radius.max(0.0).ceil() as i32;
+    let radius = squircle::reach(backdrop.radius).ceil() as i32;
     let bands = match (backdrop.alpha >= 1.0, radius > 0) {
         (false, _) => Vec::new(),
         (true, false) => vec![inset(backdrop.mask, MARGIN, MARGIN)],
@@ -153,10 +153,12 @@ mod tests {
 
         let under = backdrop(rect(0, 0, 100, 100), 0.0, 1.0);
         let occluders = stack.occlude(&under, under.geometry);
-        assert_eq!(occluders, vec![rect(21, 1, 58, 98), rect(1, 21, 98, 58)]);
+        // A squircle corner of radius 20 starts curving 30 pixels in.
+        assert_eq!(occluders, vec![rect(31, 1, 38, 98), rect(1, 31, 98, 38)]);
 
-        // The corner itself is claimed by neither band.
+        // The corner, and the start of its curve, are claimed by neither band.
         assert!(!occluders.iter().any(|rect| rect.contains((4, 4))));
+        assert!(!occluders.iter().any(|rect| rect.contains((25, 2))));
     }
 
     #[test]

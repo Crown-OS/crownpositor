@@ -12,6 +12,7 @@ use smithay::{
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
 };
 
+use crate::rendering::corners::CornerMemory;
 use crate::{
     backend::{
         present::{self, ReleasedClients},
@@ -37,6 +38,7 @@ pub struct WinitState {
     pub dmabuf_feedback: Option<DmabufFeedback>,
     /// Every backdrop's blur pyramid on this output, kept across frames.
     pub blur: BlurCache,
+    pub corners: CornerMemory,
 }
 
 pub fn init(state: &mut State) -> anyhow::Result<()> {
@@ -93,6 +95,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         dmabuf_global,
         dmabuf_feedback,
         blur: BlurCache::default(),
+        corners: CornerMemory::default(),
     }));
 
     state
@@ -268,6 +271,7 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
         let bounds: Rectangle<i32, Physical> =
             Rectangle::from_size(monitor.geometry().size.to_physical_precise_round(scale));
         winit.blur.begin_frame();
+        winit.corners.begin_frame();
         let content = winit.blur.content();
         let blur = blur_config.enabled.then_some(BlurSession {
             cache: &mut winit.blur,
@@ -280,7 +284,7 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
             shell,
             monitor,
             renderer,
-            &mut GlesDecorator::new(blur),
+            &mut GlesDecorator::new(blur, &mut winit.corners),
             &mut input.cursor,
             input.pointer_location,
             scale,

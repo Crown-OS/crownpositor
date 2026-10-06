@@ -11,6 +11,7 @@ use smithay::{
 
 use protocols::crownos_screencast::ScreencastSession;
 
+use crate::rendering::corners::CornerMemory;
 use crate::{
     backend::capture::{
         cursor::CursorReport, nv12::Nv12Target, pacing::SlotAges, sync::ExplicitSync,
@@ -38,6 +39,7 @@ pub struct RenderTargets {
     pub damage: Option<OutputDamageTracker>,
     pub ages: SlotAges,
     pub blur: BlurCache,
+    pub corners: CornerMemory,
     pub nv12: Nv12Target,
 }
 
@@ -52,6 +54,7 @@ impl RenderTargets {
         self.ages.forget();
         self.nv12.forget();
         self.blur = BlurCache::default();
+        self.corners = CornerMemory::default();
     }
 }
 
