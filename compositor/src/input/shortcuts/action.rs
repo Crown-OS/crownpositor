@@ -106,6 +106,10 @@ pub enum Action {
         follow: bool,
     },
     MoveWorkspaceToOutput(Direction),
+    /// Appends a workspace to the focused output and switches to it.
+    CreateWorkspace,
+    /// Removes the active workspace; its windows move to a neighbour.
+    RemoveWorkspace,
 
     ToggleFloating,
     ToggleFullscreen,
@@ -205,6 +209,8 @@ impl FromStr for Action {
             )),
 
             "workspace" => Ok(Self::Workspace(arg("workspace", parts)?.parse()?)),
+            "create-workspace" | "new-workspace" => Ok(Self::CreateWorkspace),
+            "remove-workspace" => Ok(Self::RemoveWorkspace),
             "move-to-workspace" => {
                 let target: WorkspaceRef = arg("workspace", parts.clone())?.parse()?;
                 // Opt-in: being yanked along with the window is surprising.
@@ -265,6 +271,8 @@ mod tests {
         assert_eq!(parse("quit"), Action::Quit);
         assert_eq!(parse("close-window"), Action::CloseWindow);
         assert_eq!(parse("toggle-fullscreen"), Action::ToggleFullscreen);
+        assert_eq!(parse("create-workspace"), Action::CreateWorkspace);
+        assert_eq!(parse("remove-workspace"), Action::RemoveWorkspace);
     }
 
     #[test]

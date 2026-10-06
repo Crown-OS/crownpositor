@@ -452,10 +452,6 @@ pub fn background_elements<R, D>(
 }
 
 /// The workspaces' names, under their previews.
-///
-/// The last workspace is always the empty one the model keeps spare, so it is
-/// drawn as a `+`: the place a window goes to start a new workspace, which is
-/// exactly what dropping one on it does.
 pub fn label_elements<R, D>(
     elements: &mut Elements<R, D>,
     monitor: &Monitor,
@@ -474,17 +470,11 @@ pub fn label_elements<R, D>(
     }
 
     let climb = scene::climb(space.canvas(), space.metrics(), reveal);
-    let last = monitor.workspaces().len().saturating_sub(1);
     let colour = [1.0, 1.0, 1.0, 1.0];
 
     for (index, slot) in space.bar().iter().enumerate() {
-        let name = if index == last {
-            "+".to_owned()
-        } else {
-            (index + 1).to_string()
-        };
-
-        let Some(label) = style.text.label(&name, scale.x, colour, index != last) else {
+        let name = (index + 1).to_string();
+        let Some(label) = style.text.label(&name, scale.x, colour, true) else {
             continue;
         };
         let size = logical(label.size);

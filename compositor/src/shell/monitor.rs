@@ -116,8 +116,8 @@ pub struct Monitor {
     global: Option<GlobalId>,
     config: OutputConfig,
 
-    /// Ordered and never empty; the last entry is always empty, so scrolling
-    /// past the end always lands somewhere real.
+    /// Ordered and never empty. Workspaces persist until removed explicitly:
+    /// emptying one keeps it, the way macOS keeps an empty desktop.
     workspaces: Vec<Workspace>,
     active: usize,
     previous: usize,
@@ -165,10 +165,7 @@ impl Monitor {
             fixed_position: None,
             spacecontrol: SpaceControl::new(),
         };
-        monitor
-            .workspaces
-            .push(Workspace::new(id, default_mode, gaps));
-        monitor.push_areas();
+        monitor.add_workspace();
         monitor
     }
 
@@ -244,14 +241,27 @@ impl Monitor {
         std::mem::take(&mut self.workspaces)
     }
 
+    /// Appends a fresh workspace and returns its index.
+    pub fn add_workspace(&mut self) -> usize {
+        let mut workspace = Workspace::new(self.id, self.default_mode, self.gaps);
+        workspace.set_area(
+            shrink(self.usable, self.gaps.outer),
+            Rectangle::from_size(self.config.logical_size()),
+        );
+        self.workspaces.push(workspace);
+        self.workspaces.len() - 1
+    }
+
     pub(super) fn take_workspace(&mut self, id: WorkspaceId) -> Option<Workspace> {
         let index = self.index_of(id)?;
+        let active_id = self.workspaces[self.active].id();
+        let previous_id = self.workspaces[self.previous].id();
         let workspace = self.workspaces.remove(index);
-        // Removing renumbers everything after `index`, and a fractional
-        // viewport position means nothing across a renumbering.
+        // Rebase by id so the workspace on screen stays on screen; only the
+        // removed one's own slot falls back to the index it vacated.
         let last = self.workspaces.len().saturating_sub(1);
-        self.active = self.active.min(last);
-        self.previous = self.previous.min(last);
+        self.active = self.index_of(active_id).unwrap_or(index.min(last));
+        self.previous = self.index_of(previous_id).unwrap_or(self.active);
         self.switch.snap_to(self.active);
         Some(workspace)
     }
@@ -505,79 +515,30 @@ impl Monitor {
 
     /// Restores the workspace-list invariants. Every mutation ends here.
     pub fn normalize(&mut self) {
-        // Reaping renumbers the list, and a viewport in flight sits *between*
-        // two numbers — rebasing it would jump the animation. It happens on the
-        // first normalize after the switch lands, which the render loop
-        // guarantees will come.
-        if !self.switch.is_active() {
-            self.reap_empty();
-        }
-        self.ensure_trailing_empty();
-        debug_assert!(self.workspaces.last().is_some_and(Workspace::is_empty));
-        debug_assert!(self.active < self.workspaces.len());
-    }
-
-    /// Drops empty workspaces that are neither active nor trailing.
-    ///
-    /// The active one is spared even when empty: reaping the workspace the user
-    /// is looking at would teleport them mid-gesture. It goes as soon as they
-    /// leave, via the `normalize` at the end of the switch.
-    fn reap_empty(&mut self) {
         if self.workspaces.is_empty() {
-            return;
+            self.add_workspace();
         }
-
-        // Rebase by id, not index — index arithmetic after a `retain` is where
-        // this always breaks.
-        let active_id = self.workspaces[self.active].id();
-        let previous_id = self.workspaces[self.previous].id();
         let last = self.workspaces.len() - 1;
-
-        let mut index = 0;
-        self.workspaces.retain(|ws| {
-            let keep = !ws.is_empty() || ws.id() == active_id || index == last;
-            index += 1;
-            keep
-        });
-
-        self.active = self.index_of(active_id).unwrap_or(0);
-        self.previous = self.index_of(previous_id).unwrap_or(self.active);
-        // The viewport is at rest on the old index; re-anchor it on the new one
-        // so the same workspace stays on screen.
-        self.switch.snap_to(self.active);
+        self.active = self.active.min(last);
+        self.previous = self.previous.min(last);
     }
 
-    fn ensure_trailing_empty(&mut self) {
-        if self.workspaces.last().is_some_and(Workspace::is_empty) {
-            return;
-        }
-        let mut workspace = Workspace::new(self.id, self.default_mode, self.gaps);
-        workspace.set_area(
-            shrink(self.usable, self.gaps.outer),
-            Rectangle::from_size(self.config.logical_size()),
-        );
-        self.workspaces.push(workspace);
-    }
-
-    /// Clamps rather than creating, and never wraps.
-    ///
-    /// `Super+8` on a three-workspace monitor lands on the trailing empty rather
-    /// than conjuring five empties that reaping would immediately delete. And
-    /// "next" from the last workspace already means "a new one" — wrapping would
-    /// make it mean two different things.
-    pub fn resolve(&self, target: WorkspaceRef) -> usize {
-        let last = self.workspaces.len().saturating_sub(1);
+    /// Never creates and never wraps: `Super+8` on a three-workspace monitor
+    /// names nothing, while "next" from the last workspace stays put.
+    pub fn resolve(&self, target: WorkspaceRef) -> Option<usize> {
+        let last = self.workspaces.len().checked_sub(1)?;
         match target {
-            WorkspaceRef::Index(index) => index.min(last),
+            WorkspaceRef::Index(index) => (index <= last).then_some(index),
             WorkspaceRef::Relative(delta) => {
-                (self.active as i64 + delta as i64).clamp(0, last as i64) as usize
+                Some((self.active as i64 + delta as i64).clamp(0, last as i64) as usize)
             }
-            WorkspaceRef::Previous => self.previous.min(last),
+            WorkspaceRef::Previous => Some(self.previous.min(last)),
         }
     }
 
     pub fn switch_to(&mut self, target: WorkspaceRef) -> bool {
-        self.activate(self.resolve(target))
+        self.resolve(target)
+            .is_some_and(|index| self.activate(index))
     }
 
     pub fn activate(&mut self, index: usize) -> bool {
@@ -662,11 +623,8 @@ pub fn output_id(output: &Output) -> OutputId {
 mod tests {
     use super::*;
 
-    /// A monitor with `count` populated workspaces plus the trailing empty.
-    ///
-    /// `Workspace::is_empty` is what reaping keys on, so the fake tiles are
-    /// simulated by leaving the list alone and driving `resolve` directly —
-    /// building real `Tile`s would need live Wayland objects.
+    /// A monitor with `workspaces` empty workspaces; building real `Tile`s
+    /// would need live Wayland objects.
     fn monitor(workspaces: usize) -> Monitor {
         let mut monitor = Monitor {
             id: OutputId::next(),
@@ -719,68 +677,76 @@ mod tests {
     }
 
     #[test]
-    fn an_index_past_the_end_clamps_instead_of_creating() {
+    fn an_index_past_the_end_names_nothing() {
         let monitor = monitor(3);
-        // Super+8 on a three-workspace monitor lands on the last one, rather
-        // than conjuring five empties that reaping would delete anyway.
-        assert_eq!(monitor.resolve(WorkspaceRef::Index(7)), 2);
-        assert_eq!(monitor.resolve(WorkspaceRef::Index(1)), 1);
+        assert_eq!(monitor.resolve(WorkspaceRef::Index(7)), None);
+        assert_eq!(monitor.resolve(WorkspaceRef::Index(1)), Some(1));
     }
 
     #[test]
     fn relative_movement_does_not_wrap() {
         let mut monitor = monitor(3);
         monitor.active = 2;
-        assert_eq!(
-            monitor.resolve(WorkspaceRef::Relative(1)),
-            2,
-            "next from the last workspace stays put; the trailing empty is what grows the list"
-        );
+        assert_eq!(monitor.resolve(WorkspaceRef::Relative(1)), Some(2));
 
         monitor.active = 0;
-        assert_eq!(monitor.resolve(WorkspaceRef::Relative(-1)), 0);
-        assert_eq!(monitor.resolve(WorkspaceRef::Relative(1)), 1);
+        assert_eq!(monitor.resolve(WorkspaceRef::Relative(-1)), Some(0));
+        assert_eq!(monitor.resolve(WorkspaceRef::Relative(1)), Some(1));
     }
 
     #[test]
     fn previous_returns_where_you_came_from() {
         let mut monitor = monitor(4);
         monitor.previous = 2;
-        assert_eq!(monitor.resolve(WorkspaceRef::Previous), 2);
+        assert_eq!(monitor.resolve(WorkspaceRef::Previous), Some(2));
 
-        // Clamped like everything else, in case the list shrank underneath it.
+        // Clamped, in case the list shrank underneath it.
         monitor.previous = 9;
-        assert_eq!(monitor.resolve(WorkspaceRef::Previous), 3);
+        assert_eq!(monitor.resolve(WorkspaceRef::Previous), Some(3));
     }
 
     #[test]
-    fn normalize_reaps_every_empty_workspace_but_the_active_and_trailing_ones() {
+    fn empty_workspaces_survive_normalize() {
         let mut monitor = monitor(4);
         monitor.normalize();
-
-        // All four were empty. The active one is spared — reaping the workspace
-        // the user is looking at would teleport them — and so is the trailing
-        // one, so "scroll past the end" always lands somewhere real.
-        assert_eq!(monitor.workspaces().len(), 2);
+        assert_eq!(monitor.workspaces().len(), 4);
         assert_invariants(&monitor);
+    }
+
+    #[test]
+    fn normalize_never_leaves_a_monitor_without_a_workspace() {
+        let mut monitor = monitor(0);
+        monitor.normalize();
+        assert_eq!(monitor.workspaces().len(), 1);
+        assert_invariants(&monitor);
+    }
+
+    #[test]
+    fn adding_appends_without_moving_the_viewport() {
+        let mut monitor = monitor(2);
+        assert_eq!(monitor.add_workspace(), 2);
+        assert_eq!(monitor.active_index(), 0);
+        assert_eq!(monitor.workspaces().len(), 3);
+    }
+
+    #[test]
+    fn removing_an_earlier_workspace_keeps_the_active_one_on_screen() {
+        let mut monitor = monitor(3);
+        monitor.activate(2);
+        settle(&mut monitor);
+        let active = monitor.active().id();
+        let first = monitor.workspaces()[0].id();
+
+        assert!(monitor.take_workspace(first).is_some());
+        assert_eq!(monitor.active().id(), active);
+        assert_eq!(monitor.switch().position(), 1.0);
     }
 
     /// The rules `Shell::assert_invariants` enforces, for one monitor.
     fn assert_invariants(monitor: &Monitor) {
-        assert!(
-            monitor.workspaces().last().is_some_and(Workspace::is_empty),
-            "the last workspace must always be empty"
-        );
+        assert!(!monitor.workspaces().is_empty());
         assert!(monitor.active_index() < monitor.workspaces().len());
         assert!(monitor.previous_index() < monitor.workspaces().len());
-
-        let last = monitor.workspaces().len() - 1;
-        for (index, workspace) in monitor.workspaces().iter().enumerate() {
-            assert!(
-                !workspace.is_empty() || index == monitor.active_index() || index == last,
-                "workspace {index} is empty but neither active nor trailing"
-            );
-        }
     }
 
     #[test]
@@ -807,23 +773,15 @@ mod tests {
     }
 
     #[test]
-    fn switching_away_reaps_the_workspace_you_left_once_the_viewport_lands() {
+    fn switching_away_keeps_the_empty_workspace_you_left() {
         let mut monitor = monitor(3);
         monitor.activate(1);
-        assert_eq!(
-            monitor.workspaces().len(),
-            3,
-            "renumbering the list under a sliding viewport would jump the animation"
-        );
-
         settle(&mut monitor);
         monitor.normalize();
 
-        // Index 0 was empty and is no longer active, so it is gone — and the
-        // viewport followed the workspace, not the index.
-        assert_eq!(monitor.workspaces().len(), 2);
-        assert_eq!(monitor.active_index(), 0);
-        assert_eq!(monitor.switch().position(), 0.0);
+        assert_eq!(monitor.workspaces().len(), 3);
+        assert_eq!(monitor.active_index(), 1);
+        assert_eq!(monitor.switch().position(), 1.0);
         assert_invariants(&monitor);
     }
 
@@ -917,8 +875,6 @@ mod tests {
         monitor.activate(2);
 
         assert!(!monitor.is_switching(), "nothing left to animate");
-        // Nothing was in flight, so reaping was not deferred — which renumbers
-        // the list. The viewport must have followed the workspace through it.
         assert_eq!(monitor.switch().position(), monitor.active_index() as f64);
         assert_invariants(&monitor);
     }
@@ -926,7 +882,7 @@ mod tests {
     #[test]
     fn a_fresh_monitor_already_holds_the_invariant() {
         let monitor = monitor(1);
-        assert!(monitor.workspaces().last().unwrap().is_empty());
+        assert_invariants(&monitor);
         assert_eq!(monitor.active_index(), 0);
     }
 
@@ -934,13 +890,17 @@ mod tests {
     fn resolve_survives_a_single_workspace() {
         let monitor = monitor(1);
         for target in [
-            WorkspaceRef::Index(9),
             WorkspaceRef::Relative(5),
             WorkspaceRef::Relative(-5),
             WorkspaceRef::Previous,
         ] {
-            assert_eq!(monitor.resolve(target), 0, "{target:?} must stay in range");
+            assert_eq!(
+                monitor.resolve(target),
+                Some(0),
+                "{target:?} must stay in range"
+            );
         }
+        assert_eq!(monitor.resolve(WorkspaceRef::Index(9)), None);
     }
 }
 

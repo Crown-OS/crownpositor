@@ -459,11 +459,9 @@ impl Shell {
         let mut monitor = self.monitors.remove(index);
         let connector = monitor.config().connector.clone();
 
-        // Drop the trailing empty; it carries nothing worth moving.
+        // An empty workspace carries nothing worth moving to another screen.
         let mut orphans = monitor.drain_workspaces();
-        if orphans.last().is_some_and(Workspace::is_empty) {
-            orphans.pop();
-        }
+        orphans.retain(|workspace| !workspace.is_empty());
 
         match survivor {
             Some(target) => {
@@ -495,7 +493,7 @@ impl Shell {
         self.normalize_all();
     }
 
-    /// Moves a rescued workspace onto a monitor, before its trailing empty.
+    /// Moves a rescued workspace onto the end of a monitor's list.
     fn adopt(&mut self, workspace: Workspace, target: OutputId) {
         let ids: Vec<WindowId> = workspace.tiles().iter().map(Tile::id).collect();
         let workspace_id = workspace.id();
@@ -1069,7 +1067,9 @@ impl Shell {
             return false;
         };
 
-        let index = monitor.resolve(target);
+        let Some(index) = monitor.resolve(target) else {
+            return false;
+        };
         let Some(destination) = monitor.workspaces().get(index).map(Workspace::id) else {
             return false;
         };
@@ -1089,12 +1089,51 @@ impl Shell {
         }
         if follow {
             self.switch_workspace(WorkspaceRef::Index(index));
-        } else {
-            // The window left, so the source may now be reapable.
-            if let Some(monitor) = self.focused_monitor_mut() {
-                monitor.normalize();
-            }
         }
+        true
+    }
+
+    /// Appends a workspace to the focused monitor and returns its index.
+    pub fn create_workspace(&mut self) -> Option<usize> {
+        self.focused_monitor_mut().map(Monitor::add_workspace)
+    }
+
+    /// Removes a workspace, handing its windows to the neighbour before it (or
+    /// after it, for the first). The last workspace on a monitor stays.
+    pub fn remove_workspace(&mut self, output: OutputId, workspace: WorkspaceId) -> bool {
+        let Some(monitor) = self.monitor_by_id(output) else {
+            return false;
+        };
+        let Some(index) = monitor.index_of(workspace) else {
+            return false;
+        };
+        let heir_index = if index == 0 { 1 } else { index - 1 };
+        let Some(heir) = monitor.workspaces().get(heir_index).map(Workspace::id) else {
+            return false;
+        };
+        let was_active = monitor.active_index() == index;
+        let orphans: Vec<WindowId> = monitor.workspaces()[index]
+            .tiles()
+            .iter()
+            .map(Tile::id)
+            .collect();
+
+        let heir_location = Location {
+            output,
+            workspace: heir,
+        };
+        for id in orphans {
+            self.move_tile(id, heir_location);
+        }
+
+        let Some(monitor) = self.monitor_by_id_mut(output) else {
+            return false;
+        };
+        monitor.take_workspace(workspace);
+        if was_active && let Some(heir_index) = monitor.index_of(heir) {
+            monitor.activate(heir_index);
+        }
+        monitor.normalize();
         true
     }
 
@@ -1672,8 +1711,8 @@ impl Shell {
 
         for monitor in &self.monitors {
             assert!(
-                monitor.workspaces().last().is_some_and(Workspace::is_empty),
-                "monitor {} has no trailing empty workspace",
+                !monitor.workspaces().is_empty(),
+                "monitor {} has no workspace",
                 monitor.id()
             );
             assert!(monitor.active_index() < monitor.workspaces().len());
