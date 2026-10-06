@@ -502,6 +502,12 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
         )))
     }
 
+    fn blur_strength_for(&self, shrink: f64) -> f32 {
+        self.blur
+            .as_ref()
+            .map_or(1.0, |blur| blur.config.strength_for(shrink))
+    }
+
     fn blur_fingerprint(&self) -> Option<u64> {
         self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }
@@ -566,6 +572,12 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
         Some(Decorated::Window(Rounded::new(
             element, program, shape, radius, reshaped,
         )))
+    }
+
+    fn blur_strength_for(&self, shrink: f64) -> f32 {
+        self.blur
+            .as_ref()
+            .map_or(1.0, |blur| blur.config.strength_for(shrink))
     }
 
     fn blur_fingerprint(&self) -> Option<u64> {

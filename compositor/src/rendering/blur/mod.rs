@@ -173,6 +173,45 @@ impl BlurConfig {
         )
     }
 
+    /// The strength whose blur reaches `shrink` of this config's radius: the
+    /// glass of a window shown at `shrink` of its size, which on the desktop
+    /// blurred that much further. Radius grows exponentially with pyramid
+    /// depth and monotonically with strength, so a bisection finds the depth. A thumbnail too
+    /// small for any blur keeps the shallowest one, so it still reads as glass
+    /// — and costs a fraction of the full pyramid over a fraction of the area.
+    pub fn strength_for(&self, shrink: f64) -> f32 {
+        const SHALLOWEST: f32 = 0.05;
+        if shrink >= 1.0 {
+            return 1.0;
+        }
+        let reach = |strength: f32| {
+            let (passes, offset) = self.taper(strength);
+            BlurConfig {
+                passes: passes as u8,
+                offset,
+                ..*self
+            }
+            .radius() as f64
+        };
+        let target = reach(1.0) * shrink.max(0.0);
+        let (mut low, mut high) = (SHALLOWEST, 1.0_f32);
+        for _ in 0..16 {
+            let mid = (low + high) * 0.5;
+            if reach(mid) < target {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        // The reach jumps where a whole level is added, so the target can fall
+        // in a gap; take whichever side lands nearer.
+        if target - reach(low) < reach(high) - target {
+            low
+        } else {
+            high
+        }
+    }
+
     /// The material the compositor's own glass of `kind` — window frames,
     /// menus, window previews — is made of, at one output's scale.
     pub fn glass(&self, scale: f64, kind: GlassKind) -> Glass {
@@ -834,6 +873,26 @@ mod tests {
         assert_eq!(blur_strength(16), 0.5);
         assert_eq!(blur_strength(32), 1.0);
         assert_eq!(blur_strength(96), 1.0);
+    }
+
+    #[test]
+    fn a_shrunk_window_blurs_by_as_much_less() {
+        let config = BlurConfig::default();
+        assert_eq!(config.strength_for(1.0), 1.0);
+        let half = config.strength_for(0.5);
+        let tenth = config.strength_for(0.1);
+        assert!(tenth < half && half < 1.0, "{tenth} {half}");
+        assert!(tenth > 0.0, "a thumbnail still gets some glass");
+
+        let (passes, offset) = config.taper(half);
+        let radius = BlurConfig {
+            passes: passes as u8,
+            offset,
+            ..config
+        }
+        .radius() as f64;
+        let full = config.radius() as f64;
+        assert!((radius / full - 0.5).abs() < 0.1, "{radius} of {full}");
     }
 
     #[test]
