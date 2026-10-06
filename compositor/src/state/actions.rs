@@ -16,7 +16,7 @@ use protocols::{
 use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
-    input::shortcuts::{Action, Bindings},
+    input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
     shell::tile::WindowState,
     state::State,
@@ -74,6 +74,20 @@ impl State {
             }
             Action::MoveWindowToWorkspace { target, follow } => {
                 self.shell.move_focused_to_workspace(target, follow);
+            }
+            Action::CreateWorkspace => {
+                if let Some(index) = self.shell.create_workspace() {
+                    self.shell.switch_workspace(WorkspaceRef::Index(index));
+                }
+            }
+            Action::RemoveWorkspace => {
+                if let Some((output, workspace)) = self
+                    .shell
+                    .focused_monitor()
+                    .map(|monitor| (monitor.id(), monitor.active().id()))
+                {
+                    self.shell.remove_workspace(output, workspace);
+                }
             }
 
             Action::ToggleFloating => {
