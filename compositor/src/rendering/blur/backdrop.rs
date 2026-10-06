@@ -210,7 +210,7 @@ impl BlurBackdrop {
         projection: [f32; 9],
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-    ) -> Option<[Uniform<'static>; 11]> {
+    ) -> Option<[Uniform<'static>; 14]> {
         let (mut viewport, mut previous) = ([0; 4], 0);
         unsafe {
             gl.GetIntegerv(ffi::VIEWPORT, viewport.as_mut_ptr());
@@ -330,10 +330,9 @@ impl BlurBackdrop {
             self.radius,
             self.config.noise,
             self.glass,
-            // Where the screen's upper left lies, in the framebuffer's own
-            // axes. The material lights itself from there, and this is the one
+            // Where the light lies, in the framebuffer's own axes: the one
             // place a rotated or flipped output has to be accounted for.
-            space.direction((-1.0, -1.0)),
+            space.direction(self.glass.shading.light),
         ))
     }
 }

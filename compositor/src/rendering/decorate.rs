@@ -7,7 +7,7 @@
 //! if none.
 
 use crate::rendering::{
-    blur::{Glass, ShadowPiece},
+    blur::{Glass, GlassKind, ShadowPiece},
     decoration::{Border, TitleBarParams},
 };
 
@@ -130,8 +130,8 @@ where
     /// window frames, menus, snap previews — at one output's scale. A surface
     /// that asked for its own through `crownos_background_effects` gets that
     /// instead, and never goes through here.
-    fn glass(&self, scale: f64) -> Glass {
-        let _ = scale;
+    fn glass(&self, scale: f64, kind: GlassKind) -> Glass {
+        let _ = (scale, kind);
         Glass::default()
     }
 

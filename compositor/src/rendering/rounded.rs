@@ -27,7 +27,7 @@ use smithay::{
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
-        blur::{BlurBackdrop, BlurSession, Glass},
+        blur::{BlurBackdrop, BlurSession, Glass, GlassKind},
         decorate::{Backdrop, Cropped, Shadow, TileDecorator},
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
     },
@@ -490,10 +490,10 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
         self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }
 
-    fn glass(&self, scale: f64) -> Glass {
+    fn glass(&self, scale: f64, kind: GlassKind) -> Glass {
         self.blur
             .as_ref()
-            .map_or_else(Glass::default, |blur| blur.config.glass(scale))
+            .map_or_else(Glass::default, |blur| blur.config.glass(scale, kind))
     }
 
     fn backdrop(
@@ -554,10 +554,10 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
         self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }
 
-    fn glass(&self, scale: f64) -> Glass {
+    fn glass(&self, scale: f64, kind: GlassKind) -> Glass {
         self.blur
             .as_ref()
-            .map_or_else(Glass::default, |blur| blur.config.glass(scale))
+            .map_or_else(Glass::default, |blur| blur.config.glass(scale, kind))
     }
 
     fn backdrop(

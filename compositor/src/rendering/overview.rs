@@ -37,7 +37,7 @@ use spacecontrol::{
 use crate::{
     rendering::{
         Elements, FrameStyle, backdrop_elements,
-        blur::{self, ShadowPiece},
+        blur::{self, GlassKind, ShadowPiece},
         decorate::{Backdrop, Shadow, TileDecorator},
         decoration::window::Border,
         element::CrownElement,
@@ -277,6 +277,7 @@ fn window_backdrop<R, D>(
         mask,
         behind.radius,
         behind.alpha,
+        GlassKind::Window,
     );
 }
 
@@ -333,7 +334,7 @@ fn preview_pane<R, D>(
             geometry,
             mask: geometry,
             radius,
-            glass: decorator.glass(scale.x),
+            glass: decorator.glass(scale.x, GlassKind::Window),
             alpha: pane.alpha,
             strength: 1.0,
         },
@@ -398,7 +399,7 @@ pub fn background_elements<R, D>(
 
     let blur = space.overview().blur();
     if blur > 0.0 && decorator.blur_fingerprint().is_some() {
-        let glass = decorator.glass(scale.x);
+        let glass = decorator.glass(scale.x, GlassKind::Window);
         if let Some(pane) = decorator.backdrop(
             renderer,
             Backdrop {

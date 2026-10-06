@@ -42,6 +42,7 @@ use config::Appearance;
 
 use crate::{
     rendering::{
+        blur::GlassKind,
         cursor::Cursor,
         decorate::{Backdrop, Shadow, TileDecorator},
         decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
@@ -406,6 +407,7 @@ fn tile_elements<R, D>(
             clip,
             client_radius.unwrap_or(radius),
             alpha,
+            GlassKind::Window,
         );
     }
 
@@ -609,7 +611,7 @@ fn frame_backing<R, D>(
             geometry: sheet,
             mask: sheet,
             radius: outer,
-            glass: decorator.glass(style.scale),
+            glass: decorator.glass(style.scale, GlassKind::Window),
             alpha,
             strength: 1.0,
         },
@@ -818,7 +820,7 @@ fn menu_elements<R, D>(
                 geometry: frame,
                 mask: frame,
                 radius: style.radius,
-                glass: decorator.glass(style.scale),
+                glass: decorator.glass(style.scale, GlassKind::Menu),
                 alpha: 1.0,
                 strength: 1.0,
             },
@@ -893,7 +895,7 @@ fn snap_preview_elements<R, D>(
                 geometry,
                 mask: geometry,
                 radius: style.radius,
-                glass: decorator.glass(style.scale),
+                glass: decorator.glass(style.scale, GlassKind::Menu),
                 alpha: alpha * 0.85,
                 strength: 1.0,
             },
@@ -941,6 +943,7 @@ pub(crate) fn backdrop_elements<R, D>(
     mask: Rectangle<i32, Physical>,
     radius: f32,
     alpha: f32,
+    kind: GlassKind,
 ) where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Clone + 'static,
@@ -952,7 +955,9 @@ pub(crate) fn backdrop_elements<R, D>(
         return;
     };
 
-    if let Some(effects) = blur::place_surface_effects(surface, origin, scale, mask) {
+    let glass = decorator.glass(scale.x, kind);
+    if let Some(effects) = blur::place_surface_effects(surface, origin, scale, mask, glass.shading)
+    {
         surface_effect_elements(
             out,
             renderer,
@@ -970,7 +975,6 @@ pub(crate) fn backdrop_elements<R, D>(
         return;
     };
 
-    let glass = decorator.glass(scale.x);
     let (ids, commit) = blur::backdrop_slots(surface, rects.len(), fingerprint, generation);
     for (id, geometry) in std::iter::zip(ids, rects) {
         if let Some(backdrop) = decorator.backdrop(
@@ -1127,6 +1131,7 @@ fn layer_elements<R, D>(
                 clip,
                 radius.unwrap_or(0.0),
                 1.0,
+                GlassKind::Panel,
             );
         }
     }

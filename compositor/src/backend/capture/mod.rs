@@ -212,6 +212,7 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
             cursor: &mut input.cursor,
             pointer: input.pointer_location,
             appearance: &config.current.appearance,
+            glass: &config.current.glass,
             text,
             hovered: input.hovered_control,
         };

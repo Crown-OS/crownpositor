@@ -525,7 +525,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         capture,
         ..
     } = state;
-    let blur_config = BlurConfig::from(&config.current.appearance);
+    let blur_config = BlurConfig::new(&config.current.appearance, &config.current.glass);
     let Some(kms) = backend.kms() else {
         return released;
     };

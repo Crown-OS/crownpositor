@@ -47,11 +47,15 @@
 mod backdrop;
 mod cache;
 mod content;
+mod glow;
 mod scene;
 mod stack;
 
 pub use backdrop::BlurBackdrop;
 pub use cache::{BlurCache, BlurSession};
+pub use glow::{GlassKind, Shading};
+
+use glow::Rims;
 
 use std::sync::Mutex;
 
@@ -66,7 +70,7 @@ use smithay::{
     wayland::compositor::with_states,
 };
 
-use config::Appearance;
+use config::{Appearance, GlassSettings};
 use protocols::{background_effect, crownos_background_effects as crownos};
 
 /// Runtime knobs for the blur pipeline.
@@ -85,10 +89,8 @@ pub struct BlurConfig {
     /// Chroma multiplier about the luma. Above 1.0 is the vibrancy that keeps
     /// colour alive through a heavy blur instead of letting it wash to grey.
     pub vibrancy: f32,
-    /// Width of the refractive rim inside a piece of glass's edge, in *logical*
-    /// pixels. Matched to the border width, because the rim is what a border on
-    /// glass actually looks like.
-    pub rim: f32,
+    /// The lit, refracting rim of each kind of glass.
+    pub rims: Rims,
 }
 
 /// The vibrancy the compositor's own glass is drawn with: 130%, which is where
@@ -100,17 +102,17 @@ const VIBRANCY: f32 = 1.3;
 /// as a surface rather than as a hole.
 const SHEEN: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
 
-impl From<&Appearance> for BlurConfig {
-    /// The file speaks in user units; the pipeline wants what the shader can
+impl BlurConfig {
+    /// The files speak in user units; the pipeline wants what the shader can
     /// hold, so this is where the narrowing and the sanity clamps happen.
-    fn from(appearance: &Appearance) -> Self {
+    pub fn new(appearance: &Appearance, glass: &GlassSettings) -> Self {
         Self {
             enabled: appearance.blur,
             passes: appearance.blur_passes.min(u8::MAX.into()) as u8,
             offset: appearance.blur_size.max(0.0) as f32,
             noise: appearance.blur_noise.clamp(0.0, 1.0) as f32,
             vibrancy: VIBRANCY,
-            rim: appearance.border_width as f32,
+            rims: Rims::from(glass),
         }
     }
 }
@@ -123,7 +125,7 @@ impl Default for BlurConfig {
             offset: 1.5,
             noise: 0.01,
             vibrancy: VIBRANCY,
-            rim: 2.0,
+            rims: Rims::default(),
         }
     }
 }
@@ -171,13 +173,15 @@ impl BlurConfig {
         )
     }
 
-    /// The material the compositor's own glass — window frames, menus, window
-    /// previews — is made of, at one output's scale.
-    pub fn glass(&self, scale: f64) -> Glass {
+    /// The material the compositor's own glass of `kind` — window frames,
+    /// menus, window previews — is made of, at one output's scale.
+    pub fn glass(&self, scale: f64, kind: GlassKind) -> Glass {
+        let rim = self.rims.get(kind);
         Glass {
             tint: SHEEN,
             saturation: self.vibrancy,
-            rim: (self.rim as f64 * scale) as f32,
+            rim: (rim.width as f64 * scale) as f32,
+            shading: rim.shading,
         }
     }
 
@@ -190,9 +194,9 @@ impl BlurConfig {
             self.offset.to_bits(),
             self.noise.to_bits(),
             self.vibrancy.to_bits(),
-            self.rim.to_bits(),
         ]
         .into_iter()
+        .chain(self.rims.bits())
         .fold(0xcbf2_9ce4_8422_2325, |hash, field| {
             (hash ^ u64::from(field)).wrapping_mul(PRIME)
         })
@@ -215,6 +219,8 @@ pub struct Glass {
     /// Width of the refractive rim just inside the shape's edge, in physical
     /// pixels. Zero leaves the edge flat.
     pub rim: f32,
+    /// How the rim catches the light.
+    pub shading: Shading,
 }
 
 impl Default for Glass {
@@ -226,6 +232,7 @@ impl Default for Glass {
             tint: SHEEN,
             saturation: VIBRANCY,
             rim: 0.0,
+            shading: Shading::default(),
         }
     }
 }
@@ -313,12 +320,14 @@ pub fn surface_corner_radius(surface: &WlSurface, scale: f64) -> Option<f32> {
 ///
 /// `None` when the surface committed no effects at all, which is not the same
 /// as coming back with no pieces: a client may legitimately set a shape that
-/// covers nothing.
+/// covers nothing. The client sizes its own rim; `shading` is how the
+/// compositor lights it for this kind of surface.
 pub fn place_surface_effects(
     surface: &WlSurface,
     origin: Point<i32, Physical>,
     scale: Scale<f64>,
     clip: Rectangle<i32, Physical>,
+    shading: Shading,
 ) -> Option<SurfaceEffects> {
     let committed = with_states(surface, crownos::surface_effects)?;
     let effects = &committed.effects;
@@ -351,6 +360,7 @@ pub fn place_surface_effects(
             .as_ref()
             .map_or(1.0, |blur| 1.0 + (blur.saturation as f32 - 1.0) * strength),
         rim: (effects.border_width as f64 * scale.x) as f32 * strength,
+        shading,
     };
 
     let pieces = effects
@@ -822,13 +832,11 @@ mod tests {
 
     #[test]
     fn the_rim_scales_with_the_output() {
-        let config = BlurConfig {
-            rim: 2.0,
-            ..Default::default()
-        };
-        assert_eq!(config.glass(1.0).rim, 2.0);
-        assert_eq!(config.glass(2.0).rim, 4.0);
-        assert_eq!(config.glass(1.0).saturation, VIBRANCY);
+        let config = BlurConfig::default();
+        let width = config.rims.get(GlassKind::Window).width;
+        assert_eq!(config.glass(1.0, GlassKind::Window).rim, width);
+        assert_eq!(config.glass(2.0, GlassKind::Window).rim, width * 2.0);
+        assert_eq!(config.glass(1.0, GlassKind::Window).saturation, VIBRANCY);
     }
 
     #[test]
@@ -856,7 +864,16 @@ mod tests {
                 vibrancy: 1.6,
                 ..config
             },
-            BlurConfig { rim: 6.0, ..config },
+            BlurConfig {
+                rims: glow::Rims::from(&GlassSettings {
+                    menus: config::EdgeGlow {
+                        adaptive_tint: 0.1,
+                        ..config::EdgeGlow::MENU
+                    },
+                    ..GlassSettings::default()
+                }),
+                ..config
+            },
         ] {
             assert_ne!(config.fingerprint(), changed.fingerprint());
         }

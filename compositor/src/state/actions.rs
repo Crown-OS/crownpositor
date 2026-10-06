@@ -346,6 +346,7 @@ impl State {
                 config.display = display;
                 self.apply_display_gamma();
             }
+            Update::Glass(glass) => config.glass = glass,
         }
 
         self.queue_redraw();

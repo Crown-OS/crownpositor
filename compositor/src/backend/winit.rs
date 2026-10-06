@@ -249,7 +249,7 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
         shell.settle_animations();
     }
 
-    let blur_config = BlurConfig::from(&config.current.appearance);
+    let blur_config = BlurConfig::new(&config.current.appearance, &config.current.glass);
     let transform = winit.output.current_transform();
 
     let submitted = {
