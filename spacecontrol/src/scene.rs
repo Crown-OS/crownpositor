@@ -112,11 +112,7 @@ pub fn grid_area(canvas: Canvas, metrics: &Metrics) -> Rectangle<i32, Logical> {
 
     Rectangle::new(
         (usable.loc.x + gap, top).into(),
-        (
-            (usable.size.w - gap * 2).max(1),
-            (bottom - top).max(1),
-        )
-            .into(),
+        ((usable.size.w - gap * 2).max(1), (bottom - top).max(1)).into(),
     )
 }
 
@@ -140,9 +136,11 @@ pub fn grid(
 
 /// Places `count` workspace previews along the bottom edge.
 ///
-/// Every preview has the output's own aspect ratio, so a workspace reads as a
-/// small copy of the screen. They shrink to fit rather than scrolling: a
-/// thumbnail you cannot see is not a target you can drop a window on.
+/// Every preview has the aspect ratio of the usable area — the screen less what
+/// panels reserved — so a workspace reads as a small copy of the part of the
+/// screen its windows live in, not of a bar it does not own. They shrink to fit
+/// rather than scrolling: a thumbnail you cannot see is not a target you can
+/// drop a window on.
 pub fn bar(canvas: Canvas, count: usize, metrics: &Metrics, out: &mut Vec<Slot>) {
     out.clear();
     if count == 0 {
@@ -155,7 +153,7 @@ pub fn bar(canvas: Canvas, count: usize, metrics: &Metrics, out: &mut Vec<Slot>)
     let label = f64::from(output.size.h) * metrics.label;
     let bar = metrics.bar_px(output.size);
 
-    let aspect = f64::from(output.size.w) / f64::from(output.size.h.max(1));
+    let aspect = f64::from(usable.size.w) / f64::from(usable.size.h.max(1));
     // The tallest a preview can be before the row is wider than the output.
     let widest = (f64::from(usable.size.w) - gap * (count + 1) as f64) / count as f64 / aspect;
     let height = (bar - label - gap).min(widest).max(1.0);

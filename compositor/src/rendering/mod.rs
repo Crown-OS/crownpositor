@@ -92,7 +92,7 @@ impl<'a> FrameStyle<'a> {
         hovered: Option<(WindowId, Control)>,
     ) -> Self {
         Self {
-            radius: appearance.border_radius as f32,
+            radius: (appearance.border_radius as f64 * scale) as f32,
             scale,
             origin,
             dark: appearance.dark_mode,

@@ -68,6 +68,7 @@ pub struct Pane {
     pub shadow: Id,
     pub ring: Id,
     pub rect: Rectangle<f64, Logical>,
+    /// Physical pixels, like a window's.
     pub radius: f32,
     /// How far the workspace is shrunk into its preview. The pane is the
     /// workspace's glass at that size, so its rim shrinks with it.
@@ -149,8 +150,13 @@ pub struct Thumb<'a> {
 /// One workspace's preview along the bottom.
 pub struct Preview<'a> {
     pub slot: Slot,
-    /// The workspace's own area, which its windows' positions are relative to.
+    /// The part of the output the workspace's windows live in — the usable
+    /// area, with whatever panels reserved left out — which their positions
+    /// are relative to.
     pub area: Rectangle<i32, Logical>,
+    /// How far tiled windows sit inside `area`, in logical pixels. The card's
+    /// corners round about the same centres as theirs.
+    pub inset: f64,
     /// Topmost first, so the preview stacks the way the workspace does.
     pub windows: &'a [(&'a Window, Rectangle<i32, Logical>)],
     pub active: bool,
@@ -286,6 +292,7 @@ fn window_at<R, P>(
     painter: &mut P,
     window: &Window,
     rect: Rectangle<f64, Logical>,
+    bounds: Option<Rectangle<i32, Physical>>,
     scale: Scale<f64>,
     radius: f32,
     alpha: f32,
@@ -317,7 +324,11 @@ fn window_at<R, P>(
 
     for surface in surfaces {
         let scaled = RescaleRenderElement::from_element(surface, origin, shrink);
-        let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip) else {
+        let crop = match bounds {
+            Some(bounds) => clip.intersection(bounds).unwrap_or_default(),
+            None => clip,
+        };
+        let Some(cropped) = CropRenderElement::from_element(scaled, scale, crop) else {
             continue;
         };
         if let Some(decorated) = painter.decorate(renderer, cropped, clip, [radius; 4]) {
@@ -385,6 +396,11 @@ pub fn elements<R, P>(
             metrics.hover * preview.lift,
         );
 
+        let shrink = thumb.size.w / f64::from(preview.area.size.w.max(1));
+        let card: Rectangle<i32, Physical> = Rectangle::new(
+            thumb.loc.to_physical_precise_round(scale),
+            thumb.size.to_physical_precise_round(scale),
+        );
         for (window, live) in preview.windows {
             window_at(
                 out,
@@ -392,6 +408,7 @@ pub fn elements<R, P>(
                 painter,
                 window,
                 scene::inside(*live, preview.area, thumb),
+                Some(card),
                 scale,
                 radius,
                 bar as f32,
@@ -405,8 +422,10 @@ pub fn elements<R, P>(
                 shadow: ids.shadow.clone(),
                 ring: ids.ring.clone(),
                 rect: thumb,
-                radius: radius * PREVIEW_RADIUS,
-                shrink: thumb.size.w / f64::from(preview.area.size.w.max(1)),
+                // Concentric with the windows inside: their corners, pushed
+                // out by the gap they keep from the card's edge.
+                radius: (radius + (preview.inset * scale.x) as f32) * shrink as f32,
+                shrink,
                 alpha: bar as f32,
                 ring_colour: preview.active.then_some(palette.active),
             },
@@ -422,6 +441,7 @@ pub fn elements<R, P>(
             painter,
             carried.window,
             carried.rect,
+            None,
             scale,
             radius,
             carried.alpha,
@@ -439,6 +459,7 @@ pub fn elements<R, P>(
             painter,
             thumb.window,
             scene::between(thumb.live, target, progress),
+            None,
             scale,
             radius,
             thumb.alpha,
@@ -457,11 +478,6 @@ pub fn elements<R, P>(
         out.push(OverviewElement::Fill(dim));
     }
 }
-
-/// How round a workspace preview's corners are, against a window's own radius.
-/// Squarer than a window: the preview stands for the whole screen, and a
-/// screen's corners are the display's, not a window's.
-const PREVIEW_RADIUS: f32 = 0.6;
 
 #[cfg(test)]
 mod tests {

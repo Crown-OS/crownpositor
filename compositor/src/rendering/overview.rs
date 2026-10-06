@@ -188,9 +188,10 @@ pub fn overview_elements<R, D>(
         .zip(space.bar())
         .zip(&windows)
         .enumerate()
-        .map(|(index, ((workspace, slot), windows))| Preview {
+        .map(|(index, ((_, slot), windows))| Preview {
             slot: *slot,
-            area: workspace.output_area(),
+            area: monitor.usable(),
+            inset: f64::from(monitor.gaps().outer),
             windows,
             active: index == nearest,
             lift: space.workspace_lift(index),
@@ -313,7 +314,7 @@ fn preview_pane<R, D>(
     if geometry.is_empty() || pane.alpha <= 0.0 {
         return;
     }
-    let radius = pane.radius * scale.x as f32;
+    let radius = pane.radius;
 
     if let Some(colour) = pane.ring_colour
         && let Some(ring) = decorator.border(
