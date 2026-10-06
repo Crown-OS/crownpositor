@@ -21,6 +21,7 @@ use smithay::{
 
 use crate::{
     rendering::{
+        corners::CornerMemory,
         self, FrameStyle,
         blur::{BlurCache, BlurConfig, BlurSession},
         rounded::GlesDecorator,
@@ -248,7 +249,7 @@ pub fn compare(
             let bounds: Rectangle<i32, Physical> =
                 Rectangle::from_size(monitor.geometry().size.to_physical_precise_round(scale));
             harness.blur.begin_frame();
-            let config = BlurConfig::from(appearance);
+            let config = BlurConfig::new(appearance, &config::GlassSettings::default());
             let blur = config.enabled.then_some(BlurSession {
                 cache: &mut harness.blur,
                 config,
@@ -259,7 +260,7 @@ pub fn compare(
                 shell,
                 monitor,
                 renderer,
-                &mut GlesDecorator::new(blur),
+                &mut GlesDecorator::new(blur, &mut CornerMemory::default()),
                 cursor,
                 pointer,
                 scale,
