@@ -1,3 +1,7 @@
+mod repeat;
+
+pub use repeat::HeldControl;
+
 use smithay::{
     backend::input::{Event, InputBackend, KeyState, KeyboardKeyEvent},
     input::keyboard::{FilterResult, Keysym, KeysymHandle, keysyms},
@@ -30,7 +34,8 @@ impl State {
         let key_state = event.state();
 
         // A lock screen must not be able to Super+Q out of itself.
-        let bypass = self.shortcuts_inhibited() || self.shell.session_lock.is_active();
+        let inhibited = self.shortcuts_inhibited();
+        let bypass = inhibited || self.shell.session_lock.is_active();
 
         let action = keyboard.input::<Action, _>(
             self,
@@ -69,6 +74,17 @@ impl State {
                         if let Some(vt) = vt_switch_target(&handle) {
                             state.input.intercepted.insert(handle.raw_code());
                             return FilterResult::Intercept(Action::SwitchVt(vt));
+                        }
+
+                        // Volume and brightness keep working over the overview
+                        // and the lock screen; only a client that inhibits
+                        // shortcuts — a VM, a remote desktop — takes them.
+                        if !inhibited
+                            && let Some(control @ Action::Control(_)) =
+                                state.input.bindings.lookup(modifiers, &handle)
+                        {
+                            state.input.intercepted.insert(handle.raw_code());
+                            return FilterResult::Intercept(control);
                         }
 
                         // An open overview owns the keyboard: the windows
@@ -124,6 +140,14 @@ impl State {
                 self.handle_action(action);
                 return;
             }
+        }
+
+        match (key_state, &action) {
+            (KeyState::Pressed, Some(Action::Control(control))) => {
+                self.hold_control(code, *control);
+            }
+            (KeyState::Released, _) => self.release_control_key(code),
+            _ => {}
         }
 
         if let Some(action) = action {

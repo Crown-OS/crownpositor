@@ -31,6 +31,7 @@ impl FromStr for Direction {
     }
 }
 
+pub use crate::controls::{Control, MediaCommand, Step};
 pub use crate::shell::workspace::WorkspaceRef;
 
 impl FromStr for WorkspaceRef {
@@ -110,6 +111,9 @@ pub enum Action {
     CreateWorkspace,
     /// Removes the active workspace; its windows move to a neighbour.
     RemoveWorkspace,
+
+    /// A volume, brightness or media key.
+    Control(Control),
 
     ToggleFloating,
     ToggleFullscreen,
@@ -211,6 +215,12 @@ impl FromStr for Action {
             "workspace" => Ok(Self::Workspace(arg("workspace", parts)?.parse()?)),
             "create-workspace" | "new-workspace" => Ok(Self::CreateWorkspace),
             "remove-workspace" => Ok(Self::RemoveWorkspace),
+            "volume" | "mic" | "brightness" | "kbd-brightness" | "media" => {
+                let argument = arg("argument", parts)?;
+                Control::parse(name, &argument)
+                    .map(Self::Control)
+                    .map_err(|_| ParseActionError::bad_argument("control", &argument))
+            }
             "move-to-workspace" => {
                 let target: WorkspaceRef = arg("workspace", parts.clone())?.parse()?;
                 // Opt-in: being yanked along with the window is surprising.
@@ -273,6 +283,20 @@ mod tests {
         assert_eq!(parse("toggle-fullscreen"), Action::ToggleFullscreen);
         assert_eq!(parse("create-workspace"), Action::CreateWorkspace);
         assert_eq!(parse("remove-workspace"), Action::RemoveWorkspace);
+    }
+
+    #[test]
+    fn hardware_controls_take_their_argument() {
+        assert_eq!(
+            parse("volume -5"),
+            Action::Control(Control::Volume(Step(-5)))
+        );
+        assert_eq!(
+            parse("media next"),
+            Action::Control(Control::Media(MediaCommand::Next))
+        );
+        assert!("volume".parse::<Action>().is_err());
+        assert!("brightness bright".parse::<Action>().is_err());
     }
 
     #[test]

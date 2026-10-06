@@ -1,5 +1,6 @@
 mod backend;
 mod color;
+mod controls;
 mod handlers;
 mod input;
 mod layout;

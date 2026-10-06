@@ -159,6 +159,18 @@ const fn keysym(key: KeyCode) -> Keysym {
         KeyCode::Comma => keysyms::KEY_comma,
         KeyCode::Period => keysyms::KEY_period,
         KeyCode::Slash => keysyms::KEY_slash,
+        KeyCode::AudioVolumeUp => keysyms::KEY_XF86AudioRaiseVolume,
+        KeyCode::AudioVolumeDown => keysyms::KEY_XF86AudioLowerVolume,
+        KeyCode::AudioVolumeMute => keysyms::KEY_XF86AudioMute,
+        KeyCode::MicrophoneMute => keysyms::KEY_XF86AudioMicMute,
+        KeyCode::MediaPlayPause => keysyms::KEY_XF86AudioPlay,
+        KeyCode::MediaStop => keysyms::KEY_XF86AudioStop,
+        KeyCode::MediaTrackNext => keysyms::KEY_XF86AudioNext,
+        KeyCode::MediaTrackPrevious => keysyms::KEY_XF86AudioPrev,
+        KeyCode::BrightnessUp => keysyms::KEY_XF86MonBrightnessUp,
+        KeyCode::BrightnessDown => keysyms::KEY_XF86MonBrightnessDown,
+        KeyCode::KeyboardBrightnessUp => keysyms::KEY_XF86KbdBrightnessUp,
+        KeyCode::KeyboardBrightnessDown => keysyms::KEY_XF86KbdBrightnessDown,
     })
 }
 

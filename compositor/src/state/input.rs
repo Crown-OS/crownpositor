@@ -10,6 +10,7 @@ use config::Config;
 use crate::{
     input::capture::InputCaptureState,
     input::decoration::{FramePress, LastClick},
+    input::keyboard::HeldControl,
     input::mouse::constraint::PointerLock,
     input::{
         shortcuts::{Bindings, GestureBindings, ModMask},
@@ -29,6 +30,8 @@ pub struct InputState {
     /// too. Otherwise the client sees a release with no matching press and the
     /// app's modifier stays logically stuck down.
     pub intercepted: HashSet<Keycode>,
+    /// A held volume or brightness key, stepping again on a timer.
+    pub held_control: Option<HeldControl>,
 
     /// A held modifier-only chord, plus whether an ordinary key was struck while
     /// it was held. `Super` alone fires on release, and only if nothing else
@@ -69,6 +72,7 @@ impl InputState {
             gesture_bindings: GestureBindings::defaults(),
             gesture: GestureState::new(),
             intercepted: HashSet::new(),
+            held_control: None,
             mod_chord_armed: None,
             mod_chord_polluted: false,
             pointer_location: (0.0, 0.0).into(),
