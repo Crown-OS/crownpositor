@@ -408,7 +408,7 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 [[package]]
 name = "crownos-config"
 version = "0.1.0"
-source = "git+https://github.com/crown-os/crownos-config#d4a599439e269373f7b0368543c74a3f73ea645c"
+source = "git+https://github.com/crown-os/crownos-config#91ce46cb84ef1fa7987ec44539890f3717a79cdf"
 dependencies = [
  "dirs",
  "notify",

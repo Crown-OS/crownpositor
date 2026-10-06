@@ -62,10 +62,17 @@ uniform float saturation;
 // Width of the refractive rim just inside the shape's edge, in pixels. Zero
 // leaves the edge flat.
 uniform float rim;
-// The direction "up and to the left of the screen" points in, in framebuffer
-// pixels. Supplied rather than assumed, because the framebuffer's axes are the
-// output transform's, not the screen's.
+// The direction the light comes from, in framebuffer pixels. Supplied rather
+// than assumed, because the framebuffer's axes are the output transform's, not
+// the screen's.
 uniform vec2 light;
+// Brightness of the specular line along the rim.
+uniform float glow_intensity;
+// How much of that line's colour comes from what lies just past the edge — the
+// window below — rather than from white light.
+uniform float glow_tint;
+// Depth of the shade under the bevel.
+uniform float inner_shadow;
 
 // Rec. 709 luma, the axis vibrancy rotates the colour about.
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -73,10 +80,6 @@ const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 // bent through the bevel takes a longer path through the material, so it comes
 // back with more of the material's colour in it.
 const float RIM_VIBRANCY = 0.45;
-// Depth of the inner shadow under the bevel, and brightness of the specular
-// line on it.
-const float INNER_SHADOW = 0.28;
-const float SPECULAR = 0.30;
 // What the two faces the light does *not* strike still get, so the rim reads as
 // a continuous edge rather than two arcs.
 const float AMBIENT = 0.35;
@@ -97,6 +100,13 @@ float hash(vec2 p) {
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
 }
+
+// How much more saturated the light picked up from below is than the window it
+// came from, so a muted window still lends the rim a recognisable colour.
+const float GLOW_VIBRANCY = 1.6;
+// The darkest a borrowed colour is normalised against, so a nearly black window
+// below dims the rim instead of amplifying its noise into a colour.
+const float GLOW_FLOOR = 0.2;
 
 // Dual-kawase upsample: 8 taps, diagonals weighted 2, edges 1. The last level
 // of the pyramid, sampled around whatever centre the refraction chose.
@@ -161,11 +171,23 @@ void main() {
     color = max(mix(vec3(luma), color, saturation * (1.0 + RIM_VIBRANCY * bevel)), 0.0);
     color = mix(color, glass_tint.rgb, glass_tint.a);
 
-    // The bevel's own shading: a soft inner shadow under it, and a specular
-    // line on it. The shadow is held back where the highlight is, so the two do
-    // not fight over the same pixels.
-    color *= 1.0 - INNER_SHADOW * facing * bevel * (1.0 - highlight);
-    color += SPECULAR * facing * highlight;
+    // The light the rim catches. Where it is tinted, it carries the colour of
+    // whatever lies just past this edge — the window below the glass, blurred —
+    // at full brightness, so the edge glows in the colours around it. Only the
+    // rim pays for the extra taps.
+    vec3 glow = vec3(1.0);
+    if (glow_tint > 0.0 && highlight > 0.004) {
+        vec3 below = upsample((gl_FragCoord.xy + normal * (rim * 2.0)) / scene_size);
+        below = max(mix(vec3(dot(below, LUMA)), below, GLOW_VIBRANCY), 0.0);
+        float peak = max(max(below.r, below.g), below.b);
+        glow = mix(glow, below / max(peak, GLOW_FLOOR), glow_tint);
+    }
+
+    // The bevel's own shading: a soft inner shadow under it, and the lit line
+    // on it. The shadow is held back where the highlight is, so the two do not
+    // fight over the same pixels.
+    color *= 1.0 - inner_shadow * facing * bevel * (1.0 - highlight);
+    color += glow_intensity * facing * highlight * glow;
 
     if (noise > 0.0) {
         color += vec3((hash(p) - 0.5) * noise);

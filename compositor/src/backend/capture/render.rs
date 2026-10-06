@@ -16,7 +16,7 @@ use smithay::{
     utils::{Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
 };
 
-use config::Appearance;
+use config::{Appearance, GlassSettings};
 use protocols::crownos_screencast::{ClaimedSlot, CursorMode};
 
 use crate::{
@@ -83,6 +83,7 @@ pub struct Scene<'a> {
     pub cursor: &'a mut Cursor,
     pub pointer: Point<f64, Logical>,
     pub appearance: &'a Appearance,
+    pub glass: &'a GlassSettings,
     pub text: &'a mut TextRenderer,
     pub hovered: Option<(WindowId, Control)>,
 }
@@ -185,7 +186,7 @@ where
 
     blur.begin_frame();
     let content = blur.content();
-    let blur_config = BlurConfig::from(scene.appearance);
+    let blur_config = BlurConfig::new(scene.appearance, scene.glass);
     let blur_session = blur_config.enabled.then_some(BlurSession {
         cache: &mut *blur,
         config: blur_config,
@@ -249,6 +250,7 @@ where
         cursor,
         pointer,
         appearance,
+        glass: _,
         text,
         hovered,
     } = scene;
