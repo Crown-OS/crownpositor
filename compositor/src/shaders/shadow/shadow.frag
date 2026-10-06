@@ -12,6 +12,9 @@
 // exactly right, and a rounded corner is close enough that no eye has ever
 // caught the difference.
 
+// fwidth() for the edge of the hole the casting glass leaves in it.
+#extension GL_OES_standard_derivatives : enable
+
 #if defined(GL_FRAGMENT_PRECISION_HIGH)
 precision highp float;
 #else
@@ -38,6 +41,13 @@ uniform vec2 shape_size;
 uniform float shape_radius;
 // Standard deviation of the gaussian, in pixels.
 uniform float sigma;
+// The shape whose glass stands on this shadow, relative to the element, with
+// its corner radius; an empty size means none. Inside it the shadow is left
+// out, because that glass blurs whatever is under it and a shadow there would
+// come back through it as a dark smear along the edges.
+uniform vec2 hole_origin;
+uniform vec2 hole_size;
+uniform float hole_radius;
 
 // Defined in `shaders/common/rounded_box.glsl`, concatenated after this file.
 float rounded_box(in vec2 p, in vec2 b, in float r);
@@ -64,6 +74,18 @@ void main() {
     // The gaussian's cumulative distribution at the edge: 1 well inside the
     // silhouette, 0.5 on its edge, 0 well outside.
     float coverage = 0.5 - 0.5 * erf(distance / (max(sigma, 0.0001) * 1.4142136));
+
+    if (hole_size.x > 0.0 && hole_size.y > 0.0) {
+        vec2 hole_half = hole_size * 0.5;
+        vec2 q = v_coords * size - hole_origin - hole_half;
+        float hole = rounded_box(q, hole_half, min(hole_radius, min(hole_half.x, hole_half.y)));
+#if defined(GL_OES_standard_derivatives)
+        float aa = max(fwidth(hole), 0.0001);
+#else
+        float aa = 1.0;
+#endif
+        coverage *= smoothstep(-0.5 * aa, 0.5 * aa, hole);
+    }
 
     vec4 result = color * (alpha * coverage);
 

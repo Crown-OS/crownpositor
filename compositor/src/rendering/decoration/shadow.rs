@@ -88,6 +88,7 @@ impl GlassShadow {
         // The silhouette in the element's own space, which is where the shader
         // measures it from.
         let shape = Rectangle::new(self.piece.shape.loc - geometry.loc, self.piece.shape.size);
+        let hole = Rectangle::new(self.piece.hole.loc - geometry.loc, self.piece.hole.size);
 
         frame.render_pixel_shader_to(
             program,
@@ -96,7 +97,13 @@ impl GlassShadow {
             size,
             Some(damage),
             self.alpha,
-            &ShadowShader::values(self.piece.color, shape, self.piece.radius, self.piece.sigma),
+            &ShadowShader::values(
+                self.piece.color,
+                shape,
+                self.piece.radius,
+                self.piece.sigma,
+                hole,
+            ),
         )
     }
 }

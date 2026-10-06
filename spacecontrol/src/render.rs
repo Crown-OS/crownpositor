@@ -69,6 +69,9 @@ pub struct Pane {
     pub ring: Id,
     pub rect: Rectangle<f64, Logical>,
     pub radius: f32,
+    /// How far the workspace is shrunk into its preview. The pane is the
+    /// workspace's glass at that size, so its rim shrinks with it.
+    pub shrink: f64,
     pub alpha: f32,
     /// The active workspace's ring colour, straight RGBA. `None` leaves the
     /// preview unringed.
@@ -302,6 +305,8 @@ fn window_at<R, P>(
         rect.size.w / f64::from(natural.w),
         rect.size.h / f64::from(natural.h),
     ));
+    // A thumbnail is the window at another size, so its corners are too.
+    let radius = radius * shrink.x.min(shrink.y) as f32;
 
     // The geometry's corner is what lands on `origin`; the client's own origin
     // sits the geometry's offset before it, and scaling about `origin` keeps
@@ -388,7 +393,7 @@ pub fn elements<R, P>(
                 window,
                 scene::inside(*live, preview.area, thumb),
                 scale,
-                radius * PREVIEW_WINDOW_RADIUS,
+                radius,
                 bar as f32,
             );
         }
@@ -401,6 +406,7 @@ pub fn elements<R, P>(
                 ring: ids.ring.clone(),
                 rect: thumb,
                 radius: radius * PREVIEW_RADIUS,
+                shrink: thumb.size.w / f64::from(preview.area.size.w.max(1)),
                 alpha: bar as f32,
                 ring_colour: preview.active.then_some(palette.active),
             },
@@ -456,11 +462,6 @@ pub fn elements<R, P>(
 /// Squarer than a window: the preview stands for the whole screen, and a
 /// screen's corners are the display's, not a window's.
 const PREVIEW_RADIUS: f32 = 0.6;
-
-/// How much of a window's corner radius survives into a workspace preview.
-/// The preview is a small copy of the screen, so its windows round by about as
-/// much as they are shrunk.
-const PREVIEW_WINDOW_RADIUS: f32 = 0.4;
 
 #[cfg(test)]
 mod tests {

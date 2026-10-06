@@ -257,6 +257,10 @@ pub struct ShadowPiece {
     pub geometry: Rectangle<i32, Physical>,
     /// The silhouette itself, in the same output-local space.
     pub shape: Rectangle<i32, Physical>,
+    /// Where the glass casting the shadow stands, in the same space: the
+    /// shadow is left out there, so that glass does not blur it back in. Empty
+    /// for a shadow with nothing on top of it.
+    pub hole: Rectangle<i32, Physical>,
     pub radius: f32,
     /// Standard deviation of the gaussian, in physical pixels.
     pub sigma: f32,
@@ -451,6 +455,8 @@ fn place_shadow(
     Some(ShadowPiece {
         geometry,
         shape,
+        // The silhouette before the offset: the surface casting it.
+        hole: place(primitive.rect, origin, scale),
         radius: primitive.clamped_radius() * scale.x as f32,
         sigma,
         color,
