@@ -1007,9 +1007,10 @@ pub(crate) fn backdrop_elements<R, D>(
 
 /// The `crownos_background_effects` half of [`backdrop_elements`].
 ///
-/// Glass first and shadows after: later in the list is further from the eye, so
-/// this is the order that puts the silhouette underneath the material it is
-/// cast by.
+/// Shadows first and glass after, the reverse of how they stack: a shadow is
+/// cut away under the glass that casts it, so drawing it in front changes
+/// nothing on screen — and keeps it out of what that glass blurs, which would
+/// otherwise darken its own edges.
 fn surface_effect_elements<R, D>(
     out: &mut dyn FnMut(D::Element),
     renderer: &mut R,
@@ -1023,6 +1024,26 @@ fn surface_effect_elements<R, D>(
     R::TextureId: Clone + 'static,
     D: TileDecorator<R>,
 {
+    let (ids, commit) = blur::shadow_slots(
+        surface,
+        effects.shadows.len(),
+        fingerprint,
+        effects.generation,
+    );
+    for (id, piece) in std::iter::zip(ids, effects.shadows) {
+        if let Some(shadow) = decorator.shadow(
+            renderer,
+            Shadow {
+                id,
+                commit,
+                piece,
+                alpha,
+            },
+        ) {
+            out(shadow);
+        }
+    }
+
     let (ids, commit) = blur::backdrop_slots(
         surface,
         effects.pieces.len(),
@@ -1044,26 +1065,6 @@ fn surface_effect_elements<R, D>(
             },
         ) {
             out(backdrop);
-        }
-    }
-
-    let (ids, commit) = blur::shadow_slots(
-        surface,
-        effects.shadows.len(),
-        fingerprint,
-        effects.generation,
-    );
-    for (id, piece) in std::iter::zip(ids, effects.shadows) {
-        if let Some(shadow) = decorator.shadow(
-            renderer,
-            Shadow {
-                id,
-                commit,
-                piece,
-                alpha,
-            },
-        ) {
-            out(shadow);
         }
     }
 }

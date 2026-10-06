@@ -288,7 +288,8 @@ fn window_backdrop<R, D>(
 
 /// A workspace preview's own backing: the shadow that lifts it off the
 /// wallpaper, the rounded sheet of glass it is made of, and the ring around it
-/// when it is the workspace being shown.
+/// when it is the workspace being shown. The shadow goes in front of the glass
+/// with the card cut out of it, so the glass never blurs it into its edges.
 ///
 /// Glass rather than a flat fill because a workspace *is* glass — the
 /// wallpaper blurred behind whatever is on it — and a white card would be the
@@ -331,22 +332,6 @@ fn preview_pane<R, D>(
         out(ring);
     }
 
-    if let Some(glass) = decorator.backdrop(
-        renderer,
-        Backdrop {
-            id: pane.glass,
-            commit,
-            geometry,
-            mask: geometry,
-            radius,
-            glass: decorator.glass(scale.x, GlassKind::Window),
-            alpha: pane.alpha,
-            strength: 1.0,
-        },
-    ) {
-        out(glass);
-    }
-
     let sigma = (PREVIEW_SHADOW * scale.y) as f32;
     let shape = Rectangle::new(
         geometry.loc + Point::from((0, (PREVIEW_SHADOW * scale.y / 2.0).round() as i32)),
@@ -364,6 +349,7 @@ fn preview_pane<R, D>(
                     shape.size + Size::from((spread * 2, spread * 2)),
                 ),
                 shape,
+                hole: geometry,
                 radius,
                 sigma,
                 color: SHADOW_COLOUR,
@@ -372,6 +358,22 @@ fn preview_pane<R, D>(
         },
     ) {
         out(shadow);
+    }
+
+    if let Some(glass) = decorator.backdrop(
+        renderer,
+        Backdrop {
+            id: pane.glass,
+            commit,
+            geometry,
+            mask: geometry,
+            radius,
+            glass: decorator.glass(scale.x * pane.shrink, GlassKind::Window),
+            alpha: pane.alpha,
+            strength: 1.0,
+        },
+    ) {
+        out(glass);
     }
 }
 
