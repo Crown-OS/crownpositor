@@ -139,6 +139,33 @@ pub fn keep_grip(
     )
 }
 
+/// Fits a resize's rect to the size the window will actually take, holding
+/// still the edges that are not being dragged.
+///
+/// A resize that hits a size limit has to stop, not slide: the rect a drag
+/// asks for moves its origin along with a dragged left or top edge, so keeping
+/// that origin once the size is clamped would carry the whole window after the
+/// pointer. `moves_left` and `moves_top` say which edges the drag owns; the
+/// ones opposite them stay where the rect put them.
+pub fn fit_resize(
+    rect: Rectangle<i32, Logical>,
+    size: Size<i32, Logical>,
+    moves_left: bool,
+    moves_top: bool,
+) -> Rectangle<i32, Logical> {
+    let x = if moves_left {
+        rect.loc.x + rect.size.w - size.w
+    } else {
+        rect.loc.x
+    };
+    let y = if moves_top {
+        rect.loc.y + rect.size.h - size.h
+    } else {
+        rect.loc.y
+    };
+    Rectangle::new(Point::from((x, y)), size)
+}
+
 /// Stops a resize dragging a window's top edge out of reach, keeping the
 /// opposite edge where the user left it.
 ///
@@ -390,6 +417,33 @@ mod tests {
         let current = rect(120, 240, 500, 400);
         let pointer = (300.0, 250.0).into();
         assert_eq!(keep_grip(current.size, current, pointer), current);
+    }
+
+    #[test]
+    fn a_top_edge_held_at_the_minimum_does_not_carry_the_window_down() {
+        // Dragged 300 down from (100, 100, 400, 500), but 400 is the floor.
+        let asked = rect(100, 400, 400, 200);
+        let fitted = fit_resize(asked, (400, 400).into(), false, true);
+        assert_eq!(fitted, rect(100, 200, 400, 400));
+        assert_eq!(
+            fitted.loc.y + fitted.size.h,
+            600,
+            "the bottom edge stays put"
+        );
+    }
+
+    #[test]
+    fn a_left_edge_held_at_the_minimum_does_not_carry_the_window_right() {
+        let asked = rect(450, 100, 50, 500);
+        let fitted = fit_resize(asked, (300, 500).into(), true, false);
+        assert_eq!(fitted, rect(200, 100, 300, 500));
+    }
+
+    #[test]
+    fn a_bottom_right_resize_keeps_its_origin_whatever_the_size() {
+        let asked = rect(100, 100, 50, 50);
+        let fitted = fit_resize(asked, (300, 200).into(), false, false);
+        assert_eq!(fitted, rect(100, 100, 300, 200));
     }
 
     #[test]

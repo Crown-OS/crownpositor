@@ -16,7 +16,7 @@ mod wayland;
 use calloop::EventLoop;
 use smithay::{
     desktop::find_popup_root_surface,
-    input::pointer::CursorImageStatus,
+    input::pointer::{CursorIcon, CursorImageStatus},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point},
 };
@@ -105,6 +105,17 @@ impl State {
             Some(output) => self.backend.queue_redraw(Some(&output)),
             None => self.queue_redraw(),
         }
+    }
+
+    /// Shows one of the compositor's own cursor shapes. Only for where no
+    /// client is in charge of the image — a frame, or mid-grab.
+    pub fn show_cursor(&mut self, icon: CursorIcon) {
+        let status = CursorImageStatus::Named(icon);
+        if self.input.cursor.status == status {
+            return;
+        }
+        self.input.cursor.status = status;
+        self.queue_pointer_redraw();
     }
 
     /// Schedules a frame wherever the cursor currently is.
