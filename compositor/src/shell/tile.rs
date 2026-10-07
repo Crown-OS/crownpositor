@@ -249,6 +249,13 @@ impl Tile {
             }
     }
 
+    /// Whether the compositor answers for this window's edges. Only a framed
+    /// floating window: a client drawing its own chrome has its own resize
+    /// handles, and every other state has its size decided for it.
+    pub fn has_resize_band(&self) -> bool {
+        self.state.is_floating() && self.is_decorated()
+    }
+
     pub fn insets(&self) -> Insets {
         if self.is_decorated() {
             Insets::top(self.titlebar_height)

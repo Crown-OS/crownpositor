@@ -127,6 +127,11 @@ impl State {
             pointer.relative_motion(self, under, relative);
         }
         pointer.frame(self);
+        // A grab owns the cursor for its duration, and so does a client
+        // holding an implicit grab from a press that started inside it.
+        if !pointer.is_grabbed() {
+            self.track_frame_cursor(on_frame);
+        }
         self.refresh_pointer_constraint();
 
         // The compositor draws the cursor, so a mouse move is damage like any
