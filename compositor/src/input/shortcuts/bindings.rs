@@ -166,6 +166,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn alt_tab_raises_the_window_switcher_both_ways() {
+        let bindings = Bindings::defaults();
+        assert_eq!(bound(&bindings, "Alt+Tab"), Some(Action::WindowControlNext));
+        assert_eq!(
+            bound(&bindings, "Alt+Shift+Tab"),
+            Some(Action::WindowControlPrevious)
+        );
+    }
+
     /// A digit reaches the workspace it is written on, not the one after it.
     #[test]
     fn the_workspace_digits_line_up_with_their_index() {
