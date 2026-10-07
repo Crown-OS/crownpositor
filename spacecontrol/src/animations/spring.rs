@@ -117,6 +117,13 @@ impl Spring {
         self.profile = profile;
     }
 
+    /// Moves the whole frame of reference by `by`, keeping the motion within
+    /// it — for when the units themselves are renumbered under the spring.
+    pub fn shift(&mut self, by: f32) {
+        self.position += by;
+        self.target += by;
+    }
+
     /// Pins the value to something the user is dragging directly.
     ///
     /// The target follows the position so the spring exerts no force while the

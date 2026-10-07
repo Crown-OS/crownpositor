@@ -24,6 +24,29 @@ const PROJECTION: f64 = 0.5;
 /// How far past the first or last workspace the fingers may pull, in pages,
 /// and how hard the edge resists.
 const BAND: RubberBand = RubberBand::new(0.35, 0.5);
+/// How far past the first or last workspace the fingers must pull, in pages of
+/// raw travel, before the band gives way and a new workspace is made on that
+/// side. Past half a page, so the viewport lands on the new one when let go.
+const TEAR: f64 = 0.6;
+
+/// The end of the workspace list a pull went past.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Start,
+    End,
+}
+
+impl Edge {
+    fn torn(wanted: f64, last: f64) -> Option<Self> {
+        if wanted < -TEAR {
+            Some(Self::Start)
+        } else if wanted > last + TEAR {
+            Some(Self::End)
+        } else {
+            None
+        }
+    }
+}
 
 /// Logical pixels between two workspaces as they slide past each other, so the
 /// pages read as separate surfaces rather than one continuous strip.
@@ -36,6 +59,8 @@ struct Drag {
     /// still flying anchors here rather than on the nearest workspace, so the
     /// viewport does not jump on contact.
     origin: f64,
+    /// The band has already given way once. One workspace per swipe.
+    torn: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,6 +136,7 @@ impl WorkspaceSwitch {
         }
         self.drag = Some(Drag {
             origin: self.position(),
+            torn: false,
         });
     }
 
@@ -119,15 +145,33 @@ impl WorkspaceSwitch {
     /// workspace in, so the content follows the hand instead of opposing it.
     /// The spring does the following, so the motion on screen is a smoothed
     /// copy of the hand.
-    pub fn drag_to(&mut self, travelled: f64, last: usize) {
-        let Some(drag) = self.drag else {
-            return;
-        };
-        let pinned = BAND.clamp(drag.origin - travelled, 0.0, last as f64) as f32;
+    ///
+    /// Pulled hard enough past either end, the band tears: the viewport is
+    /// already aimed at a workspace one beyond that end, and the returned edge
+    /// is where the caller owes it. Tearing the start renumbers every
+    /// workspace up by one, so the switch shifts itself to match.
+    pub fn drag_to(&mut self, travelled: f64, last: usize) -> Option<Edge> {
+        let drag = self.drag.as_mut()?;
+        let mut wanted = drag.origin - travelled;
+        let mut last = last as f64;
+
+        let torn = Edge::torn(wanted, last).filter(|_| !drag.torn);
+        if let Some(edge) = torn {
+            drag.torn = true;
+            last += 1.0;
+            if edge == Edge::Start {
+                drag.origin += 1.0;
+                wanted += 1.0;
+                self.position.shift(1.0);
+            }
+        }
+
+        let pinned = BAND.clamp(wanted, 0.0, last) as f32;
         match self.profile {
             Some(_) => self.position.set_target(pinned),
             None => self.position.hold(pinned),
         }
+        torn
     }
 
     /// Lets go. `velocity` is the fingers' speed in pages per second, positive
@@ -366,27 +410,27 @@ mod tests {
     fn the_ends_resist_instead_of_stopping_dead() {
         let mut switch = WorkspaceSwitch::new(0);
         switch.begin();
-        switch.drag_to(1.0, 3);
+        switch.drag_to(0.2, 3);
         follow(&mut switch, 60);
 
         let position = switch.position();
         assert!(position < 0.0, "the edge should still give a little");
         assert!(
-            position > -BAND.limit,
-            "and never past the limit: {position}"
+            position > -0.2,
+            "but less than the fingers moved: {position}"
         );
 
-        // Pulling ten times as hard barely gets further.
-        switch.drag_to(10.0, 3);
+        // Pulling two and a half times as hard does not get twice as far.
+        switch.drag_to(TEAR - 0.1, 3);
         follow(&mut switch, 60);
-        assert!(switch.position() > -BAND.limit);
+        assert!(switch.position() > position * 2.0, "{}", switch.position());
     }
 
     #[test]
     fn a_swipe_off_the_end_snaps_back() {
         let mut switch = WorkspaceSwitch::new(3);
         switch.begin();
-        switch.drag_to(-1.0, 3);
+        switch.drag_to(-0.5, 3);
         assert_eq!(switch.release(-8.0, 3), 3);
         settle(&mut switch);
         assert_eq!(switch.position(), 3.0);
@@ -430,7 +474,7 @@ mod tests {
     fn rubber_banding_past_the_first_workspace_shows_no_phantom_page() {
         let mut switch = WorkspaceSwitch::new(0);
         switch.begin();
-        switch.drag_to(1.0, 3);
+        switch.drag_to(0.5, 3);
         follow(&mut switch, 30);
         // Position is negative, but there is nothing to the left of zero.
         assert!(switch.position() < 0.0);
@@ -476,6 +520,63 @@ mod tests {
 
         assert_eq!(switch.position(), 1.0);
         assert!(!switch.is_active());
+    }
+
+    #[test]
+    fn pulling_hard_past_the_last_workspace_tears_a_new_one() {
+        let mut switch = WorkspaceSwitch::new(3);
+        switch.begin();
+        assert_eq!(switch.drag_to(-(TEAR - 0.05), 3), None);
+        assert_eq!(switch.drag_to(-(TEAR + 0.1), 3), Some(Edge::End));
+
+        // The band is gone: the viewport is free to follow onto the new page.
+        follow(&mut switch, 60);
+        assert!(switch.position() > 3.5, "{}", switch.position());
+        assert_eq!(switch.release(0.0, 4), 4);
+    }
+
+    #[test]
+    fn tearing_the_start_renumbers_without_moving_anything() {
+        let mut switch = WorkspaceSwitch::new(0);
+        switch.begin();
+        switch.drag_to(0.3, 3);
+        follow(&mut switch, 60);
+        let banded = switch.position();
+
+        assert_eq!(switch.drag_to(TEAR + 0.1, 3), Some(Edge::Start));
+        // The old first workspace is index 1 now, and the viewport with it.
+        assert!(
+            (switch.position() - (banded + 1.0)).abs() < 1e-6,
+            "{}",
+            switch.position()
+        );
+
+        follow(&mut switch, 60);
+        assert!(switch.position() < 0.5, "{}", switch.position());
+        assert_eq!(switch.release(0.0, 4), 0);
+    }
+
+    #[test]
+    fn one_swipe_tears_at_most_one_workspace() {
+        let mut switch = WorkspaceSwitch::new(3);
+        switch.begin();
+        assert_eq!(switch.drag_to(-1.0, 3), Some(Edge::End));
+        assert_eq!(switch.drag_to(-3.0, 4), None);
+        follow(&mut switch, 60);
+        assert!(
+            switch.position() < 4.0 + BAND.limit,
+            "the far end banded instead: {}",
+            switch.position()
+        );
+    }
+
+    #[test]
+    fn tearing_lands_at_once_without_animations() {
+        let mut switch = WorkspaceSwitch::new(0);
+        switch.set_profile(None);
+        switch.begin();
+        assert_eq!(switch.drag_to(1.0, 2), Some(Edge::Start));
+        assert_eq!(switch.position(), 0.0);
     }
 
     #[test]
