@@ -11,8 +11,13 @@ impl GammaControlHandler for State {
         &mut self.wayland.gamma_control_state
     }
 
+    /// An output the compositor is dimming or warming has no gamma to give: a
+    /// client would overwrite that ramp, and reset it to identity on release.
     fn gamma_size(&mut self, wl_output: &WlOutput) -> Option<u32> {
         let output = self.output_for(wl_output)?;
+        if self.display_gamma.owns(&output) {
+            return None;
+        }
         self.backend.gamma_size(&output)
     }
 
