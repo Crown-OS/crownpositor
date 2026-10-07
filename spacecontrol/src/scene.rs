@@ -10,7 +10,7 @@
 //! actually lives to that destination, which is what makes the entry animation
 //! a property of the geometry rather than a special case in the renderer.
 
-use smithay::utils::{Logical, Rectangle, Size};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::layout;
 
@@ -190,7 +190,7 @@ pub fn close_button(thumb: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
 pub fn nearest_slot(slots: &[Slot], x: f64) -> Option<usize> {
     slots
         .iter()
-        .map(|slot| (slot.thumb.loc.x + slot.thumb.size.w / 2.0 - x).abs())
+        .map(|slot| (centre(slot.thumb).x - x).abs())
         .enumerate()
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(index, _)| index)
@@ -252,6 +252,13 @@ pub fn shown(
         Rectangle::new((thumb.loc.x, thumb.loc.y + climb).into(), thumb.size),
         metrics.hover * lift,
     )
+}
+
+pub fn centre(rect: Rectangle<f64, Logical>) -> Point<f64, Logical> {
+    Point::from((
+        rect.loc.x + rect.size.w / 2.0,
+        rect.loc.y + rect.size.h / 2.0,
+    ))
 }
 
 /// Grows a rectangle about its own centre, for the lift under the pointer.
@@ -457,8 +464,6 @@ mod tests {
         let rect = Rectangle::new((100.0, 100.0).into(), (200.0, 100.0).into());
         let lifted = lift(rect, 0.1);
 
-        let centre =
-            |r: Rectangle<f64, Logical>| (r.loc.x + r.size.w / 2.0, r.loc.y + r.size.h / 2.0);
         assert_eq!(centre(rect), centre(lifted));
         assert!((lifted.size.w - 220.0).abs() < 1e-6);
         assert!((lifted.size.h - 110.0).abs() < 1e-6);

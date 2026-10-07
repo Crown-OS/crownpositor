@@ -241,6 +241,7 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
     let age = winit.backend.buffer_age().unwrap_or(0);
 
     let dt = clock.tick();
+    let dt = crate::backend::debug_frames::fixed_dt().unwrap_or(dt);
     shell.advance_animations(dt);
     shell
         .surface_animations
@@ -338,6 +339,7 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
             &mut input.cursor,
             input.pointer_location,
             &config.current.appearance,
+            &config.current.glass,
             text,
             input.hovered_control,
         ),
