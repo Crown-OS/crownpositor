@@ -14,6 +14,7 @@ use smithay::{
     },
 };
 
+use super::xdg_decoration::requested_chrome;
 use crate::{
     layout::placement,
     shell::tile::{Chrome, Tile, WindowState},
@@ -291,9 +292,7 @@ impl State {
             self.config.current.appearance.titlebar_height.into(),
         );
         tile.set_size_hints(min_size, max_size);
-        tile.set_chrome(Chrome::for_mode(
-            toplevel.with_pending_state(|state| state.decoration_mode),
-        ));
+        tile.set_chrome(requested_chrome(&toplevel));
         // A fixed-size window that draws its own frame is an alert or a picker.
         let alert =
             min_size != Size::default() && min_size == max_size && tile.chrome() == Chrome::Client;
