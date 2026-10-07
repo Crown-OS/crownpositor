@@ -1,0 +1,9 @@
+[package]
+name = "windowcontrol"
+version = "0.1.0"
+edition = "2024"
+
+# Geometry and springs only: the compositor draws the switcher.
+[dependencies]
+smithay = { workspace = true }
+spacecontrol = { path = "../spacecontrol" }

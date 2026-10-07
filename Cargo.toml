@@ -5,7 +5,7 @@ members = [
   "lockscreen",
   "protocols",
   "spacecontrol",
-  "windowswitcher",
+  "windowcontrol",
 ]
 resolver = "3"
 
