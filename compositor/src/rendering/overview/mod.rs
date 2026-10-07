@@ -19,32 +19,14 @@ mod bar;
 mod thumbnail;
 
 use smithay::{
-    backend::renderer::{ImportAll, ImportMem, Renderer, element::Wrap, utils::CommitCounter},
-    utils::{Logical, Physical, Rectangle, Scale},
+    backend::renderer::{ImportAll, ImportMem, Renderer},
+    utils::Scale,
 };
 
 use crate::{
-    rendering::{
-        Elements, FrameStyle, decorate::TileDecorator, decoration::TextRenderer,
-        element::CrownElement,
-    },
+    rendering::{Elements, FrameStyle, decorate::TileDecorator, painter::Painter},
     shell::monitor::Monitor,
 };
-
-/// What every part of the overview draws with.
-struct Painter<'a, R, D>
-where
-    R: Renderer + ImportAll + ImportMem,
-    D: TileDecorator<R>,
-{
-    elements: &'a mut Elements<R, D>,
-    renderer: &'a mut R,
-    decorator: &'a mut D,
-    text: &'a mut TextRenderer,
-    scale: Scale<f64>,
-    /// A window's corner radius at its own size, in physical pixels.
-    radius: f32,
-}
 
 /// Appends everything the overview draws on this output.
 pub fn overview_elements<R, D>(
@@ -59,42 +41,9 @@ pub fn overview_elements<R, D>(
     R::TextureId: Send + Clone + 'static,
     D: TileDecorator<R>,
 {
-    let mut painter = Painter {
-        elements,
-        renderer,
-        decorator,
-        text: &mut *style.text,
-        scale,
-        radius: style.radius,
-    };
+    let mut painter = Painter::new(elements, renderer, decorator, scale, style);
     painter.carried(monitor);
     painter.bar(monitor);
     painter.grid(monitor);
     painter.backdrop(monitor);
-}
-
-impl<R, D> Painter<'_, R, D>
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Send + Clone + 'static,
-    D: TileDecorator<R>,
-{
-    fn push(&mut self, element: D::Element) {
-        self.elements.push(CrownElement::Tile(Wrap::from(element)));
-    }
-
-    fn physical(&self, rect: Rectangle<f64, Logical>) -> Rectangle<i32, Physical> {
-        Rectangle::new(
-            rect.loc.to_physical_precise_round(self.scale),
-            rect.size.to_physical_precise_round(self.scale),
-        )
-    }
-
-    /// The commit the overview's own glass is drawn under: it changes exactly
-    /// when the blur settings do. Everything else that moves its pixels — its
-    /// rect, its alpha, the wallpaper under it — the damage tracker already
-    /// sees.
-    fn glass_commit(&self) -> CommitCounter {
-        CommitCounter::from(self.decorator.blur_fingerprint().unwrap_or_default() as usize)
-    }
 }

@@ -20,6 +20,7 @@ pub mod framebuffer;
 pub mod fullscreen;
 pub mod lock;
 pub mod overview;
+mod painter;
 pub mod popup;
 pub mod rounded;
 pub mod surface_tree;
