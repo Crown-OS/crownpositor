@@ -13,7 +13,7 @@ use smithay::{
 };
 
 use crate::{
-    handlers::{drm_syncobj, layer_shell, xdg_shell},
+    handlers::{commit_timing, drm_syncobj, layer_shell, xdg_shell},
     state::{ClientState, State},
     utils::surface::root_surface,
 };
@@ -33,6 +33,7 @@ impl CompositorHandler for State {
     fn new_surface(&mut self, surface: &WlSurface) {
         layer_shell::shield_orphaned_layer_state(surface);
         drm_syncobj::hold_commits_until_ready(surface);
+        commit_timing::render_timed_commits(surface);
     }
 
     fn commit(&mut self, surface: &WlSurface) {
