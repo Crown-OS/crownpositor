@@ -315,6 +315,7 @@ dependencies = [
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "wayland-server",
+ "windowcontrol",
  "xcursor",
  "zbus",
 ]

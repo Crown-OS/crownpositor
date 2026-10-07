@@ -12,6 +12,7 @@ mod overview;
 pub mod session_env;
 mod visibility;
 mod wayland;
+mod windowcontrol;
 
 use calloop::EventLoop;
 use smithay::{

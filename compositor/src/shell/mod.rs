@@ -14,6 +14,7 @@ pub mod snap;
 pub mod tile;
 pub mod transaction;
 pub mod visibility;
+pub mod windowcontrol;
 pub mod workspace;
 pub mod workspace_switch;
 
@@ -1630,6 +1631,10 @@ impl Shell {
             if monitor.spacecontrol().is_visible() {
                 monitor.with_spacecontrol(|space, monitor| space.relayout(monitor));
             }
+            monitor.window_control_mut().step(dt);
+            if monitor.window_control().is_visible() {
+                monitor.with_window_control(|control, monitor| control.relayout(monitor));
+            }
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().step(dt);
@@ -1646,6 +1651,7 @@ impl Shell {
             || self.monitors.iter().any(|monitor| {
                 monitor.is_switching()
                     || monitor.spacecontrol().is_active()
+                    || monitor.window_control().is_active()
                     || monitor.workspaces().iter().any(|workspace| {
                         workspace.tiles().iter().any(|tile| !tile.anim().at_rest())
                     })
@@ -1657,6 +1663,7 @@ impl Shell {
         for monitor in &mut self.monitors {
             monitor.switch_mut().settle();
             monitor.spacecontrol_mut().settle();
+            monitor.window_control_mut().settle();
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().settle();

@@ -22,6 +22,23 @@ fn vt_switch_target(handle: &KeysymHandle<'_>) -> Option<i32> {
     })
 }
 
+/// What a key does while the Alt+Tab strip is up.
+fn window_control_key(handle: &KeysymHandle<'_>, shift: bool) -> Action {
+    let syms = handle.modified_syms();
+    let has = |sym: Keysym| syms.contains(&sym);
+    if has(Keysym::ISO_Left_Tab) || (has(Keysym::Tab) && shift) || has(Keysym::Left) {
+        Action::WindowControlPrevious
+    } else if has(Keysym::Tab) || has(Keysym::Right) {
+        Action::WindowControlNext
+    } else if has(Keysym::Return) || has(Keysym::KP_Enter) {
+        Action::WindowControlCommit
+    } else if has(Keysym::Escape) {
+        Action::WindowControlDismiss
+    } else {
+        Action::None
+    }
+}
+
 impl State {
     pub(super) fn on_keyboard_key<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) {
         let Some(keyboard) = self.wayland.seat.get_keyboard() else {
@@ -103,6 +120,16 @@ impl State {
                             );
                         }
 
+                        // The Alt+Tab strip owns the keyboard the same way, and
+                        // reads the keys that steer it.
+                        if state.window_control_is_open() {
+                            state.input.intercepted.insert(handle.raw_code());
+                            return FilterResult::Intercept(window_control_key(
+                                &handle,
+                                modifiers.shift,
+                            ));
+                        }
+
                         if bypass {
                             return FilterResult::Forward;
                         }
@@ -130,6 +157,15 @@ impl State {
 
         if key_state == KeyState::Released && !self.alt_held() {
             self.end_scroll_pinch(time);
+        }
+
+        // Letting go of the chord that raised the strip picks the selection.
+        let held = keyboard.modifier_state();
+        if key_state == KeyState::Released
+            && !(held.alt || held.logo || held.ctrl)
+            && self.window_control_is_open()
+        {
+            self.handle_action(Action::WindowControlCommit);
         }
 
         // Dispatch after `keyboard.input` returns, not inside the filter:

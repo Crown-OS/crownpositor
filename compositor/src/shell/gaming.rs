@@ -18,9 +18,9 @@ pub struct DisplayDemand {
 }
 
 /// The window that alone covers `monitor`, once nothing is moving: no
-/// overview, no workspace slide, and its own enter animation finished.
+/// overview or switcher, no workspace slide, and its own enter animation finished.
 pub fn scanout_tile(monitor: &Monitor) -> Option<&Tile> {
-    if monitor.spacecontrol().is_visible() {
+    if monitor.spacecontrol().is_visible() || monitor.window_control().is_visible() {
         return None;
     }
     let mut visible = monitor.visible_workspaces();

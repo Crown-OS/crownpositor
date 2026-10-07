@@ -19,6 +19,7 @@ impl SessionLockHandler for State {
         self.dismiss_menu();
         for monitor in self.shell.monitors_mut() {
             monitor.spacecontrol_mut().close();
+            monitor.window_control_mut().dismiss();
         }
         self.shell.session_lock.begin(confirmation);
         self.queue_redraw();
