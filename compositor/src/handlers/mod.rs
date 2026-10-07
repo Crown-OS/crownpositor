@@ -1,6 +1,7 @@
 mod appmenu;
 mod background_effect;
 mod color_management;
+mod commit_timing;
 mod compositor;
 mod crownos_agent_access;
 mod crownos_background_effects;
