@@ -58,14 +58,12 @@ pub struct Behind<'a> {
 }
 
 /// A workspace preview's backing: a rounded sheet of the compositor's own
-/// glass, the shadow it casts, and the ring around it when it is the active
-/// workspace.
+/// glass, and the ring around it when it is the active workspace.
 ///
 /// A preview is a small copy of a workspace, so it is made of what a workspace
 /// is made of — the wallpaper showing through blurred, not a flat white card.
 pub struct Pane {
     pub glass: Id,
-    pub shadow: Id,
     pub ring: Id,
     pub rect: Rectangle<f64, Logical>,
     /// Physical pixels, like a window's.
@@ -82,7 +80,7 @@ pub struct Pane {
 /// Everything the compositor lends the overview.
 ///
 /// The backings hand their elements to a sink rather than returning them, so
-/// one call can produce a shadow, a sheet of glass and a ring without
+/// one call can produce a sheet of glass and a ring without
 /// allocating a vector to carry them back across the seam.
 pub trait Painter<R>
 where
@@ -202,19 +200,17 @@ impl Default for Palette {
 #[derive(Debug, Clone)]
 struct SlotIds {
     glass: Id,
-    shadow: Id,
     ring: Id,
     /// The '×' disc on a preview, and the '+' tile's two bars.
-    accent: [Id; 3],
+    accent: [Id; 2],
 }
 
 impl SlotIds {
     fn new() -> Self {
         Self {
             glass: Id::new(),
-            shadow: Id::new(),
             ring: Id::new(),
-            accent: [Id::new(), Id::new(), Id::new()],
+            accent: [Id::new(), Id::new()],
         }
     }
 }
@@ -301,7 +297,7 @@ fn plus<R, E>(
             (stroke, arm).into(),
         ),
     ];
-    for (id, bar) in ids.accent[..2].iter().zip(bars) {
+    for (id, bar) in ids.accent.iter().zip(bars) {
         if let Some(element) = fill(id.clone(), bar, GLYPH, alpha, scale) {
             out.push(OverviewElement::Fill(element));
         }
@@ -467,8 +463,7 @@ pub fn elements<R, P>(
                 renderer,
                 Pane {
                     glass: ids.accent[0].clone(),
-                    shadow: ids.accent[1].clone(),
-                    ring: ids.accent[2].clone(),
+                    ring: ids.accent[1].clone(),
                     rect: button,
                     radius: (button.size.w * scale.x / 2.0) as f32,
                     shrink: 1.0,
@@ -502,7 +497,6 @@ pub fn elements<R, P>(
             renderer,
             Pane {
                 glass: ids.glass.clone(),
-                shadow: ids.shadow.clone(),
                 ring: ids.ring.clone(),
                 rect: thumb,
                 // Concentric with the windows inside: their corners, pushed
@@ -525,7 +519,6 @@ pub fn elements<R, P>(
             renderer,
             Pane {
                 glass: ids.glass.clone(),
-                shadow: ids.shadow.clone(),
                 ring: ids.ring.clone(),
                 rect: tile,
                 radius: radius * 0.5,
@@ -605,10 +598,8 @@ mod tests {
             chrome.dim(),
             chrome.backdrop(),
             first.glass.clone(),
-            first.shadow.clone(),
             first.ring.clone(),
             second.glass.clone(),
-            second.shadow.clone(),
             second.ring.clone(),
         ];
         for (index, id) in all.iter().enumerate() {
