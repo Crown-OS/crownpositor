@@ -82,7 +82,11 @@ const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 const float RIM_VIBRANCY = 0.45;
 // What the two faces the light does *not* strike still get, so the rim reads as
 // a continuous edge rather than two arcs.
-const float AMBIENT = 0.35;
+const float AMBIENT = 0.5;
+// How much of the light that enters through the lit face pools inside the far
+// one, relative to the specular line. Thick glass gathers it along its shadowed
+// edge as a broad glow, which is what makes the sheet read as a solid slab.
+const float CAUSTIC = 0.6;
 
 vec2 cl(vec2 uv) {
     return clamp(uv, half_pixel, vec2(1.0) - half_pixel);
@@ -147,12 +151,16 @@ void main() {
     // over `rim` pixels inward. The exponential is what makes the edge read as
     // a curve rather than a chamfer.
     float bevel = rim > 0.0 ? exp(-max(-distance, 0.0) / rim) : 0.0;
-    // A thinner, brighter band inside the same bevel — the specular line.
-    float highlight = bevel * bevel;
-    // The two faces the light strikes: top-left and bottom-right. `abs` is what
-    // puts it on both, and the ambient floor keeps the other two from going
-    // dead flat.
-    float facing = mix(AMBIENT, 1.0, abs(dot(normal, light)));
+    // A hairline at the very edge of the same bevel — the specular line.
+    float edge = bevel * bevel * bevel;
+    float highlight = edge * edge;
+    // Positive on the face the light strikes, negative on the one opposite.
+    float incidence = dot(normal, light);
+    // The line sits on both of those faces — `abs` is what puts it on both —
+    // and the ambient floor keeps the other two from going dead flat.
+    float facing = mix(AMBIENT, 1.0, abs(incidence));
+    // The light gathered inside the far face spreads over the whole bevel.
+    float shine = facing * highlight + CAUSTIC * max(-incidence, 0.0) * bevel;
 
     // Refraction. The bevel bends what is behind it, so the tap centre walks
     // along the normal in proportion to how deep into the curve we are — which
@@ -173,18 +181,18 @@ void main() {
     // at full brightness, so the edge glows in the colours around it. Only the
     // rim pays for the extra taps.
     vec3 glow = vec3(1.0);
-    if (glow_tint > 0.0 && highlight > 0.004) {
+    if (glow_tint > 0.0 && shine > 0.004) {
         vec3 below = upsample((gl_FragCoord.xy + normal * (rim * 2.0)) / scene_size);
         below = max(mix(vec3(dot(below, LUMA)), below, GLOW_VIBRANCY), 0.0);
         float peak = max(max(below.r, below.g), below.b);
         glow = mix(glow, below / max(peak, GLOW_FLOOR), glow_tint);
     }
 
-    // The bevel's own shading: a soft inner shadow under it, and the lit line
-    // on it. The shadow is held back where the highlight is, so the two do not
+    // The bevel's own shading: a soft inner shadow under it, and the light on
+    // it. The shadow is held back where the highlight is, so the two do not
     // fight over the same pixels.
     color *= 1.0 - inner_shadow * facing * bevel * (1.0 - highlight);
-    color += glow_intensity * facing * highlight * glow;
+    color += glow_intensity * shine * glow;
 
     if (noise > 0.0) {
         color += vec3((hash(p) - 0.5) * noise);

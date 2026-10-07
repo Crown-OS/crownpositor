@@ -98,9 +98,9 @@ pub struct BlurConfig {
 /// surface turning into a stained-glass window.
 const VIBRANCY: f32 = 1.3;
 
-/// A whisper of white over the blur, so glass over a dark backdrop still reads
-/// as a surface rather than as a hole.
-const SHEEN: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
+/// The milky white of frosted glass over the blur, so glass over a dark
+/// backdrop still reads as a lit surface rather than as a hole.
+const SHEEN: [f32; 4] = [1.0, 1.0, 1.0, 0.15];
 
 impl BlurConfig {
     /// The files speak in user units; the pipeline wants what the shader can
@@ -121,7 +121,7 @@ impl Default for BlurConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            passes: 3,
+            passes: 4,
             offset: 1.5,
             noise: 0.01,
             vibrancy: VIBRANCY,
