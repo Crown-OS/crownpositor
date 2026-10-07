@@ -2131,7 +2131,6 @@ version = "0.1.0"
 dependencies = [
  "config",
  "smithay",
- "tracing",
 ]
 
 [[package]]

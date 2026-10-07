@@ -4,26 +4,20 @@
 //! the shell model is turned into the flat snapshots it works in — and where
 //! the indices it hands back become window ids again.
 //!
-//! Every workspace is laid out, not just the active one. A swipe across the
-//! overview slides a neighbour's grid in, and it has to be somewhere already
-//! for the slide to cost nothing but a different destination rectangle.
-//!
-//! The layout is cached rather than solved every frame. Nothing about it
-//! changes while the overview animates: the windows are flying towards
-//! rectangles that were fixed the moment it opened, so re-solving per frame
-//! would be the same answer at the cost of running the solver sixty times a
-//! second. [`Fingerprint`] is what notices when that stops being true.
+//! [`Tile`]: crate::shell::tile::Tile
 
-use smithay::{
-    backend::renderer::utils::CommitCounter,
-    utils::{Logical, Point, Rectangle, Size},
-};
+mod glide;
+mod ids;
+mod layout;
+
+pub use ids::{OverviewIds, TileIds};
+
+use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use spacecontrol::{
     animations::{glide::Glides, hover::Lifts, spring::SpringProfile},
     interaction::{BarView, Interaction, Release, Target},
     overview::Overview,
-    render::{Chrome, Palette},
     scene::{self, Canvas, Metrics, Slot},
 };
 
@@ -31,69 +25,16 @@ use crate::{
     shell::monitor::Monitor,
     utils::id::{WindowId, WorkspaceId},
 };
-
-/// What the cached layout was computed from. When this changes the layout is
-/// stale — a window opened, closed, resized, or the output did.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Fingerprint {
-    output: (i32, i32, i32, i32),
-    usable: (i32, i32, i32, i32),
-    workspaces: usize,
-    active: usize,
-    /// Every window's identity and size on every workspace, folded together.
-    /// Order matters: a window raised above another re-reads the grid.
-    windows: u64,
-}
-
-impl Fingerprint {
-    fn of(monitor: &Monitor) -> Self {
-        let geometry = monitor.geometry();
-        let usable = monitor.usable();
-
-        let windows = monitor
-            .workspaces()
-            .iter()
-            .flat_map(|workspace| workspace.tiles())
-            .fold(0xcbf2_9ce4_8422_2325, |hash, tile| {
-                let size = tile.target().size;
-                let mixed = tile.id().raw()
-                    ^ (u64::from(size.w as u32) << 20)
-                    ^ (u64::from(size.h as u32) << 40);
-                (hash ^ mixed).wrapping_mul(0x1000_0000_01b3)
-            });
-
-        let corners =
-            |rect: Rectangle<i32, Logical>| (rect.loc.x, rect.loc.y, rect.size.w, rect.size.h);
-
-        Self {
-            output: corners(geometry),
-            usable: corners(usable),
-            workspaces: monitor.workspaces().len(),
-            active: monitor.active_index(),
-            windows,
-        }
-    }
-}
-
-/// One workspace's thumbnails, all index-aligned.
-#[derive(Debug, Default)]
-struct Page {
-    workspace: Option<WorkspaceId>,
-    /// Where each window lands once the overview is fully open.
-    grid: Vec<Rectangle<f64, Logical>>,
-    windows: Vec<WindowId>,
-    /// Where each window sits on the desktop, which is what a preview shrinks.
-    desktop: Vec<Rectangle<i32, Logical>>,
-}
+use glide::Snapshot;
+use layout::{Fingerprint, Page};
 
 /// The overview on one output.
 #[derive(Debug)]
 pub struct SpaceControl {
     overview: Overview,
     input: Interaction,
-    chrome: Chrome,
+    ids: OverviewIds,
     metrics: Metrics,
-    palette: Palette,
 
     /// One per workspace, in the model's own order.
     pages: Vec<Page>,
@@ -121,12 +62,6 @@ pub struct SpaceControl {
     flip: Option<Snapshot>,
     /// The preview being dragged and where it would land, as last laid out.
     making_room: Option<(usize, usize)>,
-
-    /// Bumped whenever the blurred wallpaper's appearance changes. Without it
-    /// the damage tracker sees an unmoved element with an unchanged commit and
-    /// leaves the stale blur on screen for the whole animation.
-    backdrop_commit: CommitCounter,
-    blurred: f32,
 }
 
 impl Default for SpaceControl {
@@ -141,9 +76,8 @@ impl SpaceControl {
         Self {
             overview: Overview::new(),
             input: Interaction::new(),
-            chrome: Chrome::new(),
+            ids: OverviewIds::default(),
             metrics: Metrics::default(),
-            palette: Palette::default(),
             pages: Vec::new(),
             active: 0,
             bar: Vec::new(),
@@ -158,8 +92,6 @@ impl SpaceControl {
             preview_glides: Glides::new(profile),
             flip: None,
             making_room: None,
-            backdrop_commit: CommitCounter::default(),
-            blurred: 0.0,
         }
     }
 
@@ -167,16 +99,12 @@ impl SpaceControl {
         &self.overview
     }
 
-    pub fn chrome(&self) -> &Chrome {
-        &self.chrome
+    pub fn ids(&self) -> &OverviewIds {
+        &self.ids
     }
 
     pub fn metrics(&self) -> &Metrics {
         &self.metrics
-    }
-
-    pub fn palette(&self) -> &Palette {
-        &self.palette
     }
 
     /// The output the overview laid itself out on, and the part of it nothing
@@ -236,18 +164,6 @@ impl SpaceControl {
         })
     }
 
-    /// Where preview `index` stands while another is dragged: the slot it
-    /// steps into to make room for it.
-    fn room_target(&self, index: usize) -> Option<Slot> {
-        let (from, to) = self.making_room?;
-        let step = match (from < to, from > to) {
-            (true, _) if index > from && index <= to => index - 1,
-            (_, true) if index >= to && index < from => index + 1,
-            _ => return None,
-        };
-        self.bar.get(step).copied()
-    }
-
     /// Which preview is lifted out of the bar, so the renderer can draw it
     /// above the rest.
     pub fn lifted_preview(&self) -> Option<usize> {
@@ -255,9 +171,11 @@ impl SpaceControl {
     }
 
     /// How visible preview `index`'s '×' is: shown on the hovered preview,
-    /// when there is more than one and none is being dragged.
+    /// when there is more than one and nothing is being dragged — a window
+    /// carried over a preview is being dropped there, not removing it.
     pub fn close_visibility(&self, index: usize) -> f64 {
-        if self.bar.len() < 2 || self.input.reordering().is_some() {
+        let dragging = self.input.reordering().is_some() || self.input.carrying().is_some();
+        if self.bar.len() < 2 || dragging {
             return 0.0;
         }
         self.workspaces_hover.at(index)
@@ -281,78 +199,6 @@ impl SpaceControl {
             Some(id) => self.window_glides.rect(*id, cell),
             None => cell,
         })
-    }
-
-    /// Sends a window let go over nothing back to its cell, at the speed it
-    /// was let go with.
-    pub fn return_window(
-        &mut self,
-        index: usize,
-        from: Rectangle<f64, Logical>,
-        velocity: (f64, f64),
-    ) {
-        self.flip = None;
-        let Some(page) = self.pages.get(self.active) else {
-            return;
-        };
-        let (Some(id), Some(cell)) = (page.windows.get(index), page.grid.get(index)) else {
-            return;
-        };
-        self.window_glides.launch(*id, from, *cell, velocity);
-    }
-
-    /// Where every window and preview is drawn right now — a carried window
-    /// where the hand has it, not the cell it left.
-    fn snapshot(&self) -> Snapshot {
-        let carried = self.carrying();
-        let windows = self
-            .pages
-            .iter()
-            .enumerate()
-            .flat_map(|(workspace, page)| {
-                page.windows
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(slot, id)| {
-                        let rect = match carried {
-                            Some((window, rect)) if workspace == self.active && window == slot => {
-                                rect
-                            }
-                            _ => self.grid_rect(workspace, slot)?,
-                        };
-                        Some((*id, rect))
-                    })
-            })
-            .collect();
-        let previews = (0..self.bar.len())
-            .filter_map(|index| Some((self.workspace_id(index)?, self.preview_slot(index)?.thumb)))
-            .collect();
-        Snapshot { windows, previews }
-    }
-
-    /// Glides everything that moved from where `before` had it to where the
-    /// layout puts it now.
-    fn glide_from(&mut self, before: Snapshot) {
-        for (id, from) in before.windows {
-            if let Some(to) = self.pages.iter().find_map(|page| {
-                page.windows
-                    .iter()
-                    .position(|it| *it == id)
-                    .map(|slot| page.grid[slot])
-            }) {
-                self.window_glides.launch(id, from, to, (0.0, 0.0));
-            }
-        }
-        for (id, from) in before.previews {
-            if let Some(to) = self
-                .pages
-                .iter()
-                .position(|page| page.workspace == Some(id))
-                .and_then(|index| self.bar.get(index))
-            {
-                self.preview_glides.launch(id, from, to.thumb, (0.0, 0.0));
-            }
-        }
     }
 
     /// How far the pointer has lifted window `index` of the active workspace.
@@ -434,66 +280,6 @@ impl SpaceControl {
             .copied()
     }
 
-    /// Recomputes the grid and the bar if anything they depend on moved.
-    ///
-    /// Called once per frame while the overview is on screen; the fingerprint
-    /// makes all but the first of those free.
-    pub fn relayout(&mut self, monitor: &Monitor) {
-        let fingerprint = Fingerprint::of(monitor);
-        if fingerprint == self.fingerprint && !self.pages.is_empty() {
-            return;
-        }
-        self.fingerprint = fingerprint;
-        self.resolve(monitor);
-    }
-
-    /// Recomputes unconditionally — for when the model changed under a
-    /// fingerprint that happens to match, such as a window moving workspace.
-    pub fn resolve(&mut self, monitor: &Monitor) {
-        // Only an overview already on screen glides: one opening flies its
-        // windows in from the desktop instead.
-        let before = match self.overview.is_open() {
-            true => Some(self.flip.take().unwrap_or_else(|| self.snapshot())),
-            false => None,
-        };
-        self.canvas = Canvas::new(monitor.geometry(), monitor.usable());
-        self.active = monitor.active_index();
-
-        self.pages
-            .resize_with(monitor.workspaces().len(), Page::default);
-
-        for (workspace, page) in monitor.workspaces().iter().zip(&mut self.pages) {
-            page.workspace = Some(workspace.id());
-            page.windows.clear();
-            page.desktop.clear();
-            self.sizes.clear();
-            for tile in workspace.tiles() {
-                page.windows.push(tile.id());
-                page.desktop.push(tile.target());
-                self.sizes.push(tile.target().size);
-            }
-            scene::grid(self.canvas, &self.sizes, &self.metrics, &mut page.grid);
-        }
-
-        // One slot more than there are workspaces: the '+' tile, laid out with
-        // the previews so the bar stays centred with it in.
-        scene::bar(
-            self.canvas,
-            monitor.workspaces().len() + 1,
-            &self.metrics,
-            &mut self.bar,
-        );
-        self.add = self.bar.pop();
-        self.chrome.ensure(self.bar.len() + 1);
-        self.windows_hover.resize(self.grid().len());
-        self.workspaces_hover.resize(self.bar.len() + 1);
-        self.making_room = None;
-
-        if let Some(before) = before {
-            self.glide_from(before);
-        }
-    }
-
     /// Opens the overview, laying it out first so the windows have somewhere to
     /// fly to on the very first frame.
     pub fn open(&mut self, monitor: &Monitor) {
@@ -549,16 +335,6 @@ impl SpaceControl {
         self.input.step(dt);
         self.window_glides.step(dt);
         self.preview_glides.step(dt);
-
-        let blur = self.overview.blur();
-        if (blur - self.blurred).abs() > 1e-3 {
-            self.blurred = blur;
-            self.backdrop_commit.increment();
-        }
-    }
-
-    pub fn backdrop_commit(&self) -> CommitCounter {
-        self.backdrop_commit
     }
 
     pub fn settle(&mut self) {
@@ -614,34 +390,6 @@ impl SpaceControl {
         changed
     }
 
-    /// Steps the previews aside for one being dragged along the bar, gliding
-    /// each from wherever it is to the place it now stands in.
-    fn make_room(&mut self) {
-        let room = self
-            .input
-            .reordering()
-            .map(|reorder| (reorder.workspace, reorder.slot));
-        if room == self.making_room {
-            return;
-        }
-        let before: Vec<_> = (0..self.bar.len())
-            .filter_map(|index| Some((index, self.preview_slot(index)?.thumb)))
-            .collect();
-        self.making_room = room;
-        for (index, from) in before {
-            let Some(id) = self.workspace_id(index) else {
-                continue;
-            };
-            let Some(to) = self
-                .room_target(index)
-                .or_else(|| self.bar.get(index).copied())
-            else {
-                continue;
-            };
-            self.preview_glides.launch(id, from, to.thumb, (0.0, 0.0));
-        }
-    }
-
     pub fn press(&mut self, at: Point<f64, Logical>) -> Option<Target> {
         self.flip = None;
         let mut input = self.input;
@@ -678,13 +426,6 @@ impl SpaceControl {
     }
 }
 
-/// Where every window and preview was drawn at one moment, by identity.
-#[derive(Debug, Default)]
-struct Snapshot {
-    windows: Vec<(WindowId, Rectangle<f64, Logical>)>,
-    previews: Vec<(WorkspaceId, Rectangle<f64, Logical>)>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,7 +451,7 @@ mod tests {
             })
             .collect();
         scene::bar(space.canvas, workspaces, &space.metrics, &mut space.bar);
-        space.chrome.ensure(workspaces);
+        space.ids.ensure(workspaces);
         space.windows_hover.resize(windows);
         space.workspaces_hover.resize(workspaces);
         space
@@ -836,6 +577,25 @@ mod tests {
     }
 
     #[test]
+    fn a_window_carried_over_a_preview_does_not_offer_to_close_it() {
+        let mut space = laid_out(1, 3);
+        space.overview.snap_to(true);
+        space.press((50.0, 150.0).into());
+        let slot = space.bar()[1].thumb;
+        space.motion(
+            (
+                slot.loc.x + slot.size.w / 2.0,
+                slot.loc.y + slot.size.h / 2.0,
+            )
+                .into(),
+        );
+        space.settle();
+
+        assert_eq!(space.workspace_lift(1), 1.0, "the drop target still lifts");
+        assert_eq!(space.close_visibility(1), 0.0);
+    }
+
+    #[test]
     fn a_window_let_go_over_nothing_glides_back_to_its_cell() {
         let mut space = laid_out(2, 2);
         space.overview.snap_to(true);
@@ -864,34 +624,5 @@ mod tests {
             space.step(1.0 / 60.0);
         }
         assert_eq!(space.grid_rect(0, 0), Some(cell));
-    }
-
-    #[test]
-    fn a_fingerprint_notices_a_resized_window() {
-        let a = Fingerprint {
-            output: (0, 0, 1920, 1080),
-            usable: (0, 32, 1920, 1048),
-            workspaces: 2,
-            active: 0,
-            windows: 11,
-        };
-        assert_eq!(a, a);
-        assert_ne!(a, Fingerprint { windows: 12, ..a });
-        assert_ne!(a, Fingerprint { workspaces: 3, ..a });
-        assert_ne!(a, Fingerprint { active: 1, ..a });
-        assert_ne!(
-            a,
-            Fingerprint {
-                usable: (0, 0, 1920, 1080),
-                ..a
-            }
-        );
-        assert_ne!(
-            a,
-            Fingerprint {
-                output: (0, 0, 2560, 1080),
-                ..a
-            }
-        );
     }
 }

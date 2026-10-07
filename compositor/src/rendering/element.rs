@@ -6,8 +6,6 @@ use smithay::backend::renderer::{
     },
 };
 
-use spacecontrol::render::OverviewElement;
-
 use crate::rendering::decorate::Cropped;
 
 smithay::backend::renderer::element::render_elements! {
@@ -33,12 +31,8 @@ smithay::backend::renderer::element::render_elements! {
     /// A surface drawn at a size other than its own, with nothing added: the
     /// wallpaper as the overview zooms it.
     Scaled = Cropped<R>,
-    /// Anything the mission-control overview drew: a window shrunk into its
-    /// thumbnail, a workspace preview, the wash over the wallpaper. Wrapped for
-    /// the same reason the tile variant is.
-    Overview = Wrap<OverviewElement<R, E>>,
     /// A flat fill: what a locked output shows behind, or instead of, its
-    /// lock surface.
+    /// lock surface, and the overview's '+'.
     Solid = SolidColorRenderElement,
     /// A surface tree drawn whole with its `crownos_surface_animation_v1`
     /// transforms applied: an undecorated panel or a fullscreen window.
