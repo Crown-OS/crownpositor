@@ -25,7 +25,7 @@ use smithay::{
         utils::CommitCounter,
     },
     desktop::layer_map_for_output,
-    utils::{Logical, Physical, Point, Rectangle, Scale, Size},
+    utils::{Logical, Physical, Point, Rectangle, Scale},
     wayland::shell::wlr_layer::Layer,
 };
 
@@ -39,8 +39,8 @@ use spacecontrol::{
 use crate::{
     rendering::{
         Elements, FrameStyle, backdrop_elements,
-        blur::{self, GlassKind, ShadowPiece},
-        decorate::{Backdrop, Shadow, TileDecorator},
+        blur::{self, GlassKind},
+        decorate::{Backdrop, TileDecorator},
         decoration::{label::Label, window::Border},
         element::CrownElement,
         logical,
@@ -88,19 +88,6 @@ where
         preview_pane(out, renderer, self.decorator, pane, self.scale, self.commit);
     }
 }
-
-/// How far a workspace preview is lifted off the wallpaper, in logical pixels:
-/// the offset of its shadow and, times [`SHADOW_TAIL`], how far the shadow
-/// spreads.
-const PREVIEW_SHADOW: f64 = 10.0;
-
-/// Standard deviations of the gaussian a shadow's element has to hold before
-/// its tail is below one step of an 8-bit channel.
-const SHADOW_TAIL: f32 = 3.0;
-
-/// The shadow a workspace preview casts. Soft and weak: it is there to lift
-/// the preview off the wallpaper, not to be seen.
-const SHADOW_COLOUR: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
 
 /// Appends everything the overview draws on this output.
 ///
@@ -303,10 +290,8 @@ fn window_backdrop<R, D>(
     );
 }
 
-/// A workspace preview's own backing: the shadow that lifts it off the
-/// wallpaper, the rounded sheet of glass it is made of, and the ring around it
-/// when it is the workspace being shown. The shadow goes in front of the glass
-/// with the card cut out of it, so the glass never blurs it into its edges.
+/// A workspace preview's own backing: the rounded sheet of glass it is made
+/// of, and the ring around it when it is the workspace being shown.
 ///
 /// Glass rather than a flat fill because a workspace *is* glass — the
 /// wallpaper blurred behind whatever is on it — and a white card would be the
@@ -347,34 +332,6 @@ fn preview_pane<R, D>(
         )
     {
         out(ring);
-    }
-
-    let sigma = (PREVIEW_SHADOW * scale.y) as f32;
-    let shape = Rectangle::new(
-        geometry.loc + Point::from((0, (PREVIEW_SHADOW * scale.y / 2.0).round() as i32)),
-        geometry.size,
-    );
-    let spread = (sigma * SHADOW_TAIL).ceil() as i32;
-    if let Some(shadow) = decorator.shadow(
-        renderer,
-        Shadow {
-            id: pane.shadow,
-            commit,
-            piece: ShadowPiece {
-                geometry: Rectangle::new(
-                    shape.loc - Point::from((spread, spread)),
-                    shape.size + Size::from((spread * 2, spread * 2)),
-                ),
-                shape,
-                hole: geometry,
-                radius,
-                sigma,
-                color: SHADOW_COLOUR,
-            },
-            alpha: pane.alpha,
-        },
-    ) {
-        out(shadow);
     }
 
     if let Some(glass) = decorator.backdrop(
