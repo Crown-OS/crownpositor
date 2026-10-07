@@ -330,7 +330,7 @@ pub struct SurfaceEffects {
 
 /// How many standard deviations of the gaussian a shadow's element has to hold
 /// before its tail is below one step of an 8-bit channel.
-const SHADOW_TAIL: f32 = 3.0;
+pub const SHADOW_TAIL: f32 = 3.0;
 
 /// A blur radius as the protocol states it, in standard deviations. The
 /// convention every toolkit uses: the visible edge of a gaussian blur sits at

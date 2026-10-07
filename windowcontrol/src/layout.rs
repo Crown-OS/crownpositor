@@ -69,9 +69,38 @@ pub fn panel(canvas: Canvas, metrics: &Metrics, reveal: f64) -> Rectangle<f64, L
     )
 }
 
-/// Lays the row out inside `panel`, one slot per entry. `aspect` is a window's
-/// width over its height.
-pub fn slots<K: Copy + Eq>(
+/// Lays out the strip and its row, one slot per entry, and returns the strip.
+/// It is only as wide as the row needs either side of the centred selection,
+/// up to the usable width; `aspect` is a window's width over its height.
+pub fn arrange<K: Copy + Eq>(
+    canvas: Canvas,
+    metrics: &Metrics,
+    reveal: f64,
+    strip: &Strip<K>,
+    aspect: impl Fn(K) -> f64,
+    out: &mut Vec<Slot>,
+) -> Rectangle<f64, Logical> {
+    let widest = panel(canvas, metrics, reveal);
+    slots(canvas, metrics, widest, strip, aspect, out);
+
+    let middle = widest.loc.x + widest.size.w / 2.0;
+    let reach = out
+        .iter()
+        .map(|slot| {
+            (slot.rect.loc.x - middle)
+                .abs()
+                .max((slot.rect.loc.x + slot.rect.size.w - middle).abs())
+        })
+        .fold(0.0, f64::max);
+    let padding = f64::from(canvas.output.size.h) * metrics.padding;
+    let width = (2.0 * (reach + padding)).clamp(widest.size.h, widest.size.w);
+    Rectangle::new(
+        (middle - width / 2.0, widest.loc.y).into(),
+        (width, widest.size.h).into(),
+    )
+}
+
+fn slots<K: Copy + Eq>(
     canvas: Canvas,
     metrics: &Metrics,
     panel: Rectangle<f64, Logical>,
@@ -140,6 +169,23 @@ pub fn slot_at(
         .rposition(|slot| slot.alpha > 0.5 && slot.rect.contains(at))
 }
 
+/// `rect` stepped back towards `point` by `factor`, as the workspace behind
+/// the strip is.
+pub fn recede(
+    rect: Rectangle<f64, Logical>,
+    point: Point<f64, Logical>,
+    factor: f64,
+) -> Rectangle<f64, Logical> {
+    Rectangle::new(
+        (
+            point.x + (rect.loc.x - point.x) * factor,
+            point.y + (rect.loc.y - point.y) * factor,
+        )
+            .into(),
+        (rect.size.w * factor, rect.size.h * factor).into(),
+    )
+}
+
 fn shrink(rect: Rectangle<f64, Logical>, factor: f64) -> Rectangle<f64, Logical> {
     spacecontrol::scene::lift(rect, factor - 1.0)
 }
@@ -157,9 +203,8 @@ mod tests {
         let mut strip = Strip::default();
         strip.reset(keys.iter().copied(), direction);
         let metrics = Metrics::default();
-        let panel = panel(canvas(), &metrics, 1.0);
         let mut out = Vec::new();
-        slots(canvas(), &metrics, panel, &strip, |_| 16.0 / 10.0, &mut out);
+        let panel = arrange(canvas(), &metrics, 1.0, &strip, |_| 16.0 / 10.0, &mut out);
         (panel, out)
     }
 
@@ -192,6 +237,31 @@ mod tests {
             assert!(slot.rect.loc.y >= panel.loc.y);
             assert!(slot.rect.loc.y + slot.rect.size.h <= panel.loc.y + panel.size.h);
         }
+    }
+
+    #[test]
+    fn receding_keeps_the_vanishing_point_still() {
+        let rect = Rectangle::new((100.0, 100.0).into(), (800.0, 600.0).into());
+        let point = Point::from((500.0, 400.0));
+        let receded = recede(rect, point, 0.5);
+        assert_eq!(receded.loc, Point::from((300.0, 250.0)));
+        assert_eq!(receded.size, (400.0, 300.0).into());
+    }
+
+    #[test]
+    fn the_strip_hugs_a_short_row() {
+        let (panel, slots) = laid_out(&[1, 2], Direction::Forward);
+        assert!(panel.size.w < 1000.0, "{}", panel.size.w);
+        for slot in slots {
+            assert!(panel.contains_rect(slot.rect));
+        }
+    }
+
+    #[test]
+    fn a_long_row_is_cut_at_the_usable_width() {
+        let (panel, _) = laid_out(&(0..40).collect::<Vec<_>>(), Direction::Forward);
+        let widest = super::panel(canvas(), &Metrics::default(), 1.0);
+        assert_eq!(panel.size.w, widest.size.w);
     }
 
     #[test]

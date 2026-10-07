@@ -3,8 +3,11 @@
 //! disagree. Enabled by CROWN_DEBUG_FRAMES=<dir>.
 //!
 //! - `CROWN_DEBUG_SCRIPT="<at>:<step>,..."` — steps: `overview`, `ws@N`,
-//!   `click@x@y`, `move@x@y`, `down@x@y`, `up@x@y`, `snap` (dump the next
-//!   frame pair). Coordinates are logical; `at` is seconds since start.
+//!   `click@x@y`, `move@x@y`, `down@x@y`, `up@x@y`, `act@<action>` (any
+//!   keybind action, e.g. `act@window-control-next`), `scroll@<notches>`,
+//!   `key@<evdev code>@down|up` (56 is left Alt, 15 Tab, 1 Escape),
+//!   `snap` (dump the next frame pair). Coordinates are logical; `at` is
+//!   seconds since start.
 //! - `CROWN_DEBUG_BY_FRAME` — `at` counts renders instead, and animations
 //!   step 1/60 s per render, so a script replays the same frames every run.
 //! - `CROWN_DEBUG_SHADOW` — compare an offscreen incremental render with a
@@ -110,6 +113,33 @@ pub fn script(state: &mut State) {
                         time_usec: (elapsed * 1e6) as u64,
                     });
                 }
+            }
+            if let Some(Ok(command)) = action
+                .strip_prefix("act@")
+                .map(str::parse::<crate::input::shortcuts::Action>)
+            {
+                state.handle_action(command);
+            }
+            let mut parts = action.split('@');
+            if parts.next() == Some("key")
+                && let (Some(Ok(key)), Some(edge)) =
+                    (parts.next().map(str::parse::<u32>), parts.next())
+            {
+                use protocols::crownos_input::{InjectedEvent, InjectedFrame, KeyState};
+                let pressed = match edge {
+                    "down" => KeyState::Pressed,
+                    _ => KeyState::Released,
+                };
+                state.apply_injected_frame(InjectedFrame {
+                    events: vec![InjectedEvent::Key {
+                        key,
+                        state: pressed,
+                    }],
+                    time_usec: (elapsed * 1e6) as u64,
+                });
+            }
+            if let Some(Ok(notches)) = action.strip_prefix("scroll@").map(str::parse::<f64>) {
+                state.window_control_scroll(notches, true, false);
             }
             if let Some(index) = action
                 .strip_prefix("ws@")

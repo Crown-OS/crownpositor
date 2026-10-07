@@ -22,11 +22,13 @@ fn vt_switch_target(handle: &KeysymHandle<'_>) -> Option<i32> {
     })
 }
 
-/// What a key does while the Alt+Tab strip is up.
+/// What a key does while the Alt+Tab strip is up. Read off the unmodified
+/// keysyms: Alt is held the whole time, and a keymap may give Alt+Escape a
+/// symbol of its own.
 fn window_control_key(handle: &KeysymHandle<'_>, shift: bool) -> Action {
-    let syms = handle.modified_syms();
+    let syms = handle.raw_syms();
     let has = |sym: Keysym| syms.contains(&sym);
-    if has(Keysym::ISO_Left_Tab) || (has(Keysym::Tab) && shift) || has(Keysym::Left) {
+    if (has(Keysym::Tab) && shift) || has(Keysym::Left) {
         Action::WindowControlPrevious
     } else if has(Keysym::Tab) || has(Keysym::Right) {
         Action::WindowControlNext

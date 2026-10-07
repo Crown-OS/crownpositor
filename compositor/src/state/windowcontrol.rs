@@ -8,7 +8,9 @@ use smithay::utils::{Logical, Point};
 
 use windowcontrol::Direction;
 
-use crate::state::State;
+use crate::{
+    layout::WorkspaceMode, shell::workspace::Workspace, state::State, utils::id::WindowId,
+};
 
 /// Pixels of touchpad scroll that move the row by one window.
 const SCROLL_PER_ENTRY: f64 = 120.0;
@@ -21,8 +23,9 @@ impl State {
             .any(|monitor| monitor.window_control().is_open())
     }
 
-    /// Raises the strip on the focused monitor, or moves its selection once
-    /// it is up.
+    /// On a floating workspace, raises the strip on the focused monitor or
+    /// moves its selection once it is up. A tiling workspace already shows
+    /// every window, so there it just hands focus to the next one.
     pub(super) fn window_control_advance(&mut self, direction: Direction) {
         if self.overview_is_open() {
             return;
@@ -32,6 +35,10 @@ impl State {
         };
         if monitor.window_control().is_open() {
             monitor.window_control_mut().advance(direction);
+        } else if monitor.active().mode() == WorkspaceMode::Tiling {
+            if let Some(next) = next_tile(monitor.active(), direction) {
+                self.shell.focus_window(next);
+            }
         } else {
             monitor.with_window_control(|control, monitor| control.open(monitor, direction));
         }
@@ -123,4 +130,19 @@ impl State {
             .filter(|monitor| monitor.window_control().is_open())?;
         Some((monitor.id(), at - monitor.geometry().loc.to_f64()))
     }
+}
+
+/// The window after the focused one in layout order, wrapping at either end.
+fn next_tile(workspace: &Workspace, direction: Direction) -> Option<WindowId> {
+    let tiles = workspace.tiles();
+    let len = tiles.len();
+    let current = workspace
+        .focus()
+        .and_then(|focused| tiles.iter().position(|tile| tile.id() == focused));
+    let index = match (current, direction) {
+        (None, _) => 0,
+        (Some(at), Direction::Forward) => (at + 1) % len,
+        (Some(at), Direction::Backward) => (at + len - 1) % len,
+    };
+    tiles.get(index).map(|tile| tile.id())
 }

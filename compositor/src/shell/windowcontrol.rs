@@ -130,12 +130,11 @@ impl WindowControl {
             monitor.usable(),
         );
         self.canvas = Some(canvas);
-        self.panel = layout::panel(canvas, &self.metrics, self.switcher.progress());
         let aspects = &self.aspects;
-        layout::slots(
+        self.panel = layout::arrange(
             canvas,
             &self.metrics,
-            self.panel,
+            self.switcher.progress(),
             self.switcher.strip(),
             |id| aspects.get(&id).copied().unwrap_or(16.0 / 10.0),
             &mut self.slots,
