@@ -12,7 +12,7 @@ use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
     layout::{Gaps, WorkspaceMode},
-    shell::overview::SpaceControl,
+    shell::{overview::SpaceControl, windowcontrol::WindowControl},
     shell::{
         workspace::{Workspace, WorkspaceRef},
         workspace_switch::{Edge, PAGE_GAP, WorkspaceSwitch},
@@ -136,6 +136,8 @@ pub struct Monitor {
     /// The mission-control overview on this output. Per-monitor, like the
     /// viewport: each screen opens and closes its own.
     spacecontrol: SpaceControl,
+    /// The Alt+Tab strip, risen over this output's active workspace.
+    window_control: WindowControl,
 }
 
 impl Monitor {
@@ -164,6 +166,7 @@ impl Monitor {
             default_mode,
             fixed_position: None,
             spacecontrol: SpaceControl::new(),
+            window_control: WindowControl::default(),
         };
         monitor.add_workspace();
         monitor
@@ -320,6 +323,24 @@ impl Monitor {
         result
     }
 
+    pub fn window_control(&self) -> &WindowControl {
+        &self.window_control
+    }
+
+    pub fn window_control_mut(&mut self) -> &mut WindowControl {
+        &mut self.window_control
+    }
+
+    pub fn with_window_control<T>(
+        &mut self,
+        act: impl FnOnce(&mut WindowControl, &Monitor) -> T,
+    ) -> T {
+        let mut control = std::mem::take(&mut self.window_control);
+        let result = act(&mut control, self);
+        self.window_control = control;
+        result
+    }
+
     pub fn switch(&self) -> &WorkspaceSwitch {
         &self.switch
     }
@@ -331,6 +352,7 @@ impl Monitor {
     pub fn set_animation_profile(&mut self, profile: Option<SpringProfile>) {
         self.switch.set_profile(profile);
         self.spacecontrol.set_profile(profile);
+        self.window_control.set_profile(profile);
     }
 
     /// Logical pixels from one workspace to the next while they slide past
@@ -706,6 +728,7 @@ mod tests {
             default_mode: WorkspaceMode::Tiling,
             fixed_position: None,
             spacecontrol: SpaceControl::new(),
+            window_control: WindowControl::default(),
         };
         for _ in 0..workspaces {
             monitor.workspaces.push(Workspace::new(

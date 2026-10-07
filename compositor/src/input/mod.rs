@@ -27,6 +27,11 @@ impl State {
             | InputEvent::GestureSwipeUpdate { .. }
             | InputEvent::GestureSwipeEnd { .. }
                 if self.shell.session_lock.is_active() => {}
+            // The Alt+Tab strip scrolls its own row, before Alt turns the
+            // scroll into a pinch.
+            InputEvent::PointerAxis { event, .. } if self.window_control_is_open() => {
+                self.on_window_control_axis::<I>(event)
+            }
             // The overview owns the pointer while it is open. A scroll or a
             // pinch there is aimed at a thumbnail rather than at the window
             // inside it, and there is nothing a client could sensibly do with
@@ -38,7 +43,7 @@ impl State {
             | InputEvent::GesturePinchEnd { .. }
             | InputEvent::GestureHoldBegin { .. }
             | InputEvent::GestureHoldEnd { .. }
-                if self.overview_owns_input() => {}
+                if self.mode_owns_input() => {}
             InputEvent::Keyboard { event, .. } => self.on_keyboard_key::<I>(event),
             // Relative motion is what libinput produces; without this arm a DRM
             // session has no pointer at all.
