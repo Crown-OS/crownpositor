@@ -19,6 +19,9 @@ fn fade(color: Rgba, factor: f32) -> Rgba {
     color.map(|channel| channel * factor)
 }
 
+/// Nothing at all, premultiplied.
+const CLEAR: Rgba = [0.0; 4];
+
 /// How much of its colour an unfocused window's frame keeps. Enough to stay
 /// legible, little enough that the focused window is obvious at a glance.
 const UNFOCUSED: f32 = 0.62;
@@ -35,6 +38,9 @@ pub struct FramePalette {
     /// Straight, not premultiplied: the title is rasterised on the CPU into a
     /// buffer the renderer premultiplies itself.
     pub label: Rgba,
+    /// Straight: the tint the frame's glass is mixed with, which is what the
+    /// panel's gradient becomes when the frame stands on glass.
+    pub sheet: Rgba,
 }
 
 impl FramePalette {
@@ -51,6 +57,7 @@ impl FramePalette {
                 control_glyph: premultiply([1.0, 1.0, 1.0, 0.82]),
                 border: premultiply([1.0, 1.0, 1.0, 0.18]),
                 label: [0.94, 0.94, 0.96, 1.0],
+                sheet: [0.17, 0.17, 0.19, 0.80],
             }
         } else {
             Self {
@@ -61,6 +68,7 @@ impl FramePalette {
                 control_glyph: premultiply([0.22, 0.22, 0.24, 1.0]),
                 border: premultiply([1.0, 1.0, 1.0, 0.45]),
                 label: [0.11, 0.11, 0.13, 1.0],
+                sheet: [0.92, 0.92, 0.93, 0.73],
             }
         };
 
@@ -80,7 +88,25 @@ impl FramePalette {
                     palette.label[2],
                     palette.label[3] * UNFOCUSED,
                 ],
+                sheet: [
+                    palette.sheet[0],
+                    palette.sheet[1],
+                    palette.sheet[2],
+                    palette.sheet[3] * UNFOCUSED,
+                ],
             }
+        }
+    }
+
+    /// What the panel still draws once the glass under it carries the tint:
+    /// the controls alone. The glass's own rim is the highlight, traced round
+    /// the corners where a straight line would stop against them.
+    pub fn over_glass(self) -> Self {
+        Self {
+            tint_top: CLEAR,
+            tint_bottom: CLEAR,
+            highlight: CLEAR,
+            ..self
         }
     }
 }

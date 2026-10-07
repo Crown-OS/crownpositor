@@ -39,9 +39,9 @@ pub struct TitleBarParams {
     /// Changes exactly when the panel's pixels do — focus, hover or theme.
     /// Geometry changes are the damage tracker's own job and need no bump.
     pub commit: CommitCounter,
-    /// The sheet to fill, in output-local physical coordinates: the whole
-    /// window grown to the border's outer edge, so the tint reaches everything
-    /// the client does not cover.
+    /// The rect to fill, in output-local physical coordinates: just the bar
+    /// when the frame's glass carries the tint, the whole window when the
+    /// panel has to carry it to everything the client does not cover.
     pub geometry: Rectangle<i32, Physical>,
     /// The rect the corners are cut from, same space. Passed separately because
     /// a sheet clipped at a screen edge still has to round against the window.
