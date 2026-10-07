@@ -56,6 +56,10 @@ uniform float corner_radius;
 uniform float noise;
 // Straight RGBA mixed over the blurred backdrop.
 uniform vec4 glass_tint;
+// How far in from the edge the tint starts. The band outside it stays clear
+// glass: a window frame's outline ring, lit by what is behind it rather than
+// shaded like the titlebar.
+uniform float tint_inset;
 // Chroma multiplier about the luma. Above 1.0 is the vibrancy that makes a
 // colour show through frosted glass instead of washing out into grey.
 uniform float saturation;
@@ -174,7 +178,10 @@ void main() {
     // through the material.
     float luma = dot(color, LUMA);
     color = max(mix(vec3(luma), color, saturation * (1.0 + RIM_VIBRANCY * bevel)), 0.0);
-    color = mix(color, glass_tint.rgb, glass_tint.a);
+    float tinted = tint_inset > 0.0
+        ? 1.0 - smoothstep(-0.5 * aa, 0.5 * aa, distance + tint_inset)
+        : 1.0;
+    color = mix(color, glass_tint.rgb, glass_tint.a * tinted);
 
     // The light the rim catches. Where it is tinted, it carries the colour of
     // whatever lies just past this edge — the window below the glass, blurred —

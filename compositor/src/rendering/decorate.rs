@@ -65,6 +65,15 @@ pub struct Backdrop {
     pub strength: f32,
 }
 
+/// The rounded rectangle a piece of glass is cut from and lit as, in
+/// output-local physical coordinates. Larger than the glass itself wherever the
+/// glass is one part of a bigger shape, like a client's blur inside its frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Outline {
+    pub rect: Rectangle<i32, Physical>,
+    pub radius: f32,
+}
+
 /// One blurred silhouette to draw underneath a surface, and the identity the
 /// damage tracker knows it by.
 #[derive(Debug, Clone)]
