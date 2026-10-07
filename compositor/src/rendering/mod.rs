@@ -24,6 +24,7 @@ mod painter;
 pub mod popup;
 pub mod rounded;
 pub mod surface_tree;
+mod windowcontrol;
 
 use smithay::{
     backend::renderer::{
@@ -236,8 +237,24 @@ where
     // recomposites textures it already holds instead of anyone touching pixels.
     // Layer surfaces sit outside the loop: a bar does not travel with the
     // workspace under it.
+    // The Alt+Tab strip draws the active workspace itself, stepped back
+    // behind it; the wallpaper and the panels below stay where they are.
     let mut covered = false;
-    for (workspace, offset) in monitor.visible_workspaces() {
+    let workspaces = match monitor.window_control().is_visible() {
+        true => {
+            windowcontrol::window_control_elements(
+                &mut elements,
+                monitor,
+                renderer,
+                decorator,
+                scale,
+                style,
+            );
+            None
+        }
+        false => Some(monitor.visible_workspaces()),
+    };
+    for (workspace, offset) in workspaces.into_iter().flatten() {
         match workspace.fullscreen().and_then(|id| workspace.tile(id)) {
             // A fullscreen window covers its page edge to edge, so rounding it
             // would just cut four notches out of the display — and while it is
