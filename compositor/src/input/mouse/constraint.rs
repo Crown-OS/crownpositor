@@ -67,7 +67,7 @@ struct ConstraintTarget {
 
 impl State {
     fn constraint_target(&self) -> Option<ConstraintTarget> {
-        if self.overview_owns_input()
+        if self.mode_owns_input()
             || self.input.capture.is_active()
             || self.shell.menus.open().is_some()
         {
@@ -192,7 +192,7 @@ impl State {
         let Some((surface, hint)) = self.input.pointer_lock.pending_warp.take() else {
             return;
         };
-        if self.overview_owns_input() {
+        if self.mode_owns_input() {
             return;
         }
         let Some((target, origin)) = self.shell.pointer_focus_under(self.input.pointer_location)

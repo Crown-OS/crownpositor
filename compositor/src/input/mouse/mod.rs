@@ -102,7 +102,10 @@ impl State {
 
         // And an open overview owns it the same way: the thumbnails highlight
         // under the cursor and the windows they stand for hear nothing.
-        if self.overview_motion(location) || self.overview_owns_input() {
+        if self.overview_motion(location)
+            || self.window_control_motion(location)
+            || self.mode_owns_input()
+        {
             self.queue_redraw_at(previous);
             self.queue_redraw_at(location);
             return;
@@ -198,9 +201,9 @@ impl State {
         if !pointer.is_grabbed() {
             let taken = match state {
                 ButtonState::Pressed => self.overview_press(at),
-                ButtonState::Released => self.overview_release(at),
+                ButtonState::Released => self.overview_release(at) || self.window_control_click(at),
             };
-            if taken || self.overview_owns_input() {
+            if taken || self.mode_owns_input() {
                 return;
             }
         }
@@ -363,6 +366,28 @@ fn clamp_to_rectangle(
 }
 
 /// Logical pixels, with a wheel that reports only notches counted at 15 a notch.
+impl State {
+    /// A wheel notch moves the strip's row by one window; a touchpad drags it
+    /// and lets go when the fingers lift. Down and right both mean onwards.
+    pub(in crate::input) fn on_window_control_axis<I: InputBackend>(
+        &mut self,
+        event: I::PointerAxisEvent,
+    ) {
+        let notches: f64 = [Axis::Horizontal, Axis::Vertical]
+            .into_iter()
+            .filter_map(|axis| event.amount_v120(axis))
+            .sum::<f64>()
+            / 120.0;
+        let pixels: f64 = [Axis::Horizontal, Axis::Vertical]
+            .into_iter()
+            .map(|axis| event.amount(axis).unwrap_or(0.0))
+            .sum();
+        let discrete = notches != 0.0;
+        let stopped = !discrete && pixels == 0.0 && event.source() == AxisSource::Finger;
+        self.window_control_scroll(if discrete { notches } else { pixels }, discrete, stopped);
+    }
+}
+
 fn axis_amount<I: InputBackend>(event: &I::PointerAxisEvent, axis: Axis) -> f64 {
     event
         .amount(axis)

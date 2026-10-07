@@ -288,6 +288,11 @@ impl Workspace {
         Some(tile)
     }
 
+    /// Every window, most recently focused first.
+    pub fn recent_windows(&self) -> impl Iterator<Item = WindowId> + Clone + '_ {
+        self.focus_stack.iter().rev().copied()
+    }
+
     pub fn focus_window(&mut self, id: WindowId) -> bool {
         if !self.contains(id) || self.focus == Some(id) {
             return false;

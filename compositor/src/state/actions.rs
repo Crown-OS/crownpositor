@@ -14,6 +14,7 @@ use protocols::{
 };
 
 use spacecontrol::animations::spring::SpringProfile;
+use windowcontrol::Direction as Cycle;
 
 use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
@@ -145,6 +146,11 @@ impl State {
                 }
             }
 
+            Action::WindowControlNext => self.window_control_advance(Cycle::Forward),
+            Action::WindowControlPrevious => self.window_control_advance(Cycle::Backward),
+            Action::WindowControlCommit => self.window_control_commit(),
+            Action::WindowControlDismiss => self.window_control_dismiss(),
+
             Action::MoveWorkspaceToOutput(_) => {
                 tracing::warn!(?action, "action is not implemented yet");
             }
@@ -212,7 +218,7 @@ impl State {
         // left and hears nothing more until it closes. Handing that leave over
         // is also what takes the cursor back: a client that had hidden it has
         // no say over the pointer any more.
-        let under = match self.overview_owns_input() {
+        let under = match self.mode_owns_input() {
             true => {
                 if self.input.cursor.reclaim() {
                     self.queue_pointer_redraw();

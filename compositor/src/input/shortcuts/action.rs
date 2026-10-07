@@ -132,6 +132,14 @@ pub enum Action {
     /// One chord for both, the way a dedicated mission-control key behaves.
     ToggleWorkspaceView,
 
+    /// Raises the Alt+Tab strip, or moves its selection once it is up.
+    WindowControlNext,
+    WindowControlPrevious,
+    /// Switches to the selected window and sinks the strip.
+    WindowControlCommit,
+    /// Sinks the strip without switching.
+    WindowControlDismiss,
+
     /// Grow or shrink the master column by a fraction of the area.
     ResizeSplit(f64),
     /// Into or out of the master column.
@@ -240,6 +248,10 @@ impl FromStr for Action {
             "open-workspace-view" => Ok(Self::OpenWorkspaceView),
             "close-workspace-view" => Ok(Self::CloseWorkspaceView),
             "toggle-workspace-view" => Ok(Self::ToggleWorkspaceView),
+            "window-control-next" => Ok(Self::WindowControlNext),
+            "window-control-previous" => Ok(Self::WindowControlPrevious),
+            "window-control-commit" => Ok(Self::WindowControlCommit),
+            "window-control-dismiss" => Ok(Self::WindowControlDismiss),
 
             "resize-split" => {
                 let raw = arg("fraction", parts)?;

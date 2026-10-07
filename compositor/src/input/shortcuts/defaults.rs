@@ -15,6 +15,11 @@ const SUPER_SHIFT: Mods = Mods {
     shift: true,
     ..Mods::META
 };
+const ALT: Mods = Mods {
+    alt: true,
+    ..Mods::NONE
+};
+const ALT_SHIFT: Mods = Mods { shift: true, ..ALT };
 const SUPER_CTRL: Mods = Mods {
     ctrl: true,
     ..Mods::META
@@ -89,6 +94,8 @@ pub fn bindings() -> impl Iterator<Item = (Keybind, Action)> {
         ),
         (SUPER, KeyCode::Q, Action::CloseWindow),
         (SUPER, KeyCode::E, Action::ToggleWorkspaceView),
+        (ALT, KeyCode::Tab, Action::WindowControlNext),
+        (ALT_SHIFT, KeyCode::Tab, Action::WindowControlPrevious),
         (SUPER, KeyCode::H, Action::Focus(Direction::Left)),
         (SUPER, KeyCode::L, Action::Focus(Direction::Right)),
         (SUPER, KeyCode::K, Action::Focus(Direction::Up)),
