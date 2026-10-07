@@ -16,12 +16,12 @@ use smithay::{
     wayland::shell::wlr_layer::Layer,
 };
 
-use super::Painter;
 use crate::{
     rendering::{
         blur::{Glass, GlassKind},
         decorate::{Backdrop, TileDecorator},
         element::CrownElement,
+        painter::Painter,
     },
     shell::monitor::Monitor,
 };

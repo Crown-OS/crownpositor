@@ -8,27 +8,21 @@
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
-        element::{
-            Id, Kind, memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement,
-        },
+        element::{Kind, solid::SolidColorRenderElement},
         utils::CommitCounter,
     },
-    utils::{Logical, Physical, Point, Rectangle},
+    utils::{Logical, Point, Rectangle},
 };
 
 use spacecontrol::scene;
 
-use super::{
-    Painter,
-    thumbnail::{Backing, Thumbnail},
-};
 use crate::{
     rendering::{
         blur::GlassKind,
-        decorate::{Backdrop, TileDecorator},
+        decorate::TileDecorator,
         decoration::window::Border,
         element::CrownElement,
-        logical,
+        painter::{Backing, Painter, Thumbnail},
     },
     shell::{monitor::Monitor, overview::TileIds},
 };
@@ -136,6 +130,7 @@ where
         let geometry = self.physical(button);
         self.glass(
             ids.glyph[0].clone(),
+            GlassKind::Window,
             geometry,
             geometry.size.w as f32 / 2.0,
             1.0,
@@ -217,62 +212,11 @@ where
         }
         self.glass(
             ids.glass.clone(),
+            GlassKind::Window,
             geometry,
             card.radius,
             card.shrink,
             card.alpha,
         );
-    }
-
-    fn glass(
-        &mut self,
-        id: Id,
-        geometry: Rectangle<i32, Physical>,
-        radius: f32,
-        shrink: f64,
-        alpha: f32,
-    ) {
-        if geometry.is_empty() || alpha <= 0.0 {
-            return;
-        }
-        let backdrop = Backdrop {
-            id,
-            commit: self.glass_commit(),
-            geometry,
-            mask: geometry,
-            radius,
-            glass: self
-                .decorator
-                .glass(self.scale.x * shrink, GlassKind::Window),
-            alpha,
-            strength: self.decorator.blur_strength_for(shrink),
-        };
-        if let Some(glass) = self.decorator.backdrop(self.renderer, backdrop) {
-            self.push(glass);
-        }
-    }
-
-    /// Text rasterised by the compositor, centred on `centre`.
-    fn label(&mut self, text: &str, centre: Point<f64, Logical>, colour: [f32; 4], alpha: f32) {
-        let scale = self.scale;
-        let Some(label) = self.text.label(text, scale.x, colour, true) else {
-            return;
-        };
-        let size = logical(label.size);
-        let origin = Point::<f64, Physical>::from((
-            ((centre.x - f64::from(size.w) / 2.0) * scale.x).round(),
-            ((centre.y - f64::from(size.h) / 2.0) * scale.y).round(),
-        ));
-        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
-            self.renderer,
-            origin,
-            &label.buffer,
-            Some(alpha),
-            Some(Rectangle::from_size(size.to_f64())),
-            Some(size),
-            Kind::Unspecified,
-        ) {
-            self.elements.push(CrownElement::Memory(element));
-        }
     }
 }
