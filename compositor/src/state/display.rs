@@ -32,6 +32,11 @@ pub struct DisplayGamma {
 }
 
 impl DisplayGamma {
+    pub fn owns(&self, output: &Output) -> bool {
+        let name = output.name();
+        self.owned.iter().any(|held| *held == name)
+    }
+
     /// Records the new ownership and says whether it changed.
     fn set(&mut self, output: &Output, owned: bool) -> bool {
         let name = output.name();
