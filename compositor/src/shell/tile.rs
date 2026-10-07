@@ -2,6 +2,7 @@ use smithay::{
     desktop::Window,
     reexports::{
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+        wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode as KdeMode,
         wayland_server::protocol::wl_surface::WlSurface,
     },
     utils::{Logical, Point, Rectangle, Serial, Size},
@@ -132,12 +133,14 @@ pub enum Chrome {
 }
 
 impl Chrome {
-    /// Who draws the frame under an `xdg-decoration` mode. A client that never
-    /// asked keeps ours.
-    pub fn for_mode(mode: Option<Mode>) -> Self {
-        match mode {
-            Some(Mode::ClientSide) => Self::Client,
-            _ => Self::Compositor,
+    /// Who draws the frame, by what the client negotiated. `xdg-decoration`
+    /// speaks first and the KDE protocol GTK 3 uses second. A client that used
+    /// neither draws its own, which is what both protocols' absence means:
+    /// GTK 4 and libadwaita bind neither and always draw a headerbar.
+    pub fn requested(xdg: Option<Mode>, kde: Option<KdeMode>) -> Self {
+        match (xdg, kde) {
+            (Some(Mode::ServerSide), _) | (None, Some(KdeMode::Server)) => Self::Compositor,
+            _ => Self::Client,
         }
     }
 }
@@ -793,5 +796,35 @@ mod tests {
             let size = anim.rect().size;
             assert!(size.w >= 1.0 && size.h >= 1.0, "got {size:?}");
         }
+    }
+
+    #[test]
+    fn a_client_that_negotiated_nothing_draws_its_own_frame() {
+        assert_eq!(Chrome::requested(None, None), Chrome::Client);
+    }
+
+    #[test]
+    fn xdg_decoration_wins_over_the_kde_protocol() {
+        assert_eq!(
+            Chrome::requested(Some(Mode::ClientSide), Some(KdeMode::Server)),
+            Chrome::Client
+        );
+        assert_eq!(
+            Chrome::requested(Some(Mode::ServerSide), Some(KdeMode::Client)),
+            Chrome::Compositor
+        );
+    }
+
+    #[test]
+    fn the_kde_protocol_is_followed_without_xdg_decoration() {
+        assert_eq!(
+            Chrome::requested(None, Some(KdeMode::Server)),
+            Chrome::Compositor
+        );
+        assert_eq!(
+            Chrome::requested(None, Some(KdeMode::Client)),
+            Chrome::Client
+        );
+        assert_eq!(Chrome::requested(None, Some(KdeMode::None)), Chrome::Client);
     }
 }
