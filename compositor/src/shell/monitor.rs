@@ -15,7 +15,7 @@ use crate::{
     shell::overview::SpaceControl,
     shell::{
         workspace::{Workspace, WorkspaceRef},
-        workspace_switch::{PAGE_GAP, WorkspaceSwitch},
+        workspace_switch::{Edge, PAGE_GAP, WorkspaceSwitch},
     },
     utils::edid::EdidInfo,
     utils::id::{OutputId, WorkspaceId},
@@ -243,13 +243,27 @@ impl Monitor {
 
     /// Appends a fresh workspace and returns its index.
     pub fn add_workspace(&mut self) -> usize {
+        let workspace = self.fresh_workspace();
+        self.workspaces.push(workspace);
+        self.workspaces.len() - 1
+    }
+
+    /// Puts a fresh workspace first. Every index moves up one, and the
+    /// viewport is the caller's to renumber.
+    fn prepend_workspace(&mut self) {
+        let workspace = self.fresh_workspace();
+        self.workspaces.insert(0, workspace);
+        self.active += 1;
+        self.previous += 1;
+    }
+
+    fn fresh_workspace(&self) -> Workspace {
         let mut workspace = Workspace::new(self.id, self.default_mode, self.gaps);
         workspace.set_area(
             shrink(self.usable, self.gaps.outer),
             Rectangle::from_size(self.config.logical_size()),
         );
-        self.workspaces.push(workspace);
-        self.workspaces.len() - 1
+        workspace
     }
 
     /// Moves the workspace at `from` to `to`, shifting the ones between. The
@@ -353,10 +367,16 @@ impl Monitor {
     }
 
     /// `travelled` is the fingers' cumulative horizontal travel in pages,
-    /// positive rightward.
+    /// positive rightward. Pulling hard past either end makes a workspace there.
     pub fn update_switch_gesture(&mut self, travelled: f64) {
         let last = self.workspaces.len().saturating_sub(1);
-        self.switch.drag_to(travelled, last);
+        match self.switch.drag_to(travelled, last) {
+            Some(Edge::Start) => self.prepend_workspace(),
+            Some(Edge::End) => {
+                self.add_workspace();
+            }
+            None => {}
+        }
     }
 
     /// Ends the swipe and makes whichever workspace it landed on active, while
@@ -748,6 +768,42 @@ mod tests {
         assert_eq!(monitor.add_workspace(), 2);
         assert_eq!(monitor.active_index(), 0);
         assert_eq!(monitor.workspaces().len(), 3);
+    }
+
+    #[test]
+    fn pulling_hard_past_the_first_workspace_puts_a_new_one_first() {
+        let mut monitor = monitor(2);
+        let ids: Vec<_> = monitor.workspaces().iter().map(Workspace::id).collect();
+
+        monitor.begin_switch_gesture();
+        monitor.update_switch_gesture(1.0);
+        assert_eq!(monitor.workspaces().len(), 3);
+        assert_eq!(monitor.workspaces()[1].id(), ids[0]);
+        assert_eq!(
+            monitor.active().id(),
+            ids[0],
+            "nothing changes until release"
+        );
+
+        assert!(monitor.end_switch_gesture(0.0));
+        assert_eq!(monitor.active_index(), 0);
+        assert_eq!(monitor.previous_index(), 1);
+        settle(&mut monitor);
+        assert_eq!(monitor.switch().position(), 0.0);
+    }
+
+    #[test]
+    fn pulling_hard_past_the_last_workspace_appends_one() {
+        let mut monitor = monitor(2);
+        monitor.activate(1);
+        settle(&mut monitor);
+
+        monitor.begin_switch_gesture();
+        monitor.update_switch_gesture(-1.0);
+        monitor.update_switch_gesture(-2.0);
+        assert_eq!(monitor.workspaces().len(), 3, "one per swipe");
+        assert!(monitor.end_switch_gesture(0.0));
+        assert_eq!(monitor.active_index(), 2);
     }
 
     #[test]
