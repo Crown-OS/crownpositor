@@ -210,7 +210,7 @@ impl BlurBackdrop {
         projection: [f32; 9],
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-    ) -> Option<[Uniform<'static>; 14]> {
+    ) -> Option<[Uniform<'static>; 15]> {
         let (mut viewport, mut previous) = ([0; 4], 0);
         unsafe {
             gl.GetIntegerv(ffi::VIEWPORT, viewport.as_mut_ptr());

@@ -44,7 +44,7 @@ pub struct BlurShaders {
 }
 
 impl BlurShaders {
-    fn finish_names() -> [UniformName<'static>; 14] {
+    fn finish_names() -> [UniformName<'static>; 15] {
         [
             UniformName::new("scene_size", UniformType::_2f),
             UniformName::new("mask_origin", UniformType::_2f),
@@ -54,6 +54,7 @@ impl BlurShaders {
             UniformName::new("corner_radius", UniformType::_1f),
             UniformName::new("noise", UniformType::_1f),
             UniformName::new("glass_tint", UniformType::_4f),
+            UniformName::new("tint_inset", UniformType::_1f),
             UniformName::new("saturation", UniformType::_1f),
             UniformName::new("rim", UniformType::_1f),
             UniformName::new("light", UniformType::_2f),
@@ -133,7 +134,7 @@ impl BlurShaders {
         noise: f32,
         glass: Glass,
         light: (f32, f32),
-    ) -> [Uniform<'static>; 14] {
+    ) -> [Uniform<'static>; 15] {
         [
             Uniform::new("scene_size", (scene.w as f32, scene.h as f32)),
             Uniform::new("mask_origin", (mask.loc.x as f32, mask.loc.y as f32)),
@@ -143,6 +144,7 @@ impl BlurShaders {
             Uniform::new("corner_radius", corner_radius),
             Uniform::new("noise", noise),
             Uniform::new("glass_tint", glass.tint),
+            Uniform::new("tint_inset", glass.tint_inset),
             Uniform::new("saturation", glass.saturation),
             Uniform::new("rim", glass.rim),
             Uniform::new("light", light),

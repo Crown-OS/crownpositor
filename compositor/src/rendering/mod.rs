@@ -44,9 +44,9 @@ use config::Appearance;
 
 use crate::{
     rendering::{
-        blur::GlassKind,
+        blur::{Glass, GlassKind},
         cursor::Cursor,
-        decorate::{Backdrop, Shadow, TileDecorator},
+        decorate::{Backdrop, Outline, Shadow, TileDecorator},
         decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
         element::CrownElement,
     },
@@ -394,10 +394,18 @@ fn tile_elements<R, D>(
 
     // The blurred glass goes in *after* the window's surfaces — later in the
     // list is further from the eye, so it sits directly behind them. The
-    // surface origin is the space the client expressed its blur region in;
-    // `clip` is both the mask the corners are cut from and the bound the region
-    // is clipped to.
+    // surface origin is the space the client expressed its blur region in, and
+    // `clip` bounds it. On a framed window that glass is one part of the
+    // frame's, so it is cut from and lit as the whole frame: the rim runs on
+    // round the titlebar rather than across the window just under it.
     if let Some(surface) = surface {
+        let outline = match client_radius {
+            None if inset > 0 => frame_sheet(frame, radius, style.scale),
+            _ => Outline {
+                rect: clip,
+                radius: client_radius.unwrap_or(radius),
+            },
+        };
         backdrop_elements(
             &mut |element| elements.push(CrownElement::Tile(Wrap::from(element))),
             renderer,
@@ -406,7 +414,7 @@ fn tile_elements<R, D>(
             surface_origin,
             scale,
             clip,
-            client_radius.unwrap_or(radius),
+            outline,
             alpha,
             GlassKind::Window,
             1.0,
@@ -532,16 +540,33 @@ fn frame_layout(tile: &Tile, frame: Rectangle<i32, Physical>, scale: f64) -> Tit
     )
 }
 
-/// What a decorated window sits on: a sheet of tint over a sheet of blurred
-/// glass, both behind the client.
+/// The whole of a decorated window as one shape, out to the ring's outer edge
+/// where its glass stops — the same arithmetic the ring is drawn with, because
+/// a sheet that disagreed with it by a pixel would show as a seam.
+fn frame_sheet(frame: Rectangle<i32, Physical>, radius: f32, scale: f64) -> Outline {
+    window::outline(frame, scale as f32, radius).map_or(
+        Outline {
+            rect: frame,
+            radius,
+        },
+        |(rect, _, radius)| Outline { rect, radius },
+    )
+}
+
+/// What a decorated window sits on: a sheet of tinted glass behind the client,
+/// and the titlebar's controls over it.
 ///
-/// Two rects rather than one, because they reach different distances. The tint
-/// covers the window and is masked by its rounded rect, so it fills the
-/// titlebar *and* the notches the client's rounded corners cut away — those
-/// were bare desktop before, and a titlebar whose material stops at its own
-/// bottom edge reads as two materials. The glass reaches one step further, to
-/// the border's outer edge, because the ring is translucent and a sheet that
-/// stopped at the window would leave it the one unlit part of the frame.
+/// The tint is part of the glass rather than a sheet laid over it, so the lit
+/// rim lands on top of the tint and runs unbroken round the titlebar, curving
+/// with the window's corners. The glass is cut from [`frame_sheet`], reaching
+/// past the window to the ring's outer edge, because the ring is translucent
+/// and a sheet that stopped short would leave it the one unlit part of the
+/// frame — and the tint stops at the window, so the ring stays clear glass and
+/// outlines the frame in the colours behind it.
+///
+/// Without a blur pipeline the panel carries the tint itself, over the whole
+/// window, so the titlebar and the notches the client's corners cut away
+/// still read as one material.
 ///
 /// Both are furthest from the eye of everything a window draws, which is what
 /// lets the client cover their middles: one quad each behind the window, rather
@@ -567,6 +592,37 @@ fn frame_backing<R, D>(
     let hovered = style.hover_on(tile.id());
     let ids = tile.decoration_ids();
     let commit = tile.decoration_commit(appearance_key(focused, hovered, style.dark));
+    let palette = style.palette(focused);
+
+    let glass = decorator.blur_fingerprint().and_then(|_| {
+        let sheet = frame_sheet(frame, radius, style.scale);
+        let ring = (frame.loc.y - sheet.rect.loc.y) as f32;
+        decorator.backdrop(
+            renderer,
+            Backdrop {
+                id: ids.glass.clone(),
+                commit,
+                geometry: sheet.rect,
+                mask: sheet.rect,
+                radius: sheet.radius,
+                glass: Glass {
+                    tint: palette.sheet,
+                    tint_inset: ring,
+                    ..decorator.glass(style.scale, GlassKind::Window)
+                },
+                alpha,
+                strength: 1.0,
+            },
+        )
+    });
+
+    let (geometry, palette) = match glass {
+        Some(_) => (
+            Rectangle::new(frame.loc, Size::from((frame.size.w, inset))),
+            palette.over_glass(),
+        ),
+        None => (frame, palette),
+    };
 
     let layout = frame_layout(tile, frame, style.scale);
     let physical = |value: i32| (value as f64 * style.scale) as f32;
@@ -577,7 +633,7 @@ fn frame_backing<R, D>(
         TitleBarParams {
             id: ids.panel.clone(),
             commit,
-            geometry: frame,
+            geometry,
             frame,
             radius,
             bar_height: inset as f32,
@@ -588,36 +644,14 @@ fn frame_backing<R, D>(
             control_pitch: physical(layout.control_pitch()),
             control_radius: physical(layout.control_radius()),
             hovered,
-            palette: style.palette(focused),
+            palette,
             alpha,
         },
     ) {
         elements.push(CrownElement::Tile(Wrap::from(panel)));
     }
 
-    if decorator.blur_fingerprint().is_none() {
-        return;
-    }
-
-    // The same growth the ring is drawn with, from the same arithmetic: a sheet
-    // that disagreed with it by a pixel would show as a seam around the window.
-    let (sheet, _, outer) = window::outline(frame, style.scale as f32, radius)
-        // No ring to reach past, so the window's own rect is the whole of it.
-        .unwrap_or((frame, 0.0, radius));
-
-    if let Some(glass) = decorator.backdrop(
-        renderer,
-        Backdrop {
-            id: ids.glass.clone(),
-            commit,
-            geometry: sheet,
-            mask: sheet,
-            radius: outer,
-            glass: decorator.glass(style.scale, GlassKind::Window),
-            alpha,
-            strength: 1.0,
-        },
-    ) {
+    if let Some(glass) = glass {
         elements.push(CrownElement::Tile(Wrap::from(glass)));
     }
 }
@@ -927,10 +961,11 @@ fn corner_radii(radius: f32, decorated: bool) -> [f32; 4] {
 /// portable one, a `wl_region` of blurred rectangles in the compositor's own
 /// material. A surface that uses neither costs the two lookups below.
 ///
-/// `origin` is where the surface's own `(0, 0)` lands, and `mask` is the
-/// rectangle effects are clipped to and, for the portable protocol, the one the
-/// corners are cut from — a window's animated rect, or a layer surface's
-/// geometry.
+/// `origin` is where the surface's own `(0, 0)` lands, and `clip` is the
+/// rectangle effects are clipped to — a window's animated rect, or a layer
+/// surface's geometry. For the portable protocol `outline` is the shape the
+/// glass is cut from and lit as, which reaches past `clip` when the surface is
+/// one part of a bigger shape.
 /// Elements go to `out` rather than into a list, because the overview draws
 /// the very same effects into a list of its own: a thumbnail is the window at
 /// a different size, and the blur it stands on is the window's own.
@@ -942,8 +977,8 @@ pub(crate) fn backdrop_elements<R, D>(
     surface: &WlSurface,
     origin: Point<i32, Physical>,
     scale: Scale<f64>,
-    mask: Rectangle<i32, Physical>,
-    radius: f32,
+    clip: Rectangle<i32, Physical>,
+    outline: Outline,
     alpha: f32,
     kind: GlassKind,
     strength: f32,
@@ -959,7 +994,7 @@ pub(crate) fn backdrop_elements<R, D>(
     };
 
     let glass = decorator.glass(scale.x, kind);
-    if let Some(effects) = blur::place_surface_effects(surface, origin, scale, mask, glass.shading)
+    if let Some(effects) = blur::place_surface_effects(surface, origin, scale, clip, glass.shading)
     {
         surface_effect_elements(
             out,
@@ -975,7 +1010,7 @@ pub(crate) fn backdrop_elements<R, D>(
     }
 
     let mut rects = Vec::new();
-    let Some(generation) = blur::place_blur_region(surface, origin, scale, mask, &mut rects) else {
+    let Some(generation) = blur::place_blur_region(surface, origin, scale, clip, &mut rects) else {
         return;
     };
 
@@ -987,8 +1022,8 @@ pub(crate) fn backdrop_elements<R, D>(
                 id,
                 commit,
                 geometry,
-                mask,
-                radius,
+                mask: outline.rect,
+                radius: outline.radius,
                 glass,
                 alpha,
                 strength,
@@ -1134,7 +1169,10 @@ fn layer_elements<R, D>(
                 location,
                 scale,
                 clip,
-                radius.unwrap_or(0.0),
+                Outline {
+                    rect: clip,
+                    radius: radius.unwrap_or(0.0),
+                },
                 1.0,
                 GlassKind::Panel,
                 1.0,

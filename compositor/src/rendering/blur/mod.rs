@@ -218,6 +218,7 @@ impl BlurConfig {
         let rim = self.rims.get(kind);
         Glass {
             tint: SHEEN,
+            tint_inset: 0.0,
             saturation: self.vibrancy,
             rim: (rim.width as f64 * scale) as f32,
             shading: rim.shading,
@@ -253,6 +254,10 @@ impl BlurConfig {
 pub struct Glass {
     /// Straight RGBA, mixed over the blurred backdrop.
     pub tint: [f32; 4],
+    /// How far in from the edge the tint starts, in physical pixels. The band
+    /// outside it stays clear glass: a window frame's outline ring, which takes
+    /// the colour of what is behind it rather than the titlebar's.
+    pub tint_inset: f32,
     /// Chroma multiplier about the luma, applied before the tint.
     pub saturation: f32,
     /// Width of the refractive rim just inside the shape's edge, in physical
@@ -269,6 +274,7 @@ impl Default for Glass {
     fn default() -> Self {
         Self {
             tint: SHEEN,
+            tint_inset: 0.0,
             saturation: VIBRANCY,
             rim: 0.0,
             shading: Shading::default(),
@@ -398,6 +404,7 @@ pub fn place_surface_effects(
             let [red, green, blue, alpha] = blur.tint.channels();
             [red, green, blue, alpha * strength]
         }),
+        tint_inset: 0.0,
         saturation: effects
             .blur
             .as_ref()

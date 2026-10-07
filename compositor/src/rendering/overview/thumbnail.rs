@@ -25,7 +25,7 @@ use crate::{
     rendering::{
         backdrop_elements,
         blur::{self, GlassKind},
-        decorate::TileDecorator,
+        decorate::{Outline, TileDecorator},
         element::CrownElement,
     },
     shell::monitor::Monitor,
@@ -210,7 +210,7 @@ where
             origin,
             shrink,
             mask,
-            radius,
+            Outline { rect: mask, radius },
             alpha,
             GlassKind::Window,
             strength,
