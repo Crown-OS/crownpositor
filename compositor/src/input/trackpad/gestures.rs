@@ -2,15 +2,22 @@ use std::time::Duration;
 
 use spacecontrol::animations::velocity::VelocityTracker;
 
-// Deltas are unaccelerated, normalized by libinput to a 1000 dpi device:
-// ~39 units are one millimetre of finger travel.
+use crate::input::trackpad::catch_up::SWIPE_DEAD_ZONE;
 
-/// Travel before a swipe commits to an axis (~0.5 mm).
-const AXIS_LOCK_THRESHOLD: f64 = 20.0;
-/// Travel needed for a swipe to fire rather than snap back (~25 mm).
-const COMMIT_DISTANCE: f64 = 200.0;
-/// Release speed that fires a swipe on its own (~10 cm/s).
-const COMMIT_VELOCITY: f64 = 4000.0;
+/// Unaccelerated swipe units per millimetre of finger travel, on every touchpad.
+///
+/// libinput normalizes each pad to 1000 dpi and then scales its "unaccelerated"
+/// deltas by the touchpad constant filter (0.9 × `TP_MAGIC_SLOWDOWN` 0.2968).
+pub const UNITS_PER_MM: f64 = 1000.0 / 25.4 * 0.9 * 0.2968;
+
+/// Travel before a swipe commits to an axis. libinput has already sat out
+/// 1.5–2.5 mm before reporting the swipe at all, so this only has to pick a
+/// direction, not reject noise.
+const AXIS_LOCK_THRESHOLD: f64 = 0.5 * UNITS_PER_MM;
+/// Travel needed for a swipe to fire rather than snap back.
+const COMMIT_DISTANCE: f64 = 12.0 * UNITS_PER_MM;
+/// Release speed that fires a swipe on its own: an unhurried flick.
+const COMMIT_VELOCITY: f64 = 80.0 * UNITS_PER_MM;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Fingers {
@@ -51,7 +58,8 @@ pub enum Axis {
 pub struct GestureUpdate {
     pub fingers: Fingers,
     pub axis: Axis,
-    /// Cumulative travel along the locked axis, in unaccelerated units.
+    /// Cumulative travel along the locked axis, in unaccelerated units,
+    /// including the travel libinput spent recognising the swipe.
     pub delta: f64,
 }
 
@@ -73,6 +81,8 @@ pub struct SwipeRelease {
 pub struct GestureState {
     fingers: Option<Fingers>,
     axis: Option<Axis>,
+    /// [`SWIPE_DEAD_ZONE`], signed the way the swipe locked.
+    head_start: f64,
     motion: VelocityTracker,
 }
 
@@ -86,6 +96,7 @@ impl GestureState {
     pub fn begin(&mut self, count: u32, at: Duration) {
         self.fingers = Fingers::from_count(count);
         self.axis = None;
+        self.head_start = 0.0;
         self.motion.begin(at);
     }
 
@@ -95,21 +106,20 @@ impl GestureState {
 
         let (x, y) = self.motion.position();
         if self.axis.is_none() && x.abs().max(y.abs()) >= AXIS_LOCK_THRESHOLD {
-            self.axis = Some(if x.abs() >= y.abs() {
-                Axis::Horizontal
+            let (axis, travel) = if x.abs() >= y.abs() {
+                (Axis::Horizontal, x)
             } else {
-                Axis::Vertical
-            });
+                (Axis::Vertical, y)
+            };
+            self.axis = Some(axis);
+            self.head_start = SWIPE_DEAD_ZONE.copysign(travel);
         }
 
         let axis = self.axis?;
         Some(GestureUpdate {
             fingers,
             axis,
-            delta: match axis {
-                Axis::Horizontal => x,
-                Axis::Vertical => y,
-            },
+            delta: along(axis, (x, y)) + self.head_start,
         })
     }
 
@@ -121,9 +131,10 @@ impl GestureState {
         let (vx, vy) = self.motion.velocity(at);
         self.motion.clear();
 
+        // The head start is travel, not speed: it moves the release point but
+        // must not make a slow swipe read as a flick.
         let (travelled, velocity) = match axis {
-            Some(Axis::Horizontal) => (x, vx),
-            Some(Axis::Vertical) => (y, vy),
+            Some(axis) => (along(axis, (x, y)) + self.head_start, along(axis, (vx, vy))),
             None => (0.0, 0.0),
         };
 
@@ -145,6 +156,13 @@ impl GestureState {
             cancelled,
             gesture,
         })
+    }
+}
+
+fn along(axis: Axis, (x, y): (f64, f64)) -> f64 {
+    match axis {
+        Axis::Horizontal => x,
+        Axis::Vertical => y,
     }
 }
 
@@ -190,12 +208,12 @@ mod tests {
         let mut state = started(4);
         state.update((100.0, 0.0), ms(10));
         let update = state.update((50.0, 0.0), ms(20)).expect("active");
-        assert_eq!(update.delta, 150.0);
+        assert_eq!(update.delta, 150.0 + SWIPE_DEAD_ZONE);
 
         // Off-axis motion is dropped once the axis has locked, so a swipe that
         // drifts diagonally still tracks in a straight line.
         let update = state.update((10.0, 90.0), ms(30)).expect("active");
-        assert_eq!(update.delta, 160.0);
+        assert_eq!(update.delta, 160.0 + SWIPE_DEAD_ZONE);
         assert_eq!(update.axis, Axis::Horizontal);
     }
 
@@ -294,6 +312,38 @@ mod tests {
                 .update((AXIS_LOCK_THRESHOLD * 0.2, 0.0), ms(110))
                 .is_none(),
             "leftover travel would have locked the axis immediately"
+        );
+    }
+
+    #[test]
+    fn the_head_start_points_the_way_the_swipe_locked() {
+        let mut state = started(3);
+        let update = state.update((0.0, -30.0), ms(10)).expect("locked");
+        assert_eq!(update.delta, -30.0 - SWIPE_DEAD_ZONE);
+    }
+
+    #[test]
+    fn the_head_start_does_not_count_as_speed() {
+        let mut caught_up = started(3);
+        caught_up.update((30.0, 0.0), ms(100));
+        let released = caught_up
+            .end(false, ms(100))
+            .expect("a gesture was running");
+        assert!(
+            (released.velocity - 300.0).abs() < 1.0,
+            "{}",
+            released.velocity
+        );
+    }
+
+    #[test]
+    fn the_head_start_counts_towards_the_commit_distance() {
+        let mut state = started(3);
+        state.update((COMMIT_DISTANCE - SWIPE_DEAD_ZONE * 0.9, 0.0), ms(500));
+        let release = state.end(false, ms(900)).expect("a gesture was running");
+        assert_eq!(
+            release.gesture,
+            Some(SwipeGesture::LeftToRight(Fingers::Three))
         );
     }
 }
