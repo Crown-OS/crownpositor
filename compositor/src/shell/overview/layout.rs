@@ -73,17 +73,15 @@ pub(super) struct Page {
 }
 
 impl SpaceControl {
-    /// Recomputes the grid and the bar if anything they depend on moved.
+    /// Whether anything the grid and the bar were solved from has moved.
     ///
-    /// Called once per frame while the overview is on screen; the fingerprint
-    /// makes all but the first of those free.
-    pub fn relayout(&mut self, monitor: &Monitor) {
-        let fingerprint = Fingerprint::of(monitor);
-        if fingerprint == self.fingerprint && !self.pages.is_empty() {
-            return;
-        }
-        self.fingerprint = fingerprint;
-        self.resolve(monitor);
+    /// Asked once per frame while the overview is on screen, before the
+    /// overview is borrowed out of its monitor to [`resolve`], so a frame that
+    /// changes nothing costs one hash and no more.
+    ///
+    /// [`resolve`]: Self::resolve
+    pub fn is_stale(&self, monitor: &Monitor) -> bool {
+        self.pages.is_empty() || Fingerprint::of(monitor) != self.fingerprint
     }
 
     /// Recomputes unconditionally — for when the model changed under a
@@ -95,6 +93,7 @@ impl SpaceControl {
             true => Some(self.flip.take().unwrap_or_else(|| self.snapshot())),
             false => None,
         };
+        self.fingerprint = Fingerprint::of(monitor);
         self.canvas = Canvas::new(monitor.geometry(), monitor.usable());
         self.active = monitor.active_index();
 
