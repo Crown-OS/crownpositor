@@ -241,9 +241,17 @@ impl BlurBackdrop {
                     .intersection(frame)
             })
             .collect();
+        // Each damaged rectangle and the reach of the taps around it, kept
+        // apart where they are apart: a bounding box would fill in the hole a
+        // piece of glass above leaves in this one, and blur it twice.
+        let footprint = region::coalesce(
+            dirty
+                .iter()
+                .filter_map(|rect| grow(*rect, radius).intersection(frame)),
+        );
         let refresh = self
             .scene
-            .refresh(&dirty, radius, frame, |rect| space.rect(rect));
+            .refresh(&dirty, &footprint, |rect| space.rect(rect));
         // From here on these rectangles are glass, whether or not the frame
         // repaints any of them, so nothing drawn after may blur these pixels
         // back out of the framebuffer. Not the ones given up to the glass in
@@ -254,14 +262,6 @@ impl BlurBackdrop {
                 .filter_map(|rect| space.rect(rect).intersection(frame)),
         );
 
-        // Each damaged rectangle and the reach of the taps around it, kept
-        // apart where they are apart: a bounding box would fill in the hole a
-        // piece of glass above leaves in this one, and blur it twice.
-        let footprint = region::coalesce(
-            dirty
-                .iter()
-                .filter_map(|rect| grow(*rect, radius).intersection(frame)),
-        );
         if footprint.is_empty() {
             return None;
         }
