@@ -267,9 +267,15 @@ impl State {
         let source = event.source();
         let mut frame = AxisFrame::new(event.time()).source(source);
 
-        for axis in [Axis::Horizontal, Axis::Vertical] {
-            let amount = axis_amount::<I>(&event, axis);
+        let mut amounts = (
+            axis_amount::<I>(&event, Axis::Horizontal),
+            axis_amount::<I>(&event, Axis::Vertical),
+        );
+        if source == AxisSource::Finger {
+            amounts = self.input.scroll_catch_up.apply(amounts);
+        }
 
+        for (axis, amount) in [(Axis::Horizontal, amounts.0), (Axis::Vertical, amounts.1)] {
             if amount != 0.0 {
                 frame = frame.value(axis, amount);
                 if let Some(v120) = event.amount_v120(axis) {
