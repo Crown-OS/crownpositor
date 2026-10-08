@@ -18,3 +18,7 @@ wayland-protocols = { version = "0.32", default-features = false, features = ["s
 wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["server"] }
 wayland-server = { workspace = true }
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "client"] }

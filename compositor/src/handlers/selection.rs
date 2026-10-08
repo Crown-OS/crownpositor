@@ -1,11 +1,14 @@
+use std::any::Any;
+
 use smithay::{
+    backend::input::InputTime,
     input::{
         Seat,
-        dnd::{DnDGrab, DndGrabHandler, GrabType, Source},
+        dnd::{DnDGrab, DndGrabHandler, DndTarget, GrabType, Source},
         pointer::Focus,
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::Serial,
+    reexports::wayland_server::protocol::{wl_data_source::WlDataSource, wl_surface::WlSurface},
+    utils::{Logical, Point, Serial},
     wayland::selection::{
         SelectionHandler,
         data_device::{DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler},
@@ -19,7 +22,10 @@ use smithay::{
     },
 };
 
-use crate::state::State;
+use crate::{
+    shell::toplevel_drag::{CarriedSource, DragEnd},
+    state::State,
+};
 
 /// The compositor never owns a selection: every clipboard and primary
 /// selection is some client's source. Keeping one alive after its client
@@ -55,12 +61,52 @@ impl WaylandDndGrabHandler for State {
             source.cancel();
             return;
         };
-        let grab = DnDGrab::new_pointer(&self.common.display_handle, start_data, source, seat);
-        pointer.set_grab(self, grab, serial, Focus::Keep);
+        let toplevel_drag = (&source as &dyn Any)
+            .downcast_ref::<WlDataSource>()
+            .and_then(|data_source| {
+                let drag = self.wayland.xdg_toplevel_drag_state.drag_for(data_source)?;
+                Some((data_source.clone(), drag))
+            });
+        let display = &self.common.display_handle;
+        match toplevel_drag {
+            Some((data_source, drag)) => {
+                let source = CarriedSource::new(data_source, drag.clone());
+                let grab = DnDGrab::new_pointer(display, start_data, source, seat);
+                pointer.set_grab(self, grab, serial, Focus::Keep);
+                self.begin_toplevel_drag(drag);
+            }
+            None => {
+                let grab = DnDGrab::new_pointer(display, start_data, source, seat);
+                pointer.set_grab(self, grab, serial, Focus::Keep);
+            }
+        }
+        // smithay only offers the drag on the first motion, and Chromium
+        // cancels one released before its first `enter`: a motion in place
+        // offers it to the surface under the cursor straight away.
+        self.warp_pointer(self.input.pointer_location, InputTime::now());
     }
 }
 
-impl DndGrabHandler for State {}
+/// Both run from inside the pointer grab, so neither may touch the seat.
+impl DndGrabHandler for State {
+    fn dropped(
+        &mut self,
+        _target: Option<DndTarget<'_, Self>>,
+        validated: bool,
+        _seat: Seat<Self>,
+        _location: Point<f64, Logical>,
+    ) {
+        self.end_toplevel_drag(if validated {
+            DragEnd::Accepted
+        } else {
+            DragEnd::Declined
+        });
+    }
+
+    fn cancelled(&mut self, _seat: Seat<Self>, _location: Point<f64, Logical>) {
+        self.end_toplevel_drag(DragEnd::Aborted);
+    }
+}
 
 impl PrimarySelectionHandler for State {
     fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {

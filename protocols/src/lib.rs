@@ -24,3 +24,4 @@ pub mod output_management;
 pub mod output_power;
 pub mod region;
 pub mod tearing_control;
+pub mod xdg_toplevel_drag;

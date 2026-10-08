@@ -33,3 +33,4 @@ mod tearing_control;
 mod xdg_activation;
 mod xdg_decoration;
 mod xdg_shell;
+mod xdg_toplevel_drag;

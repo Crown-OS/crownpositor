@@ -130,6 +130,7 @@ impl State {
             pointer.relative_motion(self, under, relative);
         }
         pointer.frame(self);
+        self.carry_toplevel_to(location);
         // A grab owns the cursor for its duration, and so does a client
         // holding an implicit grab from a press that started inside it.
         if !pointer.is_grabbed() {
