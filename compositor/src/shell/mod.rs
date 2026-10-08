@@ -1628,8 +1628,8 @@ impl Shell {
         for monitor in &mut self.monitors {
             monitor.switch_mut().step(dt);
             monitor.spacecontrol_mut().step(dt);
-            if monitor.spacecontrol().is_visible() {
-                monitor.with_spacecontrol(|space, monitor| space.relayout(monitor));
+            if monitor.spacecontrol().is_visible() && monitor.spacecontrol().is_stale(monitor) {
+                monitor.with_spacecontrol(|space, monitor| space.resolve(monitor));
             }
             monitor.window_control_mut().step(dt);
             if monitor.window_control().is_visible() {
