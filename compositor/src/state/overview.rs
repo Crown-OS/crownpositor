@@ -201,6 +201,10 @@ impl State {
                 workspace: target,
             },
         );
+        // Arranged before the overview lays itself out again, so it solves the
+        // sizes both workspaces are about to give their windows — once —
+        // rather than the old ones and then again a frame later.
+        self.shell.refresh();
 
         // The active workspace just lost a window, so the grid it was laid out
         // from no longer describes it.
