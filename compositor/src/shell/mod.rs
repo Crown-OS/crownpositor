@@ -12,6 +12,7 @@ pub mod scale;
 pub mod session_lock;
 pub mod snap;
 pub mod tile;
+pub mod toplevel_drag;
 pub mod transaction;
 pub mod visibility;
 pub mod windowcontrol;
@@ -55,6 +56,7 @@ use crate::{
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
         tile::{Chrome, Tile, WindowState},
+        toplevel_drag::ToplevelDragSession,
         transaction::Transaction,
         workspace::{Workspace, WorkspaceRef},
     },
@@ -271,6 +273,8 @@ pub struct Shell {
     /// `crownos_surface_animation_v1` springs. Here so `is_animating` keeps the
     /// frame loop running while a client's subsurface is still moving.
     pub surface_animations: SurfaceAnimations,
+    /// The `xdg-toplevel-drag-v1` drag in progress, and the window it carries.
+    toplevel_drag: Option<ToplevelDragSession>,
 }
 
 impl Shell {
@@ -298,6 +302,7 @@ impl Shell {
             transactions: Vec::new(),
             cascade: 0,
             snap_previews: SnapPreviews::default(),
+            toplevel_drag: None,
             session_lock: SessionLock::default(),
             menus: Menus::default(),
             surface_animations: SurfaceAnimations::default(),
@@ -943,6 +948,8 @@ impl Shell {
         let monitor = self.monitor_at(location)?;
         let origin = monitor.geometry().loc;
         let output_local = location - origin.to_f64();
+        // A window riding a drag takes no part in picking where it lands.
+        let carried = self.carried_window();
 
         monitor
             .visible_workspaces()
@@ -963,29 +970,32 @@ impl Shell {
                     return Some(hit(tile, WindowPart::Content));
                 }
 
-                workspace.stacking_order().find_map(|tile| {
-                    let frame = tile.target();
-                    if !frame.to_f64().contains(local) {
-                        return tile
-                            .has_resize_band()
-                            .then(|| resize_edge(frame, local))
-                            .flatten()
-                            .map(|edge| hit(tile, WindowPart::Edge(edge)));
-                    }
+                workspace
+                    .stacking_order()
+                    .filter(|tile| Some(tile.id()) != carried)
+                    .find_map(|tile| {
+                        let frame = tile.target();
+                        if !frame.to_f64().contains(local) {
+                            return tile
+                                .has_resize_band()
+                                .then(|| resize_edge(frame, local))
+                                .flatten()
+                                .map(|edge| hit(tile, WindowPart::Edge(edge)));
+                        }
 
-                    // The decoration is opaque to input: the compositor drew it,
-                    // so the client has no say over which parts of it are live.
-                    if tile.insets().contains(frame, local) {
-                        return Some(hit(tile, WindowPart::TitleBar));
-                    }
+                        // The decoration is opaque to input: the compositor drew it,
+                        // so the client has no say over which parts of it are live.
+                        if tile.insets().contains(frame, local) {
+                            return Some(hit(tile, WindowPart::TitleBar));
+                        }
 
-                    let content = tile.content_rect();
-                    let inside = content.to_f64().contains(local)
-                        && tile
-                            .window()
-                            .is_in_input_region(&(local - content.loc.to_f64()));
-                    inside.then(|| hit(tile, WindowPart::Content))
-                })
+                        let content = tile.content_rect();
+                        let inside = content.to_f64().contains(local)
+                            && tile
+                                .window()
+                                .is_in_input_region(&(local - content.loc.to_f64()));
+                        inside.then(|| hit(tile, WindowPart::Content))
+                    })
             })
     }
 

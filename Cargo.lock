@@ -1619,6 +1619,7 @@ dependencies = [
  "smithay",
  "thiserror 2.0.20",
  "tracing",
+ "wayland-client",
  "wayland-protocols",
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
