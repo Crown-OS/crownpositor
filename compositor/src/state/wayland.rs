@@ -65,6 +65,7 @@ use protocols::{
     output_management::OutputManagementState,
     output_power::OutputPowerState,
     tearing_control::TearingControlState,
+    xdg_toplevel_drag::XdgToplevelDragState,
 };
 
 use crate::{
@@ -157,6 +158,9 @@ pub struct WaylandState {
     pub tablet_manager_state: TabletManagerState,
     pub kde_decoration_state: KdeDecorationState,
     pub xdg_decoration_state: XdgDecorationState,
+    /// `xdg_toplevel_drag_v1`: a window carried along by a drag-and-drop, as
+    /// Chromium does with a tab torn out of its strip.
+    pub xdg_toplevel_drag_state: XdgToplevelDragState,
     // pub overlap_notify_state: OverlapNotifyState,
     // pub a11y_state: A11yState,
     // pub dbus_state: DBusState,
@@ -268,6 +272,7 @@ impl WaylandState {
             tablet_manager_state: TabletManagerState::new::<State>(display),
             kde_decoration_state: KdeDecorationState::new::<State>(display, KdeDefaultMode::Server),
             xdg_decoration_state: XdgDecorationState::new::<State>(display),
+            xdg_toplevel_drag_state: XdgToplevelDragState::new::<State>(display),
             clock,
         })
     }

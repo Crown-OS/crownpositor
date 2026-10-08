@@ -60,6 +60,7 @@ impl XdgShellHandler for State {
         let Some(id) = self.shell.window_id(wl_surface) else {
             return;
         };
+        self.shell.forget_carried(id);
         self.shell.remove_tile(id);
         self.shell.menus.forget(id);
         self.queue_redraw();
@@ -265,7 +266,10 @@ impl State {
         // a client that sets no window geometry maps with a zero size.
         unmapped.window.on_commit();
         let (min_size, max_size) = size_hints(surface);
-        let location = self.shell.default_location()?;
+        let carried = self.carried_offset(surface);
+        let location = carried
+            .and_then(|_| self.carried_location())
+            .or_else(|| self.shell.default_location())?;
         let area = self
             .shell
             .workspace(location)
@@ -279,6 +283,12 @@ impl State {
         // can always force a dialog back into the tiling.
         if rules.floating.is_none() && auto_float(parent.is_some(), min_size, max_size, area.size) {
             rules.floating = Some(true);
+        }
+        // A window born mid-drag rides the cursor until it is dropped.
+        if carried.is_some() {
+            rules.floating = Some(true);
+            rules.fullscreen = Some(false);
+            rules.maximized = Some(false);
         }
 
         let id = WindowId::next();
@@ -335,6 +345,9 @@ impl State {
 
         if rules.focus.unwrap_or(true) {
             self.shell.focus_window(id);
+        }
+        if let Some(offset) = carried {
+            self.carry_mapped(id, offset);
         }
 
         // A client can name its menu before it maps, in which case the address

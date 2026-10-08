@@ -532,7 +532,7 @@ impl State {
         self.begin_drag(id, grip)
     }
 
-    fn begin_drag(
+    pub(super) fn begin_drag(
         &mut self,
         id: WindowId,
         grip: Point<f64, Logical>,
