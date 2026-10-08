@@ -17,7 +17,6 @@
 //! division of labour as scrolling, where the compositor routes and the client
 //! decides what the motion means.
 
-pub mod catch_up;
 pub mod gestures;
 
 use std::time::Duration;
@@ -42,21 +41,22 @@ use smithay::{
 };
 
 use crate::{
-    input::trackpad::gestures::{Axis, Fingers, UNITS_PER_MM},
+    input::trackpad::gestures::{Axis, Fingers},
     state::State,
 };
 
 /// The finger count that drives the workspace viewport directly.
 const SWITCH_FINGERS: Fingers = Fingers::Three;
 
-/// Finger travel that slides the viewport one workspace. Fixed in millimetres,
-/// so a page costs the same swipe on every monitor and every touchpad.
-const SWIPE_DISTANCE: f64 = 40.0 * UNITS_PER_MM;
+/// Unaccelerated units of finger travel that slide the viewport one workspace:
+/// roughly five centimetres, at libinput's 1000 dpi normalization. Fixed, so a
+/// page costs the same swipe on every monitor.
+const SWIPE_DISTANCE: f64 = 500.0;
 
 /// Finger travel that carries the overview all the way open. Shorter than a
 /// workspace page: this is a lift, not a scroll, and the hand should not have
 /// to cross the whole touchpad to finish it.
-const OVERVIEW_DISTANCE: f64 = 25.0 * UNITS_PER_MM;
+const OVERVIEW_DISTANCE: f64 = 320.0;
 
 /// A swipe's motion without the pointer acceleration curve.
 ///
