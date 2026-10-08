@@ -35,16 +35,22 @@ const MERGE_SLACK: f64 = 1.25;
 /// Past this many pieces, per-piece overhead outweighs the pixels saved.
 const MAX_PIECES: usize = 12;
 
-/// Disjoint rectangles covering the union of `rects` for drawing over: pairs
-/// whose bounding box wastes little are merged, overlaps are cut away so no
-/// pixel is covered twice, and a set that stays fragmented falls back to one
-/// bounding box.
+/// Disjoint rectangles covering the union of `rects` for drawing over: each
+/// rectangle is folded into any piece their bounding box wastes little over,
+/// overlaps are cut away so no pixel is covered twice, and a set that stays
+/// fragmented falls back to one bounding box.
+///
+/// Folding as the rectangles arrive keeps this linear in the pieces kept. The
+/// damage handed in can be hundreds of rectangles once glass in front has cut
+/// it up, and searching every pair for the cheapest merge after every merge
+/// cost more than the blur it was sizing.
 pub fn coalesce(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
-    let mut merged: Vec<Rect> = rects.into_iter().filter(|rect| !rect.is_empty()).collect();
-    while let Some((a, b)) = cheapest_merge(&merged) {
-        let union = merged[a].merge(merged[b]);
-        merged.swap_remove(b);
-        merged[a] = union;
+    let mut merged: Vec<Rect> = Vec::new();
+    for rect in rects.into_iter().filter(|rect| !rect.is_empty()) {
+        absorb(&mut merged, rect);
+    }
+    if merged.len() > MAX_PIECES {
+        return bounding_box(merged);
     }
 
     let mut disjoint: Vec<Rect> = Vec::with_capacity(merged.len());
@@ -53,30 +59,29 @@ pub fn coalesce(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
         disjoint.extend(pieces);
     }
     if disjoint.len() > MAX_PIECES {
-        return disjoint
-            .into_iter()
-            .reduce(Rect::merge)
-            .into_iter()
-            .collect();
+        return bounding_box(disjoint);
     }
     disjoint
 }
 
-/// The pair whose merge wastes least, if any wastes little enough. `a < b`.
-fn cheapest_merge(rects: &[Rect]) -> Option<(usize, usize)> {
-    let area = |rect: Rect| rect.size.w as f64 * rect.size.h as f64;
-    let mut best: Option<(f64, usize, usize)> = None;
-    for a in 0..rects.len() {
-        for b in a + 1..rects.len() {
-            let overlap = rects[a].intersection(rects[b]).map_or(0.0, area);
-            let covered = area(rects[a]) + area(rects[b]) - overlap;
-            let ratio = area(rects[a].merge(rects[b])) / covered.max(1.0);
-            if ratio <= MERGE_SLACK && best.is_none_or(|(cost, ..)| ratio < cost) {
-                best = Some((ratio, a, b));
-            }
-        }
+/// Adds `rect` to `pieces`, folded into every piece it merges with cheaply —
+/// including those that only become cheap once it has grown.
+fn absorb(pieces: &mut Vec<Rect>, mut rect: Rect) {
+    while let Some(index) = pieces.iter().position(|piece| cheap_merge(*piece, rect)) {
+        rect = rect.merge(pieces.swap_remove(index));
     }
-    best.map(|(_, a, b)| (a, b))
+    pieces.push(rect);
+}
+
+fn cheap_merge(a: Rect, b: Rect) -> bool {
+    let area = |rect: Rect| f64::from(rect.size.w) * f64::from(rect.size.h);
+    let overlap = a.intersection(b).map_or(0.0, area);
+    let covered = area(a) + area(b) - overlap;
+    area(a.merge(b)) <= MERGE_SLACK * covered.max(1.0)
+}
+
+fn bounding_box(rects: Vec<Rect>) -> Vec<Rect> {
+    rects.into_iter().reduce(Rect::merge).into_iter().collect()
 }
 
 /// Where `rects` and `others` overlap. Pieces may overlap each other when
@@ -154,6 +159,30 @@ mod tests {
             .sum();
         assert_eq!(covered, points(&coalesced).len(), "pieces overlap");
         assert!(points(&rects).is_subset(&points(&coalesced)));
+    }
+
+    /// What the overview hands a backdrop mid-drag: tile-shaped damage, cut
+    /// up further by the glass in front.
+    #[test]
+    fn hundreds_of_overlapping_rectangles_collapse_into_a_few_pieces() {
+        let rects: Vec<_> = (0..400)
+            .map(|index| rect((index % 20) * 30, (index / 20) * 30, 140, 140))
+            .collect();
+        let coalesced = coalesce(rects.iter().copied());
+        assert!(coalesced.len() <= MAX_PIECES, "{}", coalesced.len());
+
+        let covered: usize = coalesced
+            .iter()
+            .map(|r| (r.size.w * r.size.h) as usize)
+            .sum();
+        assert_eq!(covered, points(&coalesced).len(), "pieces overlap");
+        assert!(points(&rects).is_subset(&points(&coalesced)));
+    }
+
+    #[test]
+    fn a_rectangle_bridging_two_pieces_folds_them_into_one() {
+        let coalesced = coalesce([rect(0, 0, 10, 10), rect(20, 0, 10, 10), rect(0, 0, 30, 10)]);
+        assert_eq!(coalesced, vec![rect(0, 0, 30, 10)]);
     }
 
     #[test]
