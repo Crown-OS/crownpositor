@@ -21,9 +21,11 @@ use smithay::{
         dmabuf::DmabufState,
         drm_syncobj::DrmSyncobjState,
         fifo::FifoManagerState,
+        fixes::FixesState,
         fractional_scale::FractionalScaleManagerState,
         idle_inhibit::IdleInhibitManagerState,
         idle_notify::IdleNotifierState,
+        input_method::InputMethodManagerState,
         keyboard_shortcuts_inhibit::{KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor},
         output::OutputManagerState,
         pointer_constraints::PointerConstraintsState,
@@ -42,8 +44,11 @@ use smithay::{
         shm::ShmState,
         single_pixel_buffer::SinglePixelBufferState,
         tablet_manager::TabletManagerState,
+        text_input::TextInputManagerState,
         viewporter::ViewporterState,
+        virtual_keyboard::VirtualKeyboardManagerState,
         xdg_activation::XdgActivationState,
+        xdg_foreign::XdgForeignState,
     },
 };
 
@@ -161,6 +166,18 @@ pub struct WaylandState {
     /// `xdg_toplevel_drag_v1`: a window carried along by a drag-and-drop, as
     /// Chromium does with a tab torn out of its strip.
     pub xdg_toplevel_drag_state: XdgToplevelDragState,
+    pub xdg_foreign_state: XdgForeignState,
+    /// `wl_fixes`: lets a client destroy its `wl_registry`.
+    pub fixes_state: FixesState,
+    /// `zwp_text_input_v3`, the client half of IME. Chromium binds it by
+    /// default.
+    pub text_input_state: TextInputManagerState,
+    /// `zwp_input_method_v2`. Privileged: an input method sees every
+    /// keystroke while it is active.
+    pub input_method_state: InputMethodManagerState,
+    /// `zwp_virtual_keyboard_v1`, which fcitx5 types its unconsumed keys back
+    /// through. Privileged: it types into any window.
+    pub virtual_keyboard_state: VirtualKeyboardManagerState,
     // pub overlap_notify_state: OverlapNotifyState,
     // pub a11y_state: A11yState,
     // pub dbus_state: DBusState,
@@ -273,6 +290,14 @@ impl WaylandState {
             kde_decoration_state: KdeDecorationState::new::<State>(display, KdeDefaultMode::Server),
             xdg_decoration_state: XdgDecorationState::new::<State>(display),
             xdg_toplevel_drag_state: XdgToplevelDragState::new::<State>(display),
+            xdg_foreign_state: XdgForeignState::new::<State>(display),
+            fixes_state: FixesState::new::<State>(display),
+            text_input_state: TextInputManagerState::new::<State>(display),
+            input_method_state: InputMethodManagerState::new::<State, _>(display, is_privileged),
+            virtual_keyboard_state: VirtualKeyboardManagerState::new::<State, _>(
+                display,
+                is_privileged,
+            ),
             clock,
         })
     }
