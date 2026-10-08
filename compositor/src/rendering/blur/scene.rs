@@ -100,8 +100,7 @@ impl BlurScene {
     pub(super) fn refresh(
         &self,
         damage: &[Rectangle<i32, Physical>],
-        radius: i32,
-        bounds: Rectangle<i32, Physical>,
+        footprint: &[Rectangle<i32, Physical>],
         to_framebuffer: impl Fn(Rectangle<i32, Physical>) -> Rectangle<i32, Physical>,
     ) -> Vec<Rectangle<i32, Physical>> {
         let glass = self.glass.borrow();
@@ -110,7 +109,7 @@ impl BlurScene {
             .iter()
             .map(|rect| to_framebuffer(*rect))
             .collect();
-        glass.refresh(damage, radius, bounds, &standing)
+        glass.refresh(damage, footprint, &standing)
     }
 
     /// Records that `rects` now hold glass. Called whether or not the backdrop
@@ -126,30 +125,26 @@ impl Glass {
     /// backdrop over another one lifts the scene the lower one blurred, not the
     /// blur it left behind.
     ///
-    /// Plus a `radius`-wide skirt around the damage, minus every piece of glass
-    /// `standing` on the frame. The skirt is where the outermost taps of the
-    /// blur land, and it is the one part of the refresh that reads pixels
-    /// nothing has repainted — the finished composite, glass and whatever sits
-    /// on it included. Lifting that would blur the glass, and the text on it,
-    /// back into itself.
+    /// Plus the skirt: the rest of the blur's `footprint`, which reaches past
+    /// the damage, minus every piece of glass `standing` on the frame. The
+    /// skirt is where the outermost taps of the blur land, and it is the one
+    /// part of the refresh that reads pixels nothing has repainted — the
+    /// finished composite, glass and whatever sits on it included. Lifting that
+    /// would blur the glass, and the text on it, back into itself.
+    ///
+    /// The glass goes first: in the overview one backdrop stands over the whole
+    /// output, and taking it away before the damage leaves nothing to cut up.
     fn refresh(
         &self,
         damage: &[Rectangle<i32, Physical>],
-        radius: i32,
-        bounds: Rectangle<i32, Physical>,
+        footprint: &[Rectangle<i32, Physical>],
         standing: &[Rectangle<i32, Physical>],
     ) -> Vec<Rectangle<i32, Physical>> {
         let mut refresh = region::subtract(damage.iter().copied(), self.drawn.iter().copied());
-
-        let skirt = damage
-            .iter()
-            .filter_map(|rect| grow(*rect, radius).intersection(bounds));
-        let skirt = region::subtract(skirt, damage.iter().copied());
         refresh.extend(region::subtract(
-            skirt,
-            self.drawn.iter().chain(standing).copied(),
+            footprint.iter().copied(),
+            self.drawn.iter().chain(standing).chain(damage).copied(),
         ));
-
         refresh
     }
 }
@@ -185,9 +180,30 @@ mod tests {
         rect(0, 0, 200, 200)
     }
 
+    /// What the backdrop hands over: the damage grown by the blur's reach.
+    fn footprint(
+        damage: &[Rectangle<i32, Physical>],
+        radius: i32,
+    ) -> Vec<Rectangle<i32, Physical>> {
+        region::coalesce(
+            damage
+                .iter()
+                .filter_map(|rect| grow(*rect, radius).intersection(bounds())),
+        )
+    }
+
+    fn refresh(
+        glass: &Glass,
+        damage: &[Rectangle<i32, Physical>],
+        radius: i32,
+        standing: &[Rectangle<i32, Physical>],
+    ) -> Vec<Rectangle<i32, Physical>> {
+        glass.refresh(damage, &footprint(damage, radius), standing)
+    }
+
     #[test]
     fn the_first_backdrop_of_a_frame_lifts_its_damage_and_a_skirt() {
-        let refreshed = Glass::default().refresh(&[rect(50, 50, 20, 20)], 4, bounds(), &[]);
+        let refreshed = refresh(&Glass::default(), &[rect(50, 50, 20, 20)], 4, &[]);
         assert_eq!(points(&refreshed), points(&[rect(46, 46, 28, 28)]));
     }
 
@@ -199,7 +215,7 @@ mod tests {
             drawn: vec![rect(0, 0, 200, 40)],
             standing: Vec::new(),
         };
-        let refreshed = glass.refresh(&[rect(50, 20, 20, 40)], 0, bounds(), &[]);
+        let refreshed = refresh(&glass, &[rect(50, 20, 20, 40)], 0, &[]);
         assert_eq!(points(&refreshed), points(&[rect(50, 40, 20, 20)]));
     }
 
@@ -212,7 +228,7 @@ mod tests {
             standing: Vec::new(),
         };
         let standing = [rect(0, 0, 200, 40), rect(0, 160, 200, 40)];
-        let refreshed = glass.refresh(&[rect(50, 60, 20, 80)], 30, bounds(), &standing);
+        let refreshed = refresh(&glass, &[rect(50, 60, 20, 80)], 30, &standing);
         assert_eq!(points(&refreshed), points(&[rect(20, 40, 80, 120)]));
     }
 
@@ -221,8 +237,12 @@ mod tests {
     /// is exactly what a backdrop redrawing its own area every frame depends on.
     #[test]
     fn damage_is_lifted_through_glass_that_has_not_drawn_yet() {
-        let refreshed =
-            Glass::default().refresh(&[rect(0, 0, 200, 40)], 0, bounds(), &[rect(0, 0, 200, 40)]);
+        let refreshed = refresh(
+            &Glass::default(),
+            &[rect(0, 0, 200, 40)],
+            0,
+            &[rect(0, 0, 200, 40)],
+        );
         assert_eq!(points(&refreshed), points(&[rect(0, 0, 200, 40)]));
     }
 
@@ -230,12 +250,27 @@ mod tests {
     /// never left the framebuffer, so a skirt reaching into it lifts nothing.
     #[test]
     fn glass_that_did_not_draw_still_guards_the_skirt() {
-        let refreshed = Glass::default().refresh(
+        let refreshed = refresh(
+            &Glass::default(),
             &[rect(50, 50, 20, 20)],
             10,
-            bounds(),
             &[rect(0, 0, 200, 200)],
         );
         assert_eq!(points(&refreshed), points(&[rect(50, 50, 20, 20)]));
+    }
+
+    /// Neighbouring damage rectangles reach into each other's skirts; each
+    /// pixel is still lifted once.
+    #[test]
+    fn overlapping_skirts_are_lifted_once() {
+        let damage = [
+            rect(40, 40, 20, 20),
+            rect(70, 40, 20, 20),
+            rect(55, 70, 20, 20),
+        ];
+        let lifted = points(&refresh(&Glass::default(), &damage, 16, &[]));
+        for rect in damage {
+            assert!(points(&[grow(rect, 16)]).is_subset(&lifted), "{rect:?}");
+        }
     }
 }
