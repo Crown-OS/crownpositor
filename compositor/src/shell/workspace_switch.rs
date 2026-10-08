@@ -381,12 +381,13 @@ mod tests {
         let mut switch = WorkspaceSwitch::new(0);
         switch.begin();
 
-        // Fingers sweep left at a steady 1.8 pages a second; the tracking
-        // spring settles onto that speed.
+        // Fingers sweep left at a steady 1.8 pages a second for 0.6 of a page;
+        // the tracking spring settles onto that speed, and the release leaves
+        // the settle enough room to carry it.
         let dt = 1.0 / 60.0;
         let mut travelled = 0.0;
         let mut during = 0.0;
-        for _ in 0..30 {
+        for _ in 0..20 {
             travelled -= 1.8 * dt as f64;
             switch.drag_to(travelled, 3);
             let before = switch.position();

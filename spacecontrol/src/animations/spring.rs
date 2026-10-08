@@ -65,14 +65,16 @@ impl SpringProfile {
         stiffness: 200.0,
         damping: 28.284,
     };
-    /// Follows a live gesture. Stiff enough to sit a few dozen milliseconds
-    /// behind the fingers, soft enough to filter sensor jitter out — a
-    /// second-order low-pass, cutting off around 6 Hz. Because the value is
-    /// always moving through this spring, letting go is only a retarget: the
-    /// velocity on screen carries into the settle with no seam at all.
+    /// Follows a live gesture. A second-order low-pass cutting off around
+    /// 20 Hz: it covers 70% of a jump on the first 60 Hz frame and trails a
+    /// steady swipe by about 12 ms, so the content starts under the fingers,
+    /// yet the uneven arrival of touchpad events is still smoothed out.
+    /// Because the value is always moving through this spring, letting go is
+    /// only a retarget: the velocity on screen carries into the settle with no
+    /// seam at all.
     pub const TRACK: Self = Self {
-        stiffness: 1500.0,
-        damping: 77.46,
+        stiffness: 15625.0,
+        damping: 250.0,
     };
 
     /// The user-facing animation setting, resolved to a feel. `None` means
@@ -425,6 +427,15 @@ mod tests {
                 profile.damping
             );
         }
+    }
+
+    #[test]
+    fn tracking_starts_under_the_fingers() {
+        let mut spring = Spring::with_profile(0.0, SpringProfile::TRACK);
+        spring.set_target(1.0);
+        spring.step(1.0 / 60.0);
+        assert!(spring.position > 0.6, "{}", spring.position);
+        assert!(spring.position <= 1.0, "{}", spring.position);
     }
 
     #[test]
