@@ -1,6 +1,9 @@
 use smithay::{
     backend::{
-        allocator::dmabuf::Dmabuf, drm::VrrSupport, renderer::ImportDma, session::Session as _,
+        allocator::dmabuf::Dmabuf,
+        drm::VrrSupport,
+        renderer::{ImportDma, gles::GlesRenderer},
+        session::Session as _,
     },
     output::{Mode, Output},
 };
@@ -83,6 +86,19 @@ impl BackendState {
                 }
             }
             Self::Kms(kms) => kms.queue_redraw(output),
+        }
+    }
+
+    /// Runs `work` on the GLES renderer compositing happens on, for GPU work
+    /// outside a frame. `None` before a backend is up.
+    pub fn with_gles<T>(&mut self, work: impl FnOnce(&mut GlesRenderer) -> T) -> Option<T> {
+        match self {
+            Self::Unset => None,
+            Self::Winit(winit) => Some(work(winit.backend.renderer())),
+            Self::Kms(kms) => kms
+                .primary_renderer()
+                .ok()
+                .map(|mut renderer| work(renderer.as_mut())),
         }
     }
 

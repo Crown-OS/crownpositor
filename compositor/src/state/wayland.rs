@@ -57,6 +57,7 @@ use protocols::{
     background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
     color_management::ColorManagementState,
     crownos_agent_access::AgentAccessState,
+    crownos_app_icons::AppIconsState,
     crownos_background_effects::{
         BackgroundEffectsState as CrownosBackgroundEffectsState,
         Capability as CrownosEffectCapability,
@@ -129,6 +130,9 @@ pub struct WaylandState {
     /// `crownos_input_v1`. Privileged: an injector types into any window and
     /// a capture sees every keystroke.
     pub crownos_input_state: CrownosInputState,
+    /// `crownos_app_icons_v1`. Privileged: activating an icon raises another
+    /// application's windows.
+    pub app_icons_state: AppIconsState,
     /// `crownos_surface_animation_v1`. Unprivileged: a client only animates
     /// its own subsurfaces. The running springs live on the shell.
     pub surface_animation_state: SurfaceAnimationState,
@@ -265,6 +269,7 @@ impl WaylandState {
             screencast_state: ScreencastState::new::<State, _>(display, is_privileged),
             virtual_output_state: VirtualOutputState::new::<State, _>(display, is_privileged),
             crownos_input_state: CrownosInputState::new::<State, _>(display, is_privileged),
+            app_icons_state: AppIconsState::new::<State, _>(display, is_privileged),
             surface_animation_state: SurfaceAnimationState::new::<State>(display),
             surface_visibility_state: SurfaceVisibilityState::new::<State>(display),
             security_context_state: SecurityContextState::new::<State, _>(display, is_privileged),

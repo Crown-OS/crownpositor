@@ -5,7 +5,11 @@ use crate::{
         Direction, Gaps, LayoutInput, LayoutOp, LayoutOutput, TileInfo, TilingLayout,
         WorkspaceMode, placement,
     },
-    shell::tile::{Tile, WindowState},
+    shell::{
+        closing::ClosingWindow,
+        morph::IconOrigin,
+        tile::{Tile, WindowState},
+    },
     utils::id::{OutputId, WindowId, WorkspaceId},
 };
 
@@ -50,6 +54,9 @@ pub struct Workspace {
     /// semantically, so a single list means one place to look a window up, one
     /// to iterate for rendering, and one to keep the indices honest.
     tiles: Vec<Tile>,
+    /// Windows whose client is gone, drawn from a snapshot while they shrink
+    /// away. Frontmost first, like `stacking_order`.
+    closing: Vec<ClosingWindow>,
 
     focus: Option<WindowId>,
     /// Most-recently-used, so closing a dialog returns you to what you were
@@ -82,6 +89,7 @@ impl Workspace {
             id: WorkspaceId::next(),
             output,
             tiles: Vec::new(),
+            closing: Vec::new(),
             focus: None,
             focus_stack: Vec::new(),
             mode,
@@ -128,17 +136,25 @@ impl Workspace {
             .tiles
             .iter()
             .rev()
-            .filter(|tile| tile.state().floats_above());
+            .filter(|tile| tile.is_shown() && tile.state().floats_above());
         let tiled = self
             .tiles
             .iter()
             .rev()
-            .filter(|tile| !tile.state().floats_above());
+            .filter(|tile| tile.is_shown() && !tile.state().floats_above());
         floating.chain(tiled)
     }
 
     pub fn tiles_mut(&mut self) -> &mut [Tile] {
         &mut self.tiles
+    }
+
+    pub fn closing(&self) -> &[ClosingWindow] {
+        &self.closing
+    }
+
+    pub fn closing_mut(&mut self) -> &mut Vec<ClosingWindow> {
+        &mut self.closing
     }
 
     pub fn tile(&self, id: WindowId) -> Option<&Tile> {
@@ -173,7 +189,7 @@ impl Workspace {
     pub fn fullscreen(&self) -> Option<WindowId> {
         self.tiles
             .iter()
-            .find(|tile| tile.state() == WindowState::Fullscreen)
+            .find(|tile| !tile.is_minimized() && tile.state() == WindowState::Fullscreen)
             .map(Tile::id)
     }
 
@@ -314,25 +330,32 @@ impl Workspace {
         true
     }
 
-    /// Sends a window to the back of its own subsequence.
-    pub fn lower(&mut self, id: WindowId) -> bool {
-        let Some(index) = self.tiles.iter().position(|tile| tile.id() == id) else {
+    /// Takes a window out of the layout and sends it into `origin`, handing
+    /// focus to the most recent window still on screen.
+    pub fn minimize(&mut self, id: WindowId, origin: IconOrigin) -> bool {
+        let Some(tile) = self.tile_mut(id).filter(|tile| !tile.is_minimized()) else {
             return false;
         };
-        let tile = self.tiles.remove(index);
-        let insert_at = if tile.state().floats_above() {
-            // Behind the other floating windows, but still above the tiled ones.
-            self.tiles
-                .iter()
-                .position(|other| other.state().floats_above())
-                .unwrap_or(self.tiles.len())
-        } else {
-            0
-        };
-        self.tiles.insert(insert_at, tile);
+        tile.minimize(origin);
+        if self.focus == Some(id) {
+            self.focus = self.focus_stack.iter().rev().copied().find(|other| {
+                self.tiles
+                    .iter()
+                    .any(|tile| tile.id() == *other && !tile.is_minimized())
+            });
+            self.dirty.focus = true;
+        }
+        self.dirty.layout = true;
+        true
+    }
 
-        self.focus_stack.retain(|existing| *existing != id);
-        self.focus_stack.insert(0, id);
+    /// Brings a minimized window back into the layout, growing out of
+    /// `origin`. Focusing it is the caller's call.
+    pub fn unminimize(&mut self, id: WindowId, origin: IconOrigin) -> bool {
+        let Some(tile) = self.tile_mut(id).filter(|tile| tile.is_minimized()) else {
+            return false;
+        };
+        tile.unminimize(origin);
         self.dirty.layout = true;
         true
     }
@@ -408,7 +431,9 @@ impl Workspace {
         self.scratch_in.extend(
             self.tiles
                 .iter()
-                .filter(|tile| tile.state().is_tiled() && Some(tile.id()) != fullscreen)
+                .filter(|tile| {
+                    !tile.is_minimized() && tile.state().is_tiled() && Some(tile.id()) != fullscreen
+                })
                 .map(Tile::info),
         );
 
@@ -430,7 +455,7 @@ impl Workspace {
         }
 
         let mut next = 0;
-        for tile in &mut self.tiles {
+        for tile in self.tiles.iter_mut().filter(|tile| !tile.is_minimized()) {
             // Every state but `Floating` has the compositor dictating a size,
             // which is what takes the decision away from the client for good.
             if !tile.state().is_floating() {

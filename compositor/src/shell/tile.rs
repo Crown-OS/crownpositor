@@ -15,7 +15,10 @@ use spacecontrol::animations::spring::{Spring, SpringProfile};
 
 use crate::{
     layout::{SnapZone, TileInfo, placement},
-    shell::decoration::{DecorationCommit, DecorationIds, Insets},
+    shell::{
+        decoration::{DecorationCommit, DecorationIds, Insets},
+        morph::{IconOrigin, Morph, MorphEnd},
+    },
     utils::id::WindowId,
 };
 
@@ -112,6 +115,11 @@ pub struct Tile {
     chrome: Chrome,
 
     anim: TileAnim,
+    /// Turning into its application's icon, or back out of it.
+    morph: Option<Morph>,
+    /// Out of the layout and off the screen until it is restored. Still drawn
+    /// while its morph carries it into the icon.
+    minimized: bool,
     /// Whether the layout has positioned this window yet. The first placement
     /// snaps — sliding in from the origin reads as a bug, not as polish.
     placed: bool,
@@ -181,6 +189,8 @@ impl Tile {
             titlebar_height,
             chrome: Chrome::Compositor,
             anim: TileAnim::new(Rectangle::default()),
+            morph: None,
+            minimized: false,
             placed: false,
             rules,
             opacity,
@@ -433,6 +443,56 @@ impl Tile {
         &self.anim
     }
 
+    pub fn morph(&self) -> Option<&Morph> {
+        self.morph.as_ref()
+    }
+
+    pub fn is_minimized(&self) -> bool {
+        self.minimized
+    }
+
+    /// Whether the window is on screen: not minimized, or still on its way
+    /// into the icon.
+    pub fn is_shown(&self) -> bool {
+        !self.minimized || self.morph.is_some()
+    }
+
+    /// Grows the window out of `origin`, or turns a shrink around.
+    pub fn grow_from(&mut self, origin: IconOrigin) {
+        self.anim.show();
+        self.morph
+            .get_or_insert_with(|| Morph::new(origin, MorphEnd::Icon))
+            .head_for(MorphEnd::Window, origin);
+    }
+
+    /// Shrinks the window into `origin`, or turns a grow around.
+    pub fn shrink_into(&mut self, origin: IconOrigin) {
+        self.morph
+            .get_or_insert_with(|| Morph::new(origin, MorphEnd::Window))
+            .head_for(MorphEnd::Icon, origin);
+    }
+
+    pub fn minimize(&mut self, origin: IconOrigin) {
+        self.minimized = true;
+        self.shrink_into(origin);
+    }
+
+    /// Brings a minimized window back out of `origin`. It snaps to wherever
+    /// the layout puts it next, rather than sliding there from where it was
+    /// minimized.
+    pub fn unminimize(&mut self, origin: IconOrigin) {
+        self.minimized = false;
+        self.placed = false;
+        self.grow_from(origin);
+    }
+
+    /// Advances the morph; returns where it came to rest, if it did.
+    pub fn step_morph(&mut self, dt: f32) -> Option<MorphEnd> {
+        let end = self.morph.as_mut()?.step(dt)?;
+        self.morph = None;
+        Some(end)
+    }
+
     pub fn anim_mut(&mut self) -> &mut TileAnim {
         &mut self.anim
     }
@@ -598,6 +658,13 @@ impl TileAnim {
 
     pub fn fade_out(&mut self) {
         self.alpha.set_target(0.0);
+    }
+
+    /// Fully opaque at once: a window growing out of an icon fades with its
+    /// morph instead.
+    pub fn show(&mut self) {
+        self.alpha.set_target(1.0);
+        self.alpha.snap_to_target();
     }
 
     /// Jumps the geometry to `rect` without animating. Alpha is left alone, so a

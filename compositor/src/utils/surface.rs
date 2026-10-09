@@ -8,6 +8,7 @@ use smithay::{
     wayland::{
         compositor::{get_parent, with_states},
         content_type::ContentTypeSurfaceCachedState,
+        shell::xdg::XdgToplevelSurfaceData,
     },
 };
 
@@ -30,5 +31,30 @@ pub fn is_game_content(surface: &WlSurface) -> bool {
             .current()
             .content_type()
             == ContentType::Game
+    })
+}
+
+/// The `app_id` a toplevel gave itself, if it gave one.
+pub fn app_id(surface: &WlSurface) -> Option<String> {
+    with_states(surface, |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()?
+            .lock()
+            .ok()?
+            .app_id
+            .clone()
+    })
+}
+
+/// Whether a toplevel is transient for another: a dialog, not an application
+/// window of its own.
+pub fn has_parent(surface: &WlSurface) -> bool {
+    with_states(surface, |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .and_then(|data| data.lock().ok().map(|data| data.parent.is_some()))
+            .unwrap_or(false)
     })
 }

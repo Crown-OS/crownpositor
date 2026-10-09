@@ -19,10 +19,12 @@ pub mod element;
 pub mod framebuffer;
 pub mod fullscreen;
 pub mod lock;
+mod morph;
 pub mod overview;
 mod painter;
 pub mod popup;
 pub mod rounded;
+pub mod snapshot;
 pub mod surface_tree;
 mod windowcontrol;
 
@@ -57,7 +59,7 @@ use crate::{
         decoration::{Control, TitleBarLayout},
         gaming,
         monitor::Monitor,
-        tile::Tile,
+        tile::{Tile, WindowState},
     },
     utils::id::WindowId,
 };
@@ -255,7 +257,34 @@ where
         false => Some(monitor.visible_workspaces()),
     };
     for (workspace, offset) in workspaces.into_iter().flatten() {
-        match workspace.fullscreen().and_then(|id| workspace.tile(id)) {
+        // Frontmost: a window that just closed shrinks away over everything
+        // that was behind it.
+        for closing in workspace.closing() {
+            let tile = closing.tile();
+            if let Some(morph) = tile.morph() {
+                let radius = match tile.state() {
+                    WindowState::Fullscreen => 0.0,
+                    _ => style.radius,
+                };
+                morph::morph_elements(
+                    &mut elements,
+                    shell,
+                    tile,
+                    morph,
+                    morph::Content::Snapshot(closing.snapshot()),
+                    renderer,
+                    decorator,
+                    scale,
+                    offset,
+                    radius,
+                    style,
+                );
+            }
+        }
+        // A fullscreen window on its way out of or into its icon has the
+        // desktop showing round it, so it is drawn like any other.
+        let fullscreen = workspace.fullscreen().and_then(|id| workspace.tile(id));
+        match fullscreen.filter(|tile| tile.morph().is_none()) {
             // A fullscreen window covers its page edge to edge, so rounding it
             // would just cut four notches out of the display — and while it is
             // the only page on screen there is nothing behind it to draw.
@@ -279,6 +308,10 @@ where
             }
             None => {
                 for tile in workspace.stacking_order() {
+                    let radius = match tile.state() {
+                        WindowState::Fullscreen => 0.0,
+                        _ => style.radius,
+                    };
                     tile_elements(
                         &mut elements,
                         shell,
@@ -287,7 +320,7 @@ where
                         decorator,
                         scale,
                         offset,
-                        style.radius,
+                        radius,
                         style,
                     );
                 }
@@ -326,6 +359,23 @@ fn tile_elements<R, D>(
     R::TextureId: Send + Clone + 'static,
     D: TileDecorator<R>,
 {
+    if let Some(morph) = tile.morph() {
+        morph::morph_elements(
+            elements,
+            shell,
+            tile,
+            morph,
+            morph::Content::Live,
+            renderer,
+            decorator,
+            scale,
+            offset,
+            radius,
+            style,
+        );
+        return;
+    }
+
     // The interpolated rect, not the target: this is what makes a window slide.
     // Output-local, because the damage tracker works in this output's own
     // space. `offset` slides the whole workspace the tile belongs to; rounding

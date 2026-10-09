@@ -190,10 +190,8 @@ impl State {
             Control::Maximize => {
                 self.shell.toggle_state_of(id, WindowState::Maximized);
             }
-            // Nothing is minimized yet, so this is the nearest honest thing:
-            // drop the window behind whatever else is on the workspace.
             Control::Minimize => {
-                self.shell.lower_window(id);
+                self.minimize_window(id);
             }
         }
     }

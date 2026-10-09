@@ -28,7 +28,12 @@ pub fn scanout_tile(monitor: &Monitor) -> Option<&Tile> {
     if visible.next().is_some() || offset != Point::default() {
         return None;
     }
-    let tile = workspace.tile(workspace.fullscreen()?)?;
+    if !workspace.closing().is_empty() {
+        return None;
+    }
+    let tile = workspace
+        .tile(workspace.fullscreen()?)
+        .filter(|tile| tile.morph().is_none())?;
     covers(
         tile.render_rect(),
         tile.anim().alpha(),

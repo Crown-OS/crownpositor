@@ -1,5 +1,6 @@
 mod actions;
 pub mod agent_access;
+mod app_icons;
 mod backend;
 mod client;
 mod common;
