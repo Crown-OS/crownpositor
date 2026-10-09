@@ -13,6 +13,7 @@ pub mod appmenu;
 pub mod background_effect;
 pub mod color_management;
 pub mod crownos_agent_access;
+pub mod crownos_app_icons;
 pub mod crownos_background_effects;
 pub mod crownos_input;
 pub mod crownos_screencast;

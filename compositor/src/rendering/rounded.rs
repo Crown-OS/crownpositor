@@ -32,6 +32,7 @@ use crate::{
         decorate::{Backdrop, Cropped, Shadow, TileDecorator},
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
         framebuffer::FramebufferSpace,
+        snapshot::SnapshotElement,
     },
     shaders::rounded_corner::RoundedCornerShader,
 };
@@ -213,6 +214,7 @@ where
 #[derive(Debug)]
 pub enum Decorated<E> {
     Window(Rounded<E>),
+    Snapshot(Rounded<SnapshotElement>),
     Backdrop(BlurBackdrop),
     TitleBar(TitleBar),
     Border(WindowDecoration),
@@ -223,6 +225,7 @@ impl<E: Element> Element for Decorated<E> {
     fn id(&self) -> &Id {
         match self {
             Self::Window(window) => window.id(),
+            Self::Snapshot(snapshot) => snapshot.id(),
             Self::Backdrop(backdrop) => backdrop.id(),
             Self::TitleBar(bar) => bar.id(),
             Self::Border(border) => border.id(),
@@ -233,6 +236,7 @@ impl<E: Element> Element for Decorated<E> {
     fn current_commit(&self) -> CommitCounter {
         match self {
             Self::Window(window) => window.current_commit(),
+            Self::Snapshot(snapshot) => snapshot.current_commit(),
             Self::Backdrop(backdrop) => backdrop.current_commit(),
             Self::TitleBar(bar) => bar.current_commit(),
             Self::Border(border) => border.current_commit(),
@@ -243,6 +247,7 @@ impl<E: Element> Element for Decorated<E> {
     fn src(&self) -> Rectangle<f64, BufferCoords> {
         match self {
             Self::Window(window) => window.src(),
+            Self::Snapshot(snapshot) => snapshot.src(),
             Self::Backdrop(backdrop) => backdrop.src(),
             Self::TitleBar(bar) => bar.src(),
             Self::Border(border) => border.src(),
@@ -253,6 +258,7 @@ impl<E: Element> Element for Decorated<E> {
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
         match self {
             Self::Window(window) => window.geometry(scale),
+            Self::Snapshot(snapshot) => snapshot.geometry(scale),
             Self::Backdrop(backdrop) => backdrop.geometry(scale),
             Self::TitleBar(bar) => bar.geometry(scale),
             Self::Border(border) => border.geometry(scale),
@@ -263,6 +269,7 @@ impl<E: Element> Element for Decorated<E> {
     fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
         match self {
             Self::Window(window) => window.location(scale),
+            Self::Snapshot(snapshot) => snapshot.location(scale),
             Self::Backdrop(backdrop) => backdrop.location(scale),
             Self::TitleBar(bar) => bar.location(scale),
             Self::Border(border) => border.location(scale),
@@ -273,6 +280,7 @@ impl<E: Element> Element for Decorated<E> {
     fn transform(&self) -> Transform {
         match self {
             Self::Window(window) => window.transform(),
+            Self::Snapshot(snapshot) => snapshot.transform(),
             Self::Backdrop(backdrop) => backdrop.transform(),
             Self::TitleBar(bar) => bar.transform(),
             Self::Border(border) => border.transform(),
@@ -287,6 +295,7 @@ impl<E: Element> Element for Decorated<E> {
     ) -> DamageSet<i32, Physical> {
         match self {
             Self::Window(window) => window.damage_since(scale, commit),
+            Self::Snapshot(snapshot) => snapshot.damage_since(scale, commit),
             Self::Backdrop(backdrop) => backdrop.damage_since(scale, commit),
             Self::TitleBar(bar) => bar.damage_since(scale, commit),
             Self::Border(border) => border.damage_since(scale, commit),
@@ -297,6 +306,7 @@ impl<E: Element> Element for Decorated<E> {
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         match self {
             Self::Window(window) => window.opaque_regions(scale),
+            Self::Snapshot(snapshot) => snapshot.opaque_regions(scale),
             Self::Backdrop(backdrop) => backdrop.opaque_regions(scale),
             Self::TitleBar(bar) => bar.opaque_regions(scale),
             Self::Border(border) => border.opaque_regions(scale),
@@ -307,6 +317,7 @@ impl<E: Element> Element for Decorated<E> {
     fn alpha(&self) -> f32 {
         match self {
             Self::Window(window) => window.alpha(),
+            Self::Snapshot(snapshot) => snapshot.alpha(),
             Self::Backdrop(backdrop) => backdrop.alpha(),
             Self::TitleBar(bar) => bar.alpha(),
             Self::Border(border) => border.alpha(),
@@ -317,6 +328,7 @@ impl<E: Element> Element for Decorated<E> {
     fn kind(&self) -> Kind {
         match self {
             Self::Window(window) => window.kind(),
+            Self::Snapshot(snapshot) => snapshot.kind(),
             Self::Backdrop(backdrop) => backdrop.kind(),
             Self::TitleBar(bar) => bar.kind(),
             Self::Border(border) => border.kind(),
@@ -337,6 +349,15 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
     ) -> Result<(), GlesError> {
         match self {
             Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions, cache),
+            Self::Snapshot(snapshot) => RenderElement::<GlesRenderer>::draw(
+                snapshot,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
             Self::Backdrop(backdrop) => RenderElement::<GlesRenderer>::draw(
                 backdrop,
                 frame,
@@ -379,6 +400,7 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         match self {
             Self::Window(window) => window.underlying_storage(renderer),
+            Self::Snapshot(snapshot) => snapshot.underlying_storage(renderer),
             Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
             Self::TitleBar(bar) => RenderElement::<GlesRenderer>::underlying_storage(bar, renderer),
             Self::Border(border) => {
@@ -406,6 +428,15 @@ where
     ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
         match self {
             Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions, cache),
+            Self::Snapshot(snapshot) => RenderElement::<KmsRenderer<'render>>::draw(
+                snapshot,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
             Self::Backdrop(backdrop) => RenderElement::<KmsRenderer<'render>>::draw(
                 backdrop,
                 frame,
@@ -451,6 +482,7 @@ where
     ) -> Option<UnderlyingStorage<'_>> {
         match self {
             Self::Window(window) => window.underlying_storage(renderer),
+            Self::Snapshot(snapshot) => snapshot.underlying_storage(renderer),
             Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
             Self::TitleBar(bar) => {
                 RenderElement::<KmsRenderer<'render>>::underlying_storage(bar, renderer)
@@ -516,6 +548,20 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
         self.blur
             .as_ref()
             .map_or_else(Glass::default, |blur| blur.config.glass(scale, kind))
+    }
+
+    fn snapshot(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        element: SnapshotElement,
+        shape: Rectangle<i32, Physical>,
+        radius: [f32; 4],
+    ) -> Option<Self::Element> {
+        let program = RoundedCornerShader::get(renderer);
+        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
+        Some(Decorated::Snapshot(Rounded::new(
+            element, program, shape, radius, reshaped,
+        )))
     }
 
     fn backdrop(
@@ -588,6 +634,20 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
         self.blur
             .as_ref()
             .map_or_else(Glass::default, |blur| blur.config.glass(scale, kind))
+    }
+
+    fn snapshot(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        element: SnapshotElement,
+        shape: Rectangle<i32, Physical>,
+        radius: [f32; 4],
+    ) -> Option<Self::Element> {
+        let program = RoundedCornerShader::get(renderer.as_mut());
+        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
+        Some(Decorated::Snapshot(Rounded::new(
+            element, program, shape, radius, reshaped,
+        )))
     }
 
     fn backdrop(

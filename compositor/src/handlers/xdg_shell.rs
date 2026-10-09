@@ -61,7 +61,9 @@ impl XdgShellHandler for State {
             return;
         };
         self.shell.forget_carried(id);
-        self.shell.remove_tile(id);
+        if !self.close_window(id) {
+            self.shell.remove_tile(id);
+        }
         self.shell.menus.forget(id);
         self.queue_redraw();
     }
@@ -139,10 +141,10 @@ impl XdgShellHandler for State {
         self.request_state(&surface, None);
     }
 
-    /// Nothing is minimized yet, so acknowledge without changing state rather
-    /// than leaving the client waiting on a configure that never comes.
     fn minimize_request(&mut self, surface: ToplevelSurface) {
-        surface.send_configure();
+        if let Some(id) = self.shell.window_id(surface.wl_surface()) {
+            self.minimize_window(id);
+        }
     }
 
     /// `app_id` and `title` can change after the window is mapped, and window
@@ -342,6 +344,7 @@ impl State {
         }
 
         self.shell.insert_tile(tile, location);
+        self.grow_if_launched(id);
 
         if rules.focus.unwrap_or(true) {
             self.shell.focus_window(id);

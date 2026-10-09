@@ -9,6 +9,7 @@
 use crate::rendering::{
     blur::{Glass, GlassKind, ShadowPiece},
     decoration::{Border, TitleBarParams},
+    snapshot::SnapshotElement,
 };
 
 use smithay::{
@@ -104,6 +105,20 @@ where
         shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element>;
+
+    /// A closed window's last frame, rounded like the live window was. `None`
+    /// — the default — lets it vanish, which is what a renderer that cannot
+    /// keep a texture of its own offers.
+    fn snapshot(
+        &mut self,
+        renderer: &mut R,
+        element: SnapshotElement,
+        shape: Rectangle<i32, Physical>,
+        radius: [f32; 4],
+    ) -> Option<Self::Element> {
+        let _ = (renderer, element, shape, radius);
+        None
+    }
 
     /// One rectangle of the blurred glass drawn *behind* a surface that
     /// committed a blur region. `None` — the default, and the only answer a

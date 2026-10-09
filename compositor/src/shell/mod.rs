@@ -2,10 +2,12 @@
 //! here are the only way to get from a surface to any of it.
 
 pub mod arrangement;
+pub mod closing;
 pub mod decoration;
 pub mod gaming;
 pub mod grab;
 pub mod monitor;
+pub mod morph;
 pub mod overview;
 pub mod popup;
 pub mod scale;
@@ -47,12 +49,15 @@ use crate::{
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
     layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
     menu::Menus,
+    rendering::snapshot::Snapshot,
     shell::{
+        closing::ClosingWindow,
         decoration::resize_edge,
         grab::{moves_left, moves_top},
         monitor::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
+        morph::IconOrigin,
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
         tile::{Chrome, Tile, WindowState},
@@ -898,6 +903,9 @@ impl Shell {
         let Some(workspace) = self.workspace_mut(location) else {
             return false;
         };
+        // Whatever asks for a minimized window gets it back, from where a dock
+        // would be: callers that know its icon restore it from there first.
+        workspace.unminimize(id, IconOrigin::bottom_of(workspace.output_area()));
         workspace.focus_window(id)
     }
 
@@ -1364,29 +1372,43 @@ impl Shell {
         }
     }
 
-    /// Drops a window to the back of its workspace and moves focus off it.
-    ///
-    /// What the minimize control does, there being nowhere to minimize *to*
-    /// yet: the window goes behind everything else on the workspace and stops
-    /// holding the keyboard.
-    pub fn lower_window(&mut self, id: WindowId) -> bool {
+    /// Sends a window into `origin` and takes it out of the layout. Focus
+    /// moves to the most recent window still on screen.
+    pub fn minimize_window(&mut self, id: WindowId, origin: IconOrigin) -> bool {
         let Some(location) = self.location(id) else {
+            return false;
+        };
+        self.workspace_mut(location)
+            .is_some_and(|workspace| workspace.minimize(id, origin))
+    }
+
+    /// Grows a minimized window back out of `origin`, and focuses it.
+    pub fn unminimize_window(&mut self, id: WindowId, origin: IconOrigin) -> bool {
+        let Some(location) = self.location(id) else {
+            return false;
+        };
+        let restored = self
+            .workspace_mut(location)
+            .is_some_and(|workspace| workspace.unminimize(id, origin));
+        self.focus_window(id);
+        restored
+    }
+
+    /// Takes a window whose client is gone out of the model, leaving its last
+    /// frame where it was to shrink into `origin`.
+    pub fn close_into(&mut self, id: WindowId, snapshot: Snapshot, origin: IconOrigin) -> bool {
+        let Some(location) = self.location(id) else {
+            return false;
+        };
+        let Some(tile) = self.remove_tile(id) else {
             return false;
         };
         let Some(workspace) = self.workspace_mut(location) else {
             return false;
         };
-        if !workspace.lower(id) {
-            return false;
-        }
-
-        let next = workspace
-            .stacking_order()
-            .map(Tile::id)
-            .find(|other| *other != id);
-        if let Some(next) = next {
-            self.focus_window(next);
-        }
+        workspace
+            .closing_mut()
+            .insert(0, ClosingWindow::new(tile, snapshot, origin));
         true
     }
 
@@ -1648,7 +1670,11 @@ impl Shell {
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().step(dt);
+                    tile.step_morph(dt);
                 }
+                workspace
+                    .closing_mut()
+                    .retain_mut(|closing| closing.step(dt));
             }
         }
     }
@@ -1663,7 +1689,11 @@ impl Shell {
                     || monitor.spacecontrol().is_active()
                     || monitor.window_control().is_active()
                     || monitor.workspaces().iter().any(|workspace| {
-                        workspace.tiles().iter().any(|tile| !tile.anim().at_rest())
+                        !workspace.closing().is_empty()
+                            || workspace
+                                .tiles()
+                                .iter()
+                                .any(|tile| tile.morph().is_some() || !tile.anim().at_rest())
                     })
             })
     }
