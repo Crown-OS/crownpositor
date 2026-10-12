@@ -25,9 +25,10 @@ use smithay::{
     wayland::compositor::{SurfaceData, TraversalAction, with_surface_tree_downward},
 };
 
-use crate::utils::affine::UniformAffine;
+use crate::{rendering::unstretched::Unstretched, utils::affine::UniformAffine};
 
-pub type TransformedSurface<R> = RescaleRenderElement<WaylandSurfaceRenderElement<R>>;
+pub type SurfaceElement<R> = Unstretched<WaylandSurfaceRenderElement<R>>;
+pub type TransformedSurface<R> = RescaleRenderElement<SurfaceElement<R>>;
 
 /// Where a surface sits before its animation, and what its ancestors'
 /// animations do to it.
@@ -47,7 +48,7 @@ pub fn surface_elements<R>(
     scale: Scale<f64>,
     alpha: f32,
     kind: Kind,
-) -> Vec<WaylandSurfaceRenderElement<R>>
+) -> Vec<SurfaceElement<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
@@ -63,7 +64,7 @@ where
         |surface, states, parent| {
             if let Some(location) = offset_from(states, *parent, scale)
                 && let Some(element) =
-                    pixel_aligned(renderer, surface, states, location, alpha, kind)
+                    pixel_aligned(renderer, surface, states, location, scale, alpha, kind)
             {
                 elements.push(element);
             }
@@ -90,25 +91,35 @@ fn offset_from(
 }
 
 /// The surface's element on the whole pixel nearest `location`, where its size
-/// is the client's own rounding of the same product.
+/// is the client's own rounding of the same product — and drawn 1:1 should
+/// the client have rounded it some other way.
 fn pixel_aligned<R>(
     renderer: &mut R,
     surface: &WlSurface,
     states: &SurfaceData,
     location: Point<f64, Physical>,
+    scale: Scale<f64>,
     alpha: f32,
     kind: Kind,
-) -> Option<WaylandSurfaceRenderElement<R>>
+) -> Option<SurfaceElement<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
 {
     let snapped = location.to_i32_round::<i32>().to_f64();
-    WaylandSurfaceRenderElement::from_surface(renderer, surface, states, snapped, alpha, kind)
-        .unwrap_or_else(|err| {
-            tracing::warn!(%err, "failed to import a surface");
-            None
-        })
+    let element =
+        WaylandSurfaceRenderElement::from_surface(renderer, surface, states, snapped, alpha, kind)
+            .unwrap_or_else(|err| {
+                tracing::warn!(%err, "failed to import a surface");
+                None
+            })?;
+    let buffer_scale = states
+        .data_map
+        .get::<RendererSurfaceStateUserData>()?
+        .lock()
+        .ok()?
+        .buffer_scale();
+    Some(Unstretched::new(element, scale, buffer_scale))
 }
 
 pub fn transformed_surface_elements<R>(
@@ -139,7 +150,7 @@ where
         },
         |surface, states, parent| {
             if let Some(placement) = placement(states, parent, scale)
-                && let Some(element) = element(renderer, surface, states, placement, kind)
+                && let Some(element) = element(renderer, surface, states, placement, scale, kind)
             {
                 elements.push(element);
             }
@@ -185,6 +196,7 @@ fn element<R>(
     surface: &WlSurface,
     states: &SurfaceData,
     placement: Placement,
+    scale: Scale<f64>,
     kind: Kind,
 ) -> Option<TransformedSurface<R>>
 where
@@ -200,6 +212,6 @@ where
         return None;
     }
     let relocated = affine.apply(location).downscale(affine.scale);
-    pixel_aligned(renderer, surface, states, relocated, alpha, kind)
+    pixel_aligned(renderer, surface, states, relocated, scale, alpha, kind)
         .map(|element| RescaleRenderElement::from_element(element, Point::default(), affine.scale))
 }

@@ -80,7 +80,7 @@ where
                 .window
                 .render_elements(self.renderer, surface_origin, self.scale, thumb.alpha);
         for surface in surfaces {
-            let scaled = RescaleRenderElement::from_element(surface, shape.loc, shrink);
+            let scaled = RescaleRenderElement::from_element(surface.into(), shape.loc, shrink);
             let Some(cropped) = CropRenderElement::from_element(scaled, self.scale, crop) else {
                 continue;
             };

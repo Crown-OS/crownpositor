@@ -75,7 +75,7 @@ where
                 let surfaces: Vec<WaylandSurfaceRenderElement<R>> =
                     surface.render_elements(self.renderer, location, self.scale, 1.0);
                 for element in surfaces {
-                    let scaled = RescaleRenderElement::from_element(element, centre, zoom);
+                    let scaled = RescaleRenderElement::from_element(element.into(), centre, zoom);
                     // The zoom pushes the wallpaper past the screen's edges;
                     // the crop keeps it off a neighbouring output.
                     if let Some(cropped) =

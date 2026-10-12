@@ -30,7 +30,6 @@ use smithay::{
         element::{
             Kind,
             memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
-            surface::WaylandSurfaceRenderElement,
         },
     },
     input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData},
@@ -46,7 +45,7 @@ use crate::rendering::{
         source::{CursorSource, RawImage},
         xcursor::XCursorSource,
     },
-    surface_tree::surface_elements,
+    surface_tree::{SurfaceElement, surface_elements},
 };
 
 /// Matches the X11/GTK default, and the size every theme ships.
@@ -206,7 +205,7 @@ impl Cursor {
     ) where
         R: Renderer + ImportAll + ImportMem,
         R::TextureId: Send + Clone + 'static,
-        E: From<WaylandSurfaceRenderElement<R>> + From<MemoryRenderBufferRenderElement<R>>,
+        E: From<SurfaceElement<R>> + From<MemoryRenderBufferRenderElement<R>>,
     {
         self.refresh();
         if self.suppressed {

@@ -1,12 +1,12 @@
 use smithay::backend::renderer::{
     ImportAll, ImportMem,
-    element::{
-        Wrap, memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement,
-        surface::WaylandSurfaceRenderElement, utils::RescaleRenderElement,
-    },
+    element::{Wrap, memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement},
 };
 
-use crate::rendering::decorate::Cropped;
+use crate::rendering::{
+    decorate::Cropped,
+    surface_tree::{SurfaceElement, TransformedSurface},
+};
 
 smithay::backend::renderer::element::render_elements! {
     /// Everything that can appear on an output.
@@ -20,7 +20,7 @@ smithay::backend::renderer::element::render_elements! {
     pub CrownElement<R, E> where R: ImportAll + ImportMem;
     /// Layer-shell surfaces and popups, drawn whole — and a client's own cursor
     /// surface, which is a surface tree like any other.
-    Surface = WaylandSurfaceRenderElement<R>,
+    Surface = SurfaceElement<R>,
     /// Anything the backend's decorator produced: a toplevel it drew, or a
     /// rectangle of blurred glass to go behind one.
     Tile = Wrap<E>,
@@ -36,5 +36,5 @@ smithay::backend::renderer::element::render_elements! {
     Solid = SolidColorRenderElement,
     /// A surface tree drawn whole with its `crownos_surface_animation_v1`
     /// transforms applied: an undecorated panel or a fullscreen window.
-    Transformed = RescaleRenderElement<WaylandSurfaceRenderElement<R>>,
+    Transformed = TransformedSurface<R>,
 }

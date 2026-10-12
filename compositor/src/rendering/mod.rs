@@ -26,6 +26,7 @@ pub mod popup;
 pub mod rounded;
 pub mod snapshot;
 pub mod surface_tree;
+pub mod unstretched;
 mod windowcontrol;
 
 use smithay::{
