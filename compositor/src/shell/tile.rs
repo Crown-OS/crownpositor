@@ -418,6 +418,7 @@ impl Tile {
         if self.state.is_floating() {
             self.floating_rect = rect;
         }
+        self.anim.set_titlebar(self.insets().top);
         if !self.placed {
             self.placed = true;
             self.anim.snap(rect);
@@ -436,6 +437,7 @@ impl Tile {
         if self.state.is_floating() {
             self.floating_rect = rect;
         }
+        self.anim.set_titlebar(self.insets().top);
         self.anim.snap(rect);
     }
 
@@ -500,6 +502,16 @@ impl Tile {
     /// Where to draw this frame: the interpolated rect, not the target.
     pub fn render_rect(&self) -> Rectangle<f64, Logical> {
         self.anim.rect()
+    }
+
+    /// The titlebar's height this frame, easing between shown and hidden.
+    pub fn render_titlebar(&self) -> f64 {
+        self.anim.titlebar()
+    }
+
+    /// How much of the titlebar is showing, from 0 (none) to 1 (all of it).
+    pub fn titlebar_reveal(&self) -> f32 {
+        (self.anim.titlebar() as f32 / self.titlebar_height.max(1) as f32).min(1.0)
     }
 
     /// Opacity times the fade-in, so a new window appears rather than pops.
@@ -592,7 +604,7 @@ impl Tile {
     }
 }
 
-/// Five springs: x, y, w, h, alpha.
+/// Six springs: x, y, w, h, alpha and the titlebar's height.
 ///
 /// These animate *rendering only*. `set_target` emits one configure at the final
 /// size — sending each intermediate spring value would be ~60 configures per
@@ -606,6 +618,7 @@ pub struct TileAnim {
     h: Spring,
     /// 0 -> 1 on map.
     alpha: Spring,
+    titlebar: Spring,
 }
 
 impl TileAnim {
@@ -618,16 +631,18 @@ impl TileAnim {
             w: Spring::with_profile(rect.size.w as f32, SpringProfile::SNAPPY),
             h: Spring::with_profile(rect.size.h as f32, SpringProfile::SNAPPY),
             alpha: Spring::with_profile(0.0, SpringProfile::SNAPPY),
+            titlebar: Spring::with_profile(0.0, SpringProfile::SNAPPY),
         }
     }
 
-    fn springs_mut(&mut self) -> [&mut Spring; 5] {
+    fn springs_mut(&mut self) -> [&mut Spring; 6] {
         [
             &mut self.x,
             &mut self.y,
             &mut self.w,
             &mut self.h,
             &mut self.alpha,
+            &mut self.titlebar,
         ]
     }
 
@@ -652,6 +667,12 @@ impl TileAnim {
         self.h.hold(rect.size.h as f32);
     }
 
+    /// Eases the titlebar towards `height`, so a frame gained or lost slides
+    /// in or out instead of popping.
+    pub fn set_titlebar(&mut self, height: i32) {
+        self.titlebar.set_target(height as f32);
+    }
+
     pub fn fade_in(&mut self) {
         self.alpha.set_target(1.0);
     }
@@ -671,7 +692,13 @@ impl TileAnim {
     /// window can be placed instantly and still fade in.
     pub fn snap(&mut self, rect: Rectangle<i32, Logical>) {
         self.retarget(rect);
-        for spring in [&mut self.x, &mut self.y, &mut self.w, &mut self.h] {
+        for spring in [
+            &mut self.x,
+            &mut self.y,
+            &mut self.w,
+            &mut self.h,
+            &mut self.titlebar,
+        ] {
             spring.snap_to_target();
         }
     }
@@ -688,6 +715,7 @@ impl TileAnim {
             && self.w.at_rest()
             && self.h.at_rest()
             && self.alpha.at_rest()
+            && self.titlebar.at_rest()
     }
 
     /// Lands the final frame on exact integers, so nothing rests half a pixel off.
@@ -710,6 +738,10 @@ impl TileAnim {
 
     pub fn alpha(&self) -> f32 {
         self.alpha.position.clamp(0.0, 1.0)
+    }
+
+    pub fn titlebar(&self) -> f64 {
+        (self.titlebar.position as f64).max(0.0)
     }
 }
 
@@ -862,6 +894,42 @@ mod tests {
             anim.step(1.0 / 60.0);
             let size = anim.rect().size;
             assert!(size.w >= 1.0 && size.h >= 1.0, "got {size:?}");
+        }
+    }
+
+    #[test]
+    fn a_titlebar_slides_in_rather_than_popping() {
+        let mut anim = TileAnim::new(rect(0, 0, 800, 600));
+        anim.snap(rect(0, 0, 800, 600));
+        anim.set_titlebar(36);
+
+        anim.step(1.0 / 60.0);
+        let height = anim.titlebar();
+        assert!(height > 0.0 && height < 36.0, "got {height}");
+
+        settle(&mut anim);
+        anim.settle();
+        assert_eq!(anim.titlebar(), 36.0);
+    }
+
+    #[test]
+    fn a_placed_window_starts_with_its_titlebar_already_shown() {
+        let mut anim = TileAnim::new(rect(0, 0, 0, 0));
+        anim.set_titlebar(36);
+        anim.snap(rect(0, 0, 800, 600));
+        assert_eq!(anim.titlebar(), 36.0);
+    }
+
+    #[test]
+    fn a_collapsing_titlebar_never_goes_negative() {
+        let mut anim = TileAnim::new(rect(0, 0, 800, 600));
+        anim.set_titlebar(36);
+        anim.snap(rect(0, 0, 800, 600));
+        anim.set_titlebar(0);
+
+        for _ in 0..300 {
+            anim.step(1.0 / 60.0);
+            assert!(anim.titlebar() >= 0.0);
         }
     }
 
