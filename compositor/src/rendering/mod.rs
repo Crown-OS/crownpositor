@@ -32,11 +32,7 @@ mod windowcontrol;
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
-        element::{
-            Kind, Wrap,
-            memory::MemoryRenderBufferRenderElement,
-            utils::{CropRenderElement, RescaleRenderElement},
-        },
+        element::{Kind, Wrap, memory::MemoryRenderBufferRenderElement, utils::CropRenderElement},
         utils::CommitCounter,
     },
     desktop::layer_map_for_output,
@@ -190,7 +186,7 @@ where
             scale,
             style,
         );
-        fullscreen::fullscreen_elements::<R, D>(&mut elements, tile, renderer, scale);
+        fullscreen::fullscreen_elements::<R, D>(&mut elements, tile, renderer, decorator, scale);
         return elements;
     }
 
@@ -403,10 +399,11 @@ fn tile_elements<R, D>(
             .loc
             .to_physical_precise_round(scale);
 
+    let popups = popup::popup_elements(renderer, tile.window(), surface_origin, scale, alpha);
     elements.extend(
-        popup::popup_elements(renderer, tile.window(), surface_origin, scale, alpha)
+        decorate::unclipped(renderer, decorator, popups, scale)
             .into_iter()
-            .map(CrownElement::Surface),
+            .map(|popup| CrownElement::Tile(Wrap::from(popup))),
     );
 
     if inset > 0 {
@@ -1205,10 +1202,7 @@ fn layer_elements<R, D>(
                 // A panel that asked to be rounded is clipped to its own
                 // radius, which costs it the decorator's wrapper per element.
                 Some(radius) => {
-                    let popups = popups
-                        .into_iter()
-                        .map(|popup| RescaleRenderElement::from_element(popup, clip.loc, 1.0));
-                    for scaled in popups.chain(tree) {
+                    for scaled in popups.into_iter().chain(tree) {
                         let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip)
                         else {
                             continue;
@@ -1221,11 +1215,13 @@ fn layer_elements<R, D>(
                     }
                 }
                 // Nothing to round, so nothing to crop: the surfaces go into
-                // the frame as the client committed them, animations applied.
-                None => {
-                    elements.extend(popups.into_iter().map(CrownElement::Surface));
-                    elements.extend(tree.into_iter().map(CrownElement::Transformed));
-                }
+                // the frame as the client committed them, animations applied,
+                // only sampled the way windows are.
+                None => elements.extend(
+                    decorate::unclipped(renderer, decorator, popups.into_iter().chain(tree), scale)
+                        .into_iter()
+                        .map(|surface| CrownElement::Tile(Wrap::from(surface))),
+                ),
             }
 
             // Panels and notifications are what actually wants glass, so layer
