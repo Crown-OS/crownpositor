@@ -34,12 +34,24 @@ const fn spring(response_seconds: f32, damping_ratio: f32) -> SpringProfile {
     }
 }
 
+/// The screen edge a dock sits along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
 /// Where a window comes from and returns to, output-local.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IconOrigin {
     pub rect: Rectangle<f64, Logical>,
     /// Corner radius in logical pixels.
     pub radius: f64,
+    /// The edge the icon's dock lies along; `None` for a launcher spread
+    /// over the screen, or no icon at all.
+    pub edge: Option<Edge>,
 }
 
 impl IconOrigin {
@@ -51,6 +63,7 @@ impl IconOrigin {
         Self {
             rect: Rectangle::new(loc, Size::from((size.x, size.y))),
             radius: radius * IN_PLACE_SCALE,
+            edge: None,
         }
     }
 
@@ -65,6 +78,7 @@ impl IconOrigin {
         Self {
             rect: Rectangle::new(loc, Size::from((DOCKLESS_SIDE, DOCKLESS_SIDE))),
             radius: DOCKLESS_SIDE / 2.0,
+            edge: Some(Edge::Bottom),
         }
     }
 }
@@ -95,6 +109,18 @@ impl Morph {
         }
     }
 
+    /// A morph standing still on the window: the window drawn as it is.
+    pub fn resting() -> Self {
+        Self::new(
+            IconOrigin::in_place(Rectangle::default(), 0.0),
+            MorphEnd::Window,
+        )
+    }
+
+    pub fn origin(&self) -> IconOrigin {
+        self.origin
+    }
+
     /// Heads for `end`, from wherever the morph is and at whatever speed it
     /// is going.
     pub fn head_for(&mut self, end: MorphEnd, origin: IconOrigin) {
@@ -121,7 +147,8 @@ impl Morph {
         self.progress.at_rest().then(|| self.heading())
     }
 
-    fn progress(&self) -> f64 {
+    /// How far from the icon the morph is: 0 on the icon, 1 on the window.
+    pub fn progress(&self) -> f64 {
         f64::from(self.progress.position.clamp(0.0, 1.0))
     }
 
@@ -170,6 +197,7 @@ mod tests {
         IconOrigin {
             rect: Rectangle::new((100.0, 900.0).into(), (64.0, 64.0).into()),
             radius: 14.0,
+            edge: Some(Edge::Bottom),
         }
     }
 

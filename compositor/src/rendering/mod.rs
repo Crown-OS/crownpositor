@@ -27,6 +27,7 @@ pub mod rounded;
 pub mod snapshot;
 pub mod surface_tree;
 pub mod unstretched;
+pub mod warp;
 mod windowcontrol;
 
 use smithay::{
@@ -41,7 +42,7 @@ use smithay::{
     wayland::shell::wlr_layer::Layer,
 };
 
-use config::Appearance;
+use config::{Appearance, MinimizeAnimation};
 
 use crate::{
     rendering::{
@@ -51,6 +52,7 @@ use crate::{
         decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
         element::CrownElement,
         unstretched::Unstretched,
+        warp::{Motion, WarpRequest},
     },
     shell::{
         Shell,
@@ -82,6 +84,7 @@ pub struct FrameStyle<'a> {
     pub focused: Option<WindowId>,
     /// Which control the pointer is over, and on which window.
     pub hovered: Option<(WindowId, Control)>,
+    pub minimize: MinimizeAnimation,
 }
 
 impl<'a> FrameStyle<'a> {
@@ -103,6 +106,7 @@ impl<'a> FrameStyle<'a> {
             text,
             focused,
             hovered,
+            minimize: appearance.minimize_effect,
         }
     }
 
@@ -251,11 +255,25 @@ where
         // that was behind it.
         for closing in workspace.closing() {
             let tile = closing.tile();
-            if let Some(morph) = tile.morph() {
-                let radius = match tile.state() {
-                    WindowState::Fullscreen => 0.0,
-                    _ => style.radius,
+            let radius = match tile.state() {
+                WindowState::Fullscreen => 0.0,
+                _ => style.radius,
+            };
+            if let Some(dust) = closing.dust() {
+                let request = WarpRequest {
+                    shell,
+                    tile,
+                    content: morph::Content::Snapshot(closing.snapshot()),
+                    motion: Motion::Dust(dust),
+                    scale,
+                    offset,
+                    radius,
+                    style,
                 };
+                if let Some(element) = decorator.warp(renderer, request) {
+                    elements.push(CrownElement::Tile(Wrap::from(element)));
+                }
+            } else if let Some(morph) = tile.morph() {
                 morph::morph_elements(
                     &mut elements,
                     shell,
@@ -350,6 +368,22 @@ fn tile_elements<R, D>(
     D: TileDecorator<R>,
 {
     if let Some(morph) = tile.morph() {
+        if style.minimize == MinimizeAnimation::Genie {
+            let request = WarpRequest {
+                shell,
+                tile,
+                content: morph::Content::Live,
+                motion: Motion::Genie(morph),
+                scale,
+                offset,
+                radius,
+                style,
+            };
+            if let Some(element) = decorator.warp(renderer, request) {
+                elements.push(CrownElement::Tile(Wrap::from(element)));
+                return;
+            }
+        }
         morph::morph_elements(
             elements,
             shell,

@@ -4,6 +4,7 @@
 pub mod arrangement;
 pub mod closing;
 pub mod decoration;
+pub mod dust;
 pub mod gaming;
 pub mod grab;
 pub mod monitor;
@@ -51,7 +52,7 @@ use crate::{
     menu::Menus,
     rendering::snapshot::Snapshot,
     shell::{
-        closing::ClosingWindow,
+        closing::{ClosingWindow, Farewell},
         decoration::resize_edge,
         grab::{moves_left, moves_top},
         monitor::{
@@ -1397,8 +1398,8 @@ impl Shell {
     }
 
     /// Takes a window whose client is gone out of the model, leaving its last
-    /// frame where it was to shrink into `origin`.
-    pub fn close_into(&mut self, id: WindowId, snapshot: Snapshot, origin: IconOrigin) -> bool {
+    /// frame where it was to leave by `farewell`.
+    pub fn close_into(&mut self, id: WindowId, snapshot: Snapshot, farewell: Farewell) -> bool {
         let Some(location) = self.location(id) else {
             return false;
         };
@@ -1410,7 +1411,7 @@ impl Shell {
         };
         workspace
             .closing_mut()
-            .insert(0, ClosingWindow::new(tile, snapshot, origin));
+            .insert(0, ClosingWindow::new(tile, snapshot, farewell));
         true
     }
 

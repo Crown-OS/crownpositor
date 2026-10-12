@@ -11,6 +11,7 @@ use crate::rendering::{
     decoration::{Border, TitleBarParams},
     snapshot::SnapshotElement,
     surface_tree::TransformedSurface,
+    warp::WarpRequest,
 };
 
 use smithay::{
@@ -114,6 +115,14 @@ where
         radius: [f32; 4],
     ) -> Option<Self::Element> {
         let _ = (renderer, element, shape, radius);
+        None
+    }
+
+    /// A window bent on the GPU — poured into its icon or crumbled to dust.
+    /// `None` — the default — makes the caller draw the flat morph, or let a
+    /// crumbling window go.
+    fn warp(&mut self, renderer: &mut R, request: WarpRequest<'_, '_>) -> Option<Self::Element> {
+        let _ = (renderer, request);
         None
     }
 

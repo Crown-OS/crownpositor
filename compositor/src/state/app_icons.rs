@@ -1,14 +1,23 @@
 //! Where windows come from and go back to: the icons a launcher registered
 //! through `crownos_app_icons_v1`, turned into each window's motion.
 
+use config::{AnimationProfile, CloseAnimation};
+use protocols::crownos_app_icons::IconPlacement;
 use smithay::{
     desktop::{WindowSurfaceType, layer_map_for_output},
+    output::Output,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Rectangle, Scale},
+    wayland::shell::wlr_layer::Anchor,
 };
 
 use crate::{
     rendering::snapshot::Snapshot,
-    shell::morph::IconOrigin,
+    shell::{
+        closing::Farewell,
+        dust::Dust,
+        morph::{Edge, IconOrigin},
+    },
     state::State,
     utils::{id::WindowId, surface},
 };
@@ -20,18 +29,10 @@ impl State {
         let app_id = surface::app_id(self.shell.tile(id)?.surface())?;
         let location = self.shell.location(id)?;
         let output = self.shell.monitor_by_id(location.output)?.output();
-        let layers = layer_map_for_output(output);
         self.wayland
             .app_icons_state
             .icons_of(&app_id)
-            .find_map(|(surface, placement)| {
-                let layer = layers.layer_for_surface(&surface, WindowSurfaceType::TOPLEVEL)?;
-                let loc = layers.layer_geometry(layer)?.loc + placement.rect.loc;
-                Some(IconOrigin {
-                    rect: Rectangle::new(loc.to_f64(), placement.rect.size.to_f64()),
-                    radius: placement.corner_radius,
-                })
-            })
+            .find_map(|(surface, placement)| icon_on(output, &surface, placement))
     }
 
     /// Where a window minimizes into: its icon, or where a dock would be.
@@ -43,17 +44,28 @@ impl State {
         })
     }
 
-    /// Where a closed window shrinks into: its icon, unless it is a dialog,
-    /// which shrinks away where it stands.
-    fn close_origin(&self, id: WindowId) -> Option<IconOrigin> {
+    /// How a closed window leaves: an application window crumbles to dust or
+    /// shrinks into its icon, as configured; a dialog shrinks away where it
+    /// stands.
+    fn farewell(&self, id: WindowId) -> Option<Farewell> {
         let tile = self.shell.tile(id)?;
-        if !surface::has_parent(tile.surface())
-            && let Some(icon) = self.icon_of(id)
-        {
-            return Some(icon);
+        let appearance = &self.config.current.appearance;
+        let dialog = surface::has_parent(tile.surface());
+        if !dialog {
+            if appearance.close_effect == CloseAnimation::Dust
+                && appearance.animations != AnimationProfile::None
+            {
+                return Some(Farewell::Dust(Dust::new(id.raw())));
+            }
+            if let Some(icon) = self.icon_of(id) {
+                return Some(Farewell::Shrink(icon));
+            }
         }
-        let radius = f64::from(self.config.current.appearance.border_radius);
-        Some(IconOrigin::in_place(tile.render_rect(), radius))
+        let radius = f64::from(appearance.border_radius);
+        Some(Farewell::Shrink(IconOrigin::in_place(
+            tile.render_rect(),
+            radius,
+        )))
     }
 
     pub fn minimize_window(&mut self, id: WindowId) {
@@ -104,7 +116,7 @@ impl State {
             return false;
         };
         let window = tile.window().clone();
-        let Some(origin) = self.close_origin(id) else {
+        let Some(farewell) = self.farewell(id) else {
             return false;
         };
         let Some(snapshot) = self
@@ -114,6 +126,69 @@ impl State {
         else {
             return false;
         };
-        self.shell.close_into(id, snapshot, origin)
+        self.shell.close_into(id, snapshot, farewell)
+    }
+}
+
+/// `placement` on `surface`, if `surface` is a layer on `output`.
+fn icon_on(output: &Output, surface: &WlSurface, placement: IconPlacement) -> Option<IconOrigin> {
+    let layers = layer_map_for_output(output);
+    let layer = layers.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)?;
+    let loc = layers.layer_geometry(layer)?.loc + placement.rect.loc;
+    Some(IconOrigin {
+        rect: Rectangle::new(loc.to_f64(), placement.rect.size.to_f64()),
+        radius: placement.corner_radius,
+        edge: dock_edge(layer.cached_state().anchor),
+    })
+}
+
+/// The one edge a layer is anchored along: a dock pinned to the bottom,
+/// stretched or not. `None` for a surface anchored to a corner or to all four
+/// sides, which lies along no edge in particular.
+fn dock_edge(anchor: Anchor) -> Option<Edge> {
+    let vertical = match (
+        anchor.contains(Anchor::TOP),
+        anchor.contains(Anchor::BOTTOM),
+    ) {
+        (true, false) => Some(Edge::Top),
+        (false, true) => Some(Edge::Bottom),
+        _ => None,
+    };
+    let horizontal = match (
+        anchor.contains(Anchor::LEFT),
+        anchor.contains(Anchor::RIGHT),
+    ) {
+        (true, false) => Some(Edge::Left),
+        (false, true) => Some(Edge::Right),
+        _ => None,
+    };
+    match (vertical, horizontal) {
+        (Some(edge), None) | (None, Some(edge)) => Some(edge),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dock_lies_along_the_edge_it_is_pinned_to() {
+        assert_eq!(dock_edge(Anchor::BOTTOM), Some(Edge::Bottom));
+        assert_eq!(
+            dock_edge(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT),
+            Some(Edge::Bottom)
+        );
+        assert_eq!(
+            dock_edge(Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM),
+            Some(Edge::Left)
+        );
+    }
+
+    #[test]
+    fn a_launcher_over_the_screen_lies_along_no_edge() {
+        assert_eq!(dock_edge(Anchor::all()), None);
+        assert_eq!(dock_edge(Anchor::BOTTOM | Anchor::LEFT), None);
+        assert_eq!(dock_edge(Anchor::empty()), None);
     }
 }
