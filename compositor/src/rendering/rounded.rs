@@ -1,4 +1,8 @@
-//! Rounded corners.
+//! Rounded corners, and the area filter for a buffer drawn at another size.
+//!
+//! Every client surface the decorator sees goes through this one shader — at
+//! zero radius when nothing is to be rounded — so a client that rendered for
+//! the wrong scale is resampled the same way wherever it is drawn.
 //!
 //! The shader is a per-*draw* override on the GLES frame, not a property of an
 //! element, so this wraps an element and brackets its draw call: bind the
@@ -73,10 +77,16 @@ impl<E> Rounded<E> {
         }
     }
 
-    /// Binds the override on `frame` and returns whether it needs unbinding.
-    /// The shape goes to the shader in framebuffer pixels, where it measures
-    /// from `gl_FragCoord`.
-    fn bind(&self, frame: &mut GlesFrame<'_, '_>) -> bool {
+    /// Binds the override for drawing `src` into `dst` on `frame` and returns
+    /// whether it needs unbinding. The shape goes to the shader in framebuffer
+    /// pixels, where it measures from `gl_FragCoord`.
+    fn bind(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        transform: Transform,
+    ) -> bool {
         let Some(program) = &self.program else {
             return false;
         };
@@ -85,10 +95,18 @@ impl<E> Rounded<E> {
         };
         frame.override_default_tex_program(
             program.clone(),
-            RoundedCornerShader::uniform_values(space.rect(self.shape), space.corners(self.radius))
-                .to_vec(),
+            RoundedCornerShader::uniform_values(
+                space.rect(self.shape),
+                space.corners(self.radius),
+                RoundedCornerShader::resample(src, dst, transform),
+            )
+            .to_vec(),
         );
         true
+    }
+
+    fn is_square(&self) -> bool {
+        self.radius.iter().all(|radius| *radius <= 0.0)
     }
 }
 
@@ -128,10 +146,14 @@ impl<E: Element> Element for Rounded<E> {
         self.inner.damage_since(scale, commit)
     }
 
-    /// Deliberately empty: the corners are cut away, so the element is no longer
-    /// fully opaque and anything behind it has to be drawn.
-    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        OpaqueRegions::default()
+    /// Empty once corners are cut away: the element is no longer fully opaque
+    /// and anything behind it has to be drawn.
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        if self.is_square() {
+            self.inner.opaque_regions(scale)
+        } else {
+            OpaqueRegions::default()
+        }
     }
 
     fn alpha(&self) -> f32 {
@@ -153,7 +175,7 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Rounded<E> 
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        let bound = self.bind(frame);
+        let bound = self.bind(frame, src, dst, self.inner.transform());
         let result = self
             .inner
             .draw(frame, src, dst, damage, opaque_regions, cache);
@@ -187,7 +209,7 @@ where
         // The override lives on the GLES frame under the multi frame; the
         // inner element still draws through the multi frame so cross-GPU
         // copies keep working.
-        let bound = self.bind(frame.as_mut());
+        let bound = self.bind(frame.as_mut(), src, dst, self.inner.transform());
         let result = self
             .inner
             .draw(frame, src, dst, damage, opaque_regions, cache);

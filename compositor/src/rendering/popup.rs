@@ -1,10 +1,13 @@
 use smithay::{
-    backend::renderer::{ImportAll, Renderer, element::Kind},
+    backend::renderer::{
+        ImportAll, Renderer,
+        element::{Kind, utils::RescaleRenderElement},
+    },
     desktop::{LayerSurface, PopupManager, Window},
     utils::{Physical, Point, Scale},
 };
 
-use crate::rendering::surface_tree::{SurfaceElement, surface_elements};
+use crate::rendering::surface_tree::{SurfaceElement, TransformedSurface, surface_elements};
 
 /// A window's popups, drawn whole rather than cropped to the window: a menu is
 /// free to hang past the edge of the window that opened it.
@@ -14,7 +17,7 @@ pub fn popup_elements<R>(
     surface_origin: Point<i32, Physical>,
     scale: Scale<f64>,
     alpha: f32,
-) -> Vec<SurfaceElement<R>>
+) -> Vec<TransformedSurface<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
@@ -38,6 +41,7 @@ where
                 Kind::Unspecified,
             )
         })
+        .map(unscaled)
         .collect()
 }
 
@@ -48,7 +52,7 @@ pub fn layer_popup_elements<R>(
     layer: &LayerSurface,
     location: Point<i32, Physical>,
     scale: Scale<f64>,
-) -> Vec<SurfaceElement<R>>
+) -> Vec<TransformedSurface<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
@@ -68,5 +72,16 @@ where
                 Kind::Unspecified,
             )
         })
+        .map(unscaled)
         .collect()
+}
+
+/// Wrapped at scale 1, which draws and damages exactly like the bare element,
+/// so a popup can go through the decorator the way a window's surfaces do.
+fn unscaled<R>(element: SurfaceElement<R>) -> TransformedSurface<R>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    RescaleRenderElement::from_element(element, Point::default(), 1.0)
 }

@@ -16,10 +16,10 @@ use crate::rendering::{
 use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
-        element::{Id, RenderElement, utils::CropRenderElement},
+        element::{Element, Id, RenderElement, utils::CropRenderElement},
         utils::CommitCounter,
     },
-    utils::{Physical, Rectangle},
+    utils::{Physical, Rectangle, Scale},
 };
 
 /// A tile's surfaces, scaled to the size they are drawn at and clipped to the
@@ -173,6 +173,31 @@ where
     fn blur_fingerprint(&self) -> Option<u64> {
         None
     }
+}
+
+/// Surfaces nothing clips or rounds — popups, square panels — decorated anyway,
+/// at zero radius and cropped to nothing but themselves: whatever the
+/// decorator does to the pixels it samples, such as resampling a buffer drawn
+/// at another size, they get as windows do.
+pub fn unclipped<R, D>(
+    renderer: &mut R,
+    decorator: &mut D,
+    surfaces: impl IntoIterator<Item = TransformedSurface<R>>,
+    scale: Scale<f64>,
+) -> Vec<D::Element>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+    D: TileDecorator<R>,
+{
+    surfaces
+        .into_iter()
+        .filter_map(|surface| {
+            let geometry = surface.geometry(scale);
+            let cropped = CropRenderElement::from_element(surface, scale, geometry)?;
+            decorator.decorate(renderer, cropped, geometry, [0.0; 4])
+        })
+        .collect()
 }
 
 /// Draws windows as they are. What a renderer without custom shaders uses.
