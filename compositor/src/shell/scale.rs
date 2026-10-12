@@ -1,13 +1,15 @@
 //! What scale clients are asked to render for.
 //!
 //! A client picks its own buffer scale; all a compositor can do is advertise a
-//! preference, and it has two ways to say it — `wl_surface`'s integer
-//! `preferred_buffer_scale` and `wp_fractional_scale`'s 120ths. A client told
-//! neither renders at 1x, and the renderer then stretches that buffer to fill a
-//! scaled output. That stretch is why a fractional output looks soft.
+//! preference, and it has three ways to say it — `wp_fractional_scale`'s
+//! 120ths, `wl_surface`'s integer `preferred_buffer_scale`, and, for toolkits
+//! older than both (GTK3, SDL2), `wl_surface.enter` naming an output whose
+//! `wl_output.scale` they read. A client told none of them renders at 1x, and
+//! the renderer then stretches that buffer to fill a scaled output. That
+//! stretch is why a fractional output looks soft.
 
 use smithay::{
-    desktop::{find_popup_root_surface, layer_map_for_output},
+    desktop::{Window, find_popup_root_surface, layer_map_for_output, space::SpaceElement},
     output::Output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::Transform,
@@ -92,34 +94,59 @@ impl Shell {
     ///
     /// A surface on no output yet — a toplevel between its first configure and
     /// its first buffer — is given the focused output's preference, so the very
-    /// first buffer it draws is already the right size.
-    pub fn advertise_scale(&self, surface: &WlSurface) {
-        let Some(output) = self
-            .output_for_surface(surface)
-            .or_else(|| self.focused_output())
-        else {
-            return;
-        };
-        Preference::from(output).send_to(surface);
+    /// first buffer it draws is already the right size. It is not told it
+    /// entered that output, though: a window rule may still place it elsewhere,
+    /// and a toolkit that saw two outputs would render for the denser one.
+    pub fn advertise_output(&self, surface: &WlSurface) {
+        let placed = self.output_for_surface(surface);
+        if let Some(output) = placed {
+            output.enter(surface);
+        }
+        if let Some(output) = placed.or_else(|| self.focused_output()) {
+            Preference::from(output).send_to(surface);
+        }
     }
 
     /// Re-advertises to everything on `output`, for when the output changed
-    /// rather than the surfaces on it.
-    pub fn advertise_output_scale(&self, output: &Output) {
+    /// rather than the surfaces on it, or when surfaces arrived from another
+    /// output.
+    pub fn readvertise_output(&self, output: &Output) {
+        let preference = Preference::from(output);
+        self.with_surfaces_on(output, |surface, states| {
+            output.enter(surface);
+            preference.send(surface, states);
+        });
+    }
+
+    /// Takes a window off one output and puts it on another, surfaces, popups
+    /// and all.
+    pub fn transfer_window(&self, window: &Window, from: &Output, to: &Output) {
+        window.output_leave(from);
+        let preference = Preference::from(to);
+        window.with_surfaces(|surface, states| {
+            to.enter(surface);
+            preference.send(surface, states);
+        });
+    }
+
+    /// Every surface on `output`: its windows on every workspace and its layer
+    /// surfaces, each with their subsurfaces and popups.
+    pub fn with_surfaces_on(
+        &self,
+        output: &Output,
+        mut visit: impl FnMut(&WlSurface, &SurfaceData),
+    ) {
         let Some(monitor) = self.monitor(output) else {
             return;
         };
-        let preference = Preference::from(output);
-
         for tile in monitor.workspaces().iter().flat_map(Workspace::tiles) {
-            tile.window()
-                .with_surfaces(|surface, states| preference.send(surface, states));
+            tile.window().with_surfaces(&mut visit);
         }
 
         // A second guard for the same output deadlocks, so keep the scope tight.
         let map = layer_map_for_output(output);
         for layer in map.layers() {
-            layer.with_surfaces(|surface, states| preference.send(surface, states));
+            layer.with_surfaces(&mut visit);
         }
     }
 }

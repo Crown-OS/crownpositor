@@ -47,7 +47,7 @@ impl CompositorHandler for State {
 
         xdg_shell::handle_commit(self, surface);
         self.handle_layer_commit(surface);
-        self.shell.advertise_scale(surface);
+        self.shell.advertise_output(surface);
         self.queue_redraw_for_surface(surface);
     }
 

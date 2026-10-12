@@ -442,7 +442,7 @@ impl Shell {
         self.apply_output_settings(config);
         self.arrange_outputs();
         self.refresh_usable(&output);
-        self.advertise_output_scale(&output);
+        self.readvertise_output(&output);
 
         output
     }
@@ -478,6 +478,9 @@ impl Shell {
         // An empty workspace carries nothing worth moving to another screen.
         let mut orphans = monitor.drain_workspaces();
         orphans.retain(|workspace| !workspace.is_empty());
+        for tile in orphans.iter().flat_map(Workspace::tiles) {
+            tile.window().output_leave(output);
+        }
 
         match survivor {
             Some(target) => {
@@ -488,14 +491,7 @@ impl Shell {
                 }
             }
             // No survivor: park them rather than destroying every window.
-            None => {
-                for workspace in orphans {
-                    for tile in workspace.tiles() {
-                        tile.window().output_leave(output);
-                    }
-                    self.headless.push(workspace);
-                }
-            }
+            None => self.headless.extend(orphans),
         }
 
         if let Some(global) = monitor.take_global() {
@@ -522,11 +518,8 @@ impl Shell {
         let mut workspace = workspace;
         workspace.set_output(target);
         let output = monitor.output().clone();
-        for tile in workspace.tiles() {
-            tile.window().output_enter(&output, Rectangle::default());
-        }
         monitor.push_workspace(workspace);
-        self.advertise_output_scale(&output);
+        self.readvertise_output(&output);
 
         for id in ids {
             self.window_to_location.insert(
@@ -557,6 +550,10 @@ impl Shell {
             let Some(workspace) = self.monitors[source].take_workspace(id) else {
                 continue;
             };
+            let source_output = self.monitors[source].output();
+            for tile in workspace.tiles() {
+                tile.window().output_leave(source_output);
+            }
             self.adopt(workspace, target);
         }
     }
@@ -603,7 +600,7 @@ impl Shell {
                 .collect();
             for output in outputs {
                 self.refresh_usable(&output);
-                self.advertise_output_scale(&output);
+                self.readvertise_output(&output);
             }
         }
     }
@@ -883,10 +880,23 @@ impl Shell {
     /// Take-then-insert, so a failed destination cannot leave a half-updated
     /// index behind.
     pub fn move_tile(&mut self, id: WindowId, to: Location) -> bool {
+        let from = self.location(id).map(|at| at.output);
         let Some(tile) = self.remove_tile(id) else {
             return false;
         };
-        self.insert_tile(tile, to)
+        if !self.insert_tile(tile, to) {
+            return false;
+        }
+        if let Some(from) = from.filter(|from| *from != to.output)
+            && let (Some(source), Some(target), Some(tile)) = (
+                self.monitor_by_id(from),
+                self.monitor_by_id(to.output),
+                self.tile(id),
+            )
+        {
+            self.transfer_window(tile.window(), source.output(), target.output());
+        }
+        true
     }
 
     pub fn focus_window(&mut self, id: WindowId) -> bool {
@@ -1220,19 +1230,11 @@ impl Shell {
             return false;
         };
         let (output, workspace) = (monitor.id(), monitor.active().id());
-        let target_output = monitor.output().clone();
-        let source_output = self.monitors[from].output().clone();
 
         if !self.move_tile(id, Location { output, workspace }) {
             return false;
         }
 
-        if let Some(tile) = self.tile(id) {
-            tile.window().output_leave(&source_output);
-            tile.window()
-                .output_enter(&target_output, Rectangle::default());
-        }
-        self.advertise_output_scale(&target_output);
         self.focus_window(id);
         self.normalize_all();
         true

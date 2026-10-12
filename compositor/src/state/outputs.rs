@@ -495,7 +495,7 @@ impl State {
             .collect();
         for output in outputs {
             self.shell.refresh_usable(&output);
-            self.shell.advertise_output_scale(&output);
+            self.shell.readvertise_output(&output);
         }
 
         // Idle, not inline: the client is still inside its `apply`, and the
