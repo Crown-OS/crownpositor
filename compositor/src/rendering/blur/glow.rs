@@ -137,7 +137,11 @@ mod tests {
         });
         assert!(from_top.light.0.abs() < 1e-6 && (from_top.light.1 + 1.0).abs() < 1e-6);
 
-        let upper_left = Shading::from(&EdgeGlow::WINDOW).light;
+        let upper_left = Shading::from(&EdgeGlow {
+            light_angle: -45.0,
+            ..EdgeGlow::WINDOW
+        })
+        .light;
         assert!(upper_left.0 < 0.0 && upper_left.1 < 0.0);
         assert!((upper_left.0 - upper_left.1).abs() < 1e-6);
     }

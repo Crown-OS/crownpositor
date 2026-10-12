@@ -50,3 +50,6 @@ smithay = { git = "https://github.com/smithay/smithay.git", rev = "e3d461a" }
 
 [patch."https://github.com/crown-os/crownos-protocols"]
 crownos-protocols = { path = "../crownos-protocols" }
+
+[patch."https://github.com/crown-os/crownos-config"]
+crownos-config = { path = "../crownos-config" }

@@ -939,7 +939,7 @@ mod tests {
             BlurConfig {
                 rims: glow::Rims::from(&GlassSettings {
                     menus: config::EdgeGlow {
-                        adaptive_tint: 0.1,
+                        adaptive_tint: config::EdgeGlow::MENU.adaptive_tint + 0.25,
                         ..config::EdgeGlow::MENU
                     },
                     ..GlassSettings::default()
