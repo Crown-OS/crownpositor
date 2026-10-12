@@ -20,7 +20,7 @@ use crate::rendering::{
     decorate::{Backdrop, TileDecorator},
     decoration::TextRenderer,
     element::CrownElement,
-    logical,
+    unstretched::Unstretched,
 };
 
 pub(in crate::rendering) struct Painter<'a, R, D>
@@ -117,21 +117,24 @@ where
         let Some(label) = self.text.label(text, scale.x, colour, true) else {
             return;
         };
-        let size = logical(label.size);
-        let origin = Point::<f64, Physical>::from((
-            ((centre.x - f64::from(size.w) / 2.0) * scale.x).round(),
-            ((centre.y - f64::from(size.h) / 2.0) * scale.y).round(),
+        // Rasterised at this output's scale, so drawn one pixel per pixel and
+        // centred in pixels.
+        let half = Point::<f64, Physical>::from((
+            f64::from(label.size.w) / 2.0,
+            f64::from(label.size.h) / 2.0,
         ));
+        let origin = (centre.to_physical(scale) - half).to_i32_round::<i32>();
         if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
             self.renderer,
-            origin,
+            origin.to_f64(),
             &label.buffer,
             Some(alpha),
-            Some(Rectangle::from_size(size.to_f64())),
-            Some(size),
+            None,
+            None,
             Kind::Unspecified,
         ) {
-            self.elements.push(CrownElement::Memory(element));
+            self.elements
+                .push(Unstretched::at_own_size(element, scale).into());
         }
     }
 }

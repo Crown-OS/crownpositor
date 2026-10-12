@@ -37,7 +37,7 @@ use smithay::{
     },
     desktop::layer_map_for_output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Scale, Size},
+    utils::{Logical, Physical, Point, Rectangle, Scale, Size},
     wayland::shell::wlr_layer::Layer,
 };
 
@@ -50,6 +50,7 @@ use crate::{
         decorate::{Backdrop, Outline, Shadow, TileDecorator},
         decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
         element::CrownElement,
+        unstretched::Unstretched,
     },
     shell::{
         Shell,
@@ -117,14 +118,6 @@ impl<'a> FrameStyle<'a> {
         self.hovered
             .and_then(|(window, control)| (window == id).then_some(control))
     }
-}
-
-/// A rasterised buffer's own size, retyped.
-///
-/// The label buffers are imported at scale 1, so their pixel size and the
-/// logical size the element wants are the same number in two coordinate spaces.
-pub(crate) fn logical(size: Size<i32, BufferCoords>) -> Size<i32, Logical> {
-    Size::from((size.w, size.h))
 }
 
 /// What a frame's *pixels* depend on, packed so the commit counter can tell in
@@ -554,8 +547,8 @@ fn frame_overlay<R, D>(
             frame.loc.y + (inset - visible.h) / 2,
         ));
 
-        // The buffer was rasterised at this output's scale and imported at
-        // scale 1, so its logical size and its pixel size are the same number.
+        // Rasterised at this output's scale, so drawn one pixel per pixel:
+        // smithay would size it in logical pixels and stretch it by the scale.
         if visible.w > 0
             && let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
@@ -567,7 +560,7 @@ fn frame_overlay<R, D>(
                 Kind::Unspecified,
             )
         {
-            elements.push(CrownElement::Memory(element));
+            elements.push(Unstretched::at_own_size(element, scale).into());
         }
     }
 
@@ -791,11 +784,11 @@ fn menu_row_elements<R, D>(
             centred.to_f64(),
             &label.buffer,
             Some(alpha),
-            Some(Rectangle::from_size(logical(label.size).to_f64())),
-            Some(logical(label.size)),
+            None,
+            None,
             Kind::Unspecified,
         ) {
-            elements.push(CrownElement::Memory(element));
+            elements.push(Unstretched::at_own_size(element, scale).into());
         }
     }
 }
@@ -868,11 +861,11 @@ fn menu_elements<R, D>(
             location.to_f64(),
             &label.buffer,
             Some(1.0),
-            Some(Rectangle::from_size(logical(label.size).to_f64())),
-            Some(logical(label.size)),
+            None,
+            None,
             Kind::Unspecified,
         ) {
-            elements.push(CrownElement::Memory(element));
+            elements.push(Unstretched::at_own_size(element, scale).into());
         }
     }
 

@@ -25,12 +25,10 @@ smithay::backend::renderer::element::render_elements! {
     /// Anything the backend's decorator produced: a toplevel it drew, or a
     /// rectangle of blurred glass to go behind one.
     Tile = Wrap<E>,
-    /// Anything the compositor rasterised on the CPU rather than a client
-    /// giving it: a themed cursor, a window's title. `ImportMem` above is what
-    /// this variant costs.
-    Memory = MemoryRenderBufferRenderElement<R>,
-    /// Something the compositor rasterised at this output's own density, drawn
-    /// one pixel per pixel: the themed cursor.
+    /// Anything the compositor rasterised on the CPU at this output's own
+    /// density rather than a client giving it — a themed cursor, a window's
+    /// title — drawn one pixel per pixel. `ImportMem` above is what this
+    /// variant costs.
     Pixels = Unstretched<MemoryRenderBufferRenderElement<R>>,
     /// A surface drawn at a size other than its own, with nothing added: the
     /// wallpaper as the overview zooms it.
