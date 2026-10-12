@@ -19,6 +19,7 @@ use crate::{
     },
     utils::edid::EdidInfo,
     utils::id::{OutputId, WorkspaceId},
+    utils::scale::closest_representable_scale,
 };
 
 /// Identity that survives unplug and replug.
@@ -459,8 +460,11 @@ impl Monitor {
         true
     }
 
+    /// Snapped to the nearest 120th: `wp_fractional_scale_v1` can name no
+    /// other, and a client told 157/120 for an output drawn at 1.31 renders
+    /// every buffer a hair off the size it is drawn at.
     pub fn set_scale(&mut self, scale: f64) -> bool {
-        let scale = Scale::Fractional(scale.clamp(0.1, 8.0));
+        let scale = Scale::Fractional(closest_representable_scale(scale.clamp(0.1, 8.0)));
         if self.config.scale.fractional_scale() == scale.fractional_scale() {
             return false;
         }
@@ -738,6 +742,14 @@ mod tests {
             ));
         }
         monitor
+    }
+
+    #[test]
+    fn a_scale_the_protocol_cannot_name_is_snapped_to_one_it_can() {
+        let mut monitor = monitor(1);
+        assert!(monitor.set_scale(1.31));
+        assert_eq!(monitor.config().scale.fractional_scale(), 157.0 / 120.0);
+        assert!(!monitor.set_scale(157.0 / 120.0));
     }
 
     #[test]
