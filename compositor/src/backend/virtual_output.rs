@@ -160,7 +160,7 @@ impl State {
         }
         self.shell.arrange_outputs();
         self.shell.refresh_usable(output);
-        self.shell.advertise_output_scale(output);
+        self.shell.readvertise_output(output);
     }
 }
 
