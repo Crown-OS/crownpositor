@@ -6,28 +6,38 @@ use super::same_app;
 /// the one launched: long enough for a cold start of a large application.
 const LAUNCH_WINDOW: Duration = Duration::from_secs(15);
 
-/// Applications launched from their icon whose first window has not mapped.
-#[derive(Debug, Default)]
-pub(super) struct Launches(Vec<(String, Instant)>);
+/// Applications launched from their icon whose first window has not mapped,
+/// each with what the compositor kept of where it was launched from.
+#[derive(Debug)]
+pub struct Launches<T>(Vec<(String, Instant, T)>);
 
-impl Launches {
-    pub(super) fn arm(&mut self, app_id: String) {
+impl<T> Default for Launches<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<T> Launches<T> {
+    pub fn arm(&mut self, app_id: String, from: T) {
         self.expire();
-        self.0.retain(|(armed, _)| *armed != app_id);
-        self.0.push((app_id, Instant::now()));
+        self.0.retain(|(armed, _, _)| *armed != app_id);
+        self.0.push((app_id, Instant::now(), from));
     }
 
-    pub(super) fn take(&mut self, window: &str) -> bool {
+    /// Where the application `window` belongs to was launched from, if it
+    /// was moments ago. Consumes the launch, so only its first window has
+    /// one.
+    pub fn take(&mut self, window: &str) -> Option<T> {
         self.expire();
-        let Some(index) = self.0.iter().position(|(icon, _)| same_app(icon, window)) else {
-            return false;
-        };
-        self.0.swap_remove(index);
-        true
+        let index = self
+            .0
+            .iter()
+            .position(|(icon, _, _)| same_app(icon, window))?;
+        Some(self.0.swap_remove(index).2)
     }
 
     fn expire(&mut self) {
-        self.0.retain(|(_, at)| at.elapsed() < LAUNCH_WINDOW);
+        self.0.retain(|(_, at, _)| at.elapsed() < LAUNCH_WINDOW);
     }
 }
 
@@ -38,17 +48,17 @@ mod tests {
     #[test]
     fn a_launch_is_taken_once() {
         let mut launches = Launches::default();
-        launches.arm("org.gnome.Nautilus".into());
-        assert!(launches.take("nautilus"));
-        assert!(!launches.take("nautilus"));
+        launches.arm("org.gnome.Nautilus".into(), 7);
+        assert_eq!(launches.take("nautilus"), Some(7));
+        assert_eq!(launches.take("nautilus"), None);
     }
 
     #[test]
     fn rearming_does_not_duplicate() {
         let mut launches = Launches::default();
-        launches.arm("kitty".into());
-        launches.arm("kitty".into());
-        assert!(launches.take("kitty"));
-        assert!(!launches.take("kitty"));
+        launches.arm("kitty".into(), 1);
+        launches.arm("kitty".into(), 2);
+        assert_eq!(launches.take("kitty"), Some(2));
+        assert_eq!(launches.take("kitty"), None);
     }
 }

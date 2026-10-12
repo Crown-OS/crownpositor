@@ -57,7 +57,7 @@ use protocols::{
     background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
     color_management::ColorManagementState,
     crownos_agent_access::AgentAccessState,
-    crownos_app_icons::AppIconsState,
+    crownos_app_icons::{AppIconsState, Launches},
     crownos_background_effects::{
         BackgroundEffectsState as CrownosBackgroundEffectsState,
         Capability as CrownosEffectCapability,
@@ -75,8 +75,9 @@ use protocols::{
 };
 
 use crate::{
+    shell::morph::IconOrigin,
     state::{State, agent_access::AgentAccessPolicy},
-    utils::privilege::is_privileged,
+    utils::{id::OutputId, privilege::is_privileged},
 };
 
 pub struct WaylandState {
@@ -133,6 +134,10 @@ pub struct WaylandState {
     /// `crownos_app_icons_v1`. Privileged: activating an icon raises another
     /// application's windows.
     pub app_icons_state: AppIconsState,
+    /// Applications just launched from an icon, and where the icon was when
+    /// it was tapped: a launcher hides as it launches, taking its icon away
+    /// before the window maps.
+    pub launches: Launches<Option<(OutputId, IconOrigin)>>,
     /// `crownos_surface_animation_v1`. Unprivileged: a client only animates
     /// its own subsurfaces. The running springs live on the shell.
     pub surface_animation_state: SurfaceAnimationState,
@@ -270,6 +275,7 @@ impl WaylandState {
             virtual_output_state: VirtualOutputState::new::<State, _>(display, is_privileged),
             crownos_input_state: CrownosInputState::new::<State, _>(display, is_privileged),
             app_icons_state: AppIconsState::new::<State, _>(display, is_privileged),
+            launches: Launches::default(),
             surface_animation_state: SurfaceAnimationState::new::<State>(display),
             surface_visibility_state: SurfaceVisibilityState::new::<State>(display),
             security_context_state: SecurityContextState::new::<State, _>(display, is_privileged),
