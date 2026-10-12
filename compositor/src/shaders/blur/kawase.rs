@@ -9,6 +9,8 @@ use std::ffi::CStr;
 
 use smithay::backend::renderer::gles::{GlesError, GlesTexture, ffi};
 
+use crate::shaders::program;
+
 static VERTEX_SHADER: &str = include_str!("./kawase.vert");
 
 /// One compiled pass and the uniform slots it is driven through.
@@ -27,30 +29,7 @@ impl KawaseProgram {
     /// `gl` must belong to the current context.
     pub unsafe fn compile(gl: &ffi::Gles2, fragment: &str) -> Result<Self, GlesError> {
         unsafe {
-            let vertex = compile_stage(gl, ffi::VERTEX_SHADER, VERTEX_SHADER)?;
-            let fragment = compile_stage(gl, ffi::FRAGMENT_SHADER, fragment)?;
-
-            let program = gl.CreateProgram();
-            if program == 0 {
-                gl.DeleteShader(vertex);
-                gl.DeleteShader(fragment);
-                return Err(GlesError::CreateShaderObject);
-            }
-
-            gl.AttachShader(program, vertex);
-            gl.AttachShader(program, fragment);
-            gl.LinkProgram(program);
-            gl.DetachShader(program, vertex);
-            gl.DetachShader(program, fragment);
-            gl.DeleteShader(vertex);
-            gl.DeleteShader(fragment);
-
-            let mut linked = 0;
-            gl.GetProgramiv(program, ffi::LINK_STATUS, &mut linked);
-            if linked == 0 {
-                gl.DeleteProgram(program);
-                return Err(GlesError::ProgramLinkError);
-            }
+            let program = program::link(gl, VERTEX_SHADER, fragment)?;
 
             let location = |name: &CStr| gl.GetUniformLocation(program, name.as_ptr());
             Ok(Self {
@@ -109,31 +88,5 @@ impl KawaseProgram {
     /// A [`Self::bind`] must be current.
     pub unsafe fn draw(gl: &ffi::Gles2) {
         unsafe { gl.DrawArrays(ffi::TRIANGLES, 0, 3) };
-    }
-}
-
-unsafe fn compile_stage(
-    gl: &ffi::Gles2,
-    stage: ffi::types::GLenum,
-    source: &str,
-) -> Result<ffi::types::GLuint, GlesError> {
-    unsafe {
-        let shader = gl.CreateShader(stage);
-        if shader == 0 {
-            return Err(GlesError::CreateShaderObject);
-        }
-
-        let pointer = source.as_ptr().cast::<ffi::types::GLchar>();
-        let length = source.len() as ffi::types::GLint;
-        gl.ShaderSource(shader, 1, &pointer, &length);
-        gl.CompileShader(shader);
-
-        let mut compiled = 0;
-        gl.GetShaderiv(shader, ffi::COMPILE_STATUS, &mut compiled);
-        if compiled == 0 {
-            gl.DeleteShader(shader);
-            return Err(GlesError::ShaderCompileError);
-        }
-        Ok(shader)
     }
 }
