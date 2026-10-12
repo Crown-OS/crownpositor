@@ -64,9 +64,7 @@ fn send_shape(
     scale: f64,
 ) -> Point<i32, BufferCoords> {
     let image = match &cursor.status {
-        CursorImageStatus::Named(icon) => {
-            cursor.raw_image(*icon, Cursor::buffer_scale(scale.into()))
-        }
+        CursorImageStatus::Named(icon) => cursor.raw_image(*icon, scale.into()),
         CursorImageStatus::Hidden | CursorImageStatus::Surface(_) => None,
     };
     let Some(image) = image else {

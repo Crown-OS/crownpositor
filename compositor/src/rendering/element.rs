@@ -6,6 +6,7 @@ use smithay::backend::renderer::{
 use crate::rendering::{
     decorate::Cropped,
     surface_tree::{SurfaceElement, TransformedSurface},
+    unstretched::Unstretched,
 };
 
 smithay::backend::renderer::element::render_elements! {
@@ -28,6 +29,9 @@ smithay::backend::renderer::element::render_elements! {
     /// giving it: a themed cursor, a window's title. `ImportMem` above is what
     /// this variant costs.
     Memory = MemoryRenderBufferRenderElement<R>,
+    /// Something the compositor rasterised at this output's own density, drawn
+    /// one pixel per pixel: the themed cursor.
+    Pixels = Unstretched<MemoryRenderBufferRenderElement<R>>,
     /// A surface drawn at a size other than its own, with nothing added: the
     /// wallpaper as the overview zooms it.
     Scaled = Cropped<R>,
