@@ -110,8 +110,12 @@ impl<D: AppIconsDispatch> Dispatch<CrownosAppIconV1, AppIconData, D> for AppIcon
                 state.app_icons_state().place(icon, placement);
             }
             crownos_app_icon_v1::Request::Activate => {
-                if !state.activate_app(&data.app_id) {
-                    state.app_icons_state().launches.arm(data.app_id.clone());
+                let placed = data
+                    .surface
+                    .upgrade()
+                    .ok()
+                    .zip(state.app_icons_state().placement(icon));
+                if !state.activate_app(&data.app_id, placed) {
                     icon.launch();
                 }
             }

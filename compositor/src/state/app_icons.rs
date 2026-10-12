@@ -19,7 +19,10 @@ use crate::{
         morph::{Edge, IconOrigin},
     },
     state::State,
-    utils::{id::WindowId, surface},
+    utils::{
+        id::{OutputId, WindowId},
+        surface,
+    },
 };
 
 impl State {
@@ -33,6 +36,18 @@ impl State {
             .app_icons_state
             .icons_of(&app_id)
             .find_map(|(surface, placement)| icon_on(output, &surface, placement))
+    }
+
+    /// Where an icon drawn at `placement` on `surface` is on screen now, and
+    /// which output it is on.
+    pub fn icon_at(
+        &self,
+        surface: &WlSurface,
+        placement: IconPlacement,
+    ) -> Option<(OutputId, IconOrigin)> {
+        self.shell.monitors().iter().find_map(|monitor| {
+            icon_on(monitor.output(), surface, placement).map(|icon| (monitor.id(), icon))
+        })
     }
 
     /// Where a window minimizes into: its icon, or where a dock would be.
@@ -91,10 +106,14 @@ impl State {
         let Some(app_id) = surface::app_id(tile.surface()) else {
             return;
         };
-        if !self.wayland.app_icons_state.take_launch(&app_id) {
+        let Some(from) = self.wayland.launches.take(&app_id) else {
             return;
-        }
-        let origin = self.icon_of(id);
+        };
+        let output = self.shell.location(id).map(|location| location.output);
+        let origin = from
+            .filter(|(launched_on, _)| Some(*launched_on) == output)
+            .map(|(_, icon)| icon)
+            .or_else(|| self.icon_of(id));
         if let (Some(origin), Some(tile)) = (origin, self.shell.tile_mut(id)) {
             tile.grow_from(origin);
         }

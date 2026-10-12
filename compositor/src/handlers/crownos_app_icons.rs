@@ -7,8 +7,9 @@ use crownos_protocols::app_icons::v1::server::{
     crownos_app_icon_manager_v1::CrownosAppIconManagerV1, crownos_app_icon_v1::CrownosAppIconV1,
 };
 use protocols::crownos_app_icons::{
-    AppIconData, AppIconsGlobalData, AppIconsHandler, AppIconsState, same_app,
+    AppIconData, AppIconsGlobalData, AppIconsHandler, AppIconsState, IconPlacement, same_app,
 };
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::{
     shell::tile::Tile,
@@ -23,7 +24,7 @@ impl AppIconsHandler for State {
 
     /// Brings the application forward: every minimized window grows back out
     /// of the icon, and its most recently used window takes focus.
-    fn activate_app(&mut self, app_id: &str) -> bool {
+    fn activate_app(&mut self, app_id: &str, icon: Option<(WlSurface, IconPlacement)>) -> bool {
         let windows: Vec<WindowId> = self
             .shell
             .tiles()
@@ -33,6 +34,8 @@ impl AppIconsHandler for State {
             .map(Tile::id)
             .collect();
         let Some(&last) = windows.last() else {
+            let from = icon.and_then(|(surface, placement)| self.icon_at(&surface, placement));
+            self.wayland.launches.arm(app_id.to_owned(), from);
             return false;
         };
         let recent = self.shell.focused_monitor().and_then(|monitor| {

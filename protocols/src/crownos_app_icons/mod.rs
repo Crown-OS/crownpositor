@@ -1,9 +1,10 @@
 //! Server-side `crownos_app_icons_v1`.
 //!
-//! Bookkeeping only: where each application's icon is drawn, and which
-//! applications were just launched from one. The compositor asks for an icon
-//! when a window maps, minimizes or closes, and turns it into the spatial
-//! origin of that window's motion.
+//! Bookkeeping only: where each application's icon is drawn. The compositor
+//! asks for an icon when a window maps, minimizes or closes, and turns it into
+//! the spatial origin of that window's motion. Which applications were just
+//! launched it keeps itself, in [`Launches`], because only it can tell where
+//! on screen a launcher's icon was at the moment it was tapped.
 
 mod app_id;
 mod dispatch;
@@ -19,7 +20,7 @@ use wayland_server::{
 
 pub use app_id::same_app;
 pub use dispatch::AppIconsDispatch;
-use launches::Launches;
+pub use launches::Launches;
 
 /// The protocol version this module speaks.
 pub const VERSION: u32 = 1;
@@ -29,9 +30,11 @@ pub const VERSION: u32 = 1;
 pub trait AppIconsHandler {
     fn app_icons_state(&mut self) -> &mut AppIconsState;
 
-    /// Restores and focuses the windows of `app_id`. Returns `false` when the
-    /// application has none, which makes the launcher start it.
-    fn activate_app(&mut self, app_id: &str) -> bool;
+    /// Restores and focuses the windows of `app_id`, out of `icon` — the
+    /// surface the activated icon is drawn on and where — when it is placed.
+    /// Returns `false` when the application has none, which makes the
+    /// launcher start it.
+    fn activate_app(&mut self, app_id: &str, icon: Option<(WlSurface, IconPlacement)>) -> bool;
 }
 
 /// Where an icon rests on its surface, in surface-local coordinates.
@@ -69,7 +72,6 @@ impl AppIcon {
 pub struct AppIconsState {
     global: GlobalId,
     icons: Vec<AppIcon>,
-    launches: Launches,
 }
 
 impl AppIconsState {
@@ -84,7 +86,6 @@ impl AppIconsState {
         Self {
             global: display.create_global::<D, CrownosAppIconManagerV1, _>(VERSION, data),
             icons: Vec::new(),
-            launches: Launches::default(),
         }
     }
 
@@ -107,10 +108,11 @@ impl AppIconsState {
         })
     }
 
-    /// Whether `app_id` was launched from its icon moments ago. Consumes the
-    /// launch, so only the application's first window grows out of the icon.
-    pub fn take_launch(&mut self, app_id: &str) -> bool {
-        self.launches.take(app_id)
+    fn placement(&self, resource: &CrownosAppIconV1) -> Option<IconPlacement> {
+        self.icons
+            .iter()
+            .find(|icon| icon.resource == *resource)
+            .and_then(|icon| icon.placement)
     }
 
     fn insert(&mut self, resource: CrownosAppIconV1) {
