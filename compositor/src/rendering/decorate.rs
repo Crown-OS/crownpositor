@@ -10,16 +10,13 @@ use crate::rendering::{
     blur::{Glass, GlassKind, ShadowPiece},
     decoration::{Border, TitleBarParams},
     snapshot::SnapshotElement,
+    surface_tree::TransformedSurface,
 };
 
 use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
-        element::{
-            Id, RenderElement,
-            surface::WaylandSurfaceRenderElement,
-            utils::{CropRenderElement, RescaleRenderElement},
-        },
+        element::{Id, RenderElement, utils::CropRenderElement},
         utils::CommitCounter,
     },
     utils::{Physical, Rectangle},
@@ -32,7 +29,7 @@ use smithay::{
 /// same shaders and the same damage tracking — draw a window both at its own
 /// size on the desktop and shrunk into an overview thumbnail. On the desktop
 /// the factor is 1.0, which the wrapper resolves to a no-op.
-pub type Cropped<R> = CropRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<R>>>;
+pub type Cropped<R> = CropRenderElement<TransformedSurface<R>>;
 
 /// One piece of blurred glass to draw behind a surface.
 ///

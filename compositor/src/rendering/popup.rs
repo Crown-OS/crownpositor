@@ -1,13 +1,10 @@
 use smithay::{
-    backend::renderer::{
-        ImportAll, Renderer,
-        element::{Kind, surface::WaylandSurfaceRenderElement},
-    },
+    backend::renderer::{ImportAll, Renderer, element::Kind},
     desktop::{LayerSurface, PopupManager, Window},
     utils::{Physical, Point, Scale},
 };
 
-use crate::rendering::surface_tree::surface_elements;
+use crate::rendering::surface_tree::{SurfaceElement, surface_elements};
 
 /// A window's popups, drawn whole rather than cropped to the window: a menu is
 /// free to hang past the edge of the window that opened it.
@@ -17,7 +14,7 @@ pub fn popup_elements<R>(
     surface_origin: Point<i32, Physical>,
     scale: Scale<f64>,
     alpha: f32,
-) -> Vec<WaylandSurfaceRenderElement<R>>
+) -> Vec<SurfaceElement<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
@@ -51,7 +48,7 @@ pub fn layer_popup_elements<R>(
     layer: &LayerSurface,
     location: Point<i32, Physical>,
     scale: Scale<f64>,
-) -> Vec<WaylandSurfaceRenderElement<R>>
+) -> Vec<SurfaceElement<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,

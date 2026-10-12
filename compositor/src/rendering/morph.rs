@@ -195,7 +195,7 @@ fn live_elements<R, D>(
     let surfaces: Vec<WaylandSurfaceRenderElement<R>> =
         window.render_elements(renderer, surface_origin, scale, alpha);
     for surface in surfaces {
-        let zoomed = RescaleRenderElement::from_element(surface, content_origin, zoom);
+        let zoomed = RescaleRenderElement::from_element(surface.into(), content_origin, zoom);
         let Some(cropped) = CropRenderElement::from_element(zoomed, scale, clip) else {
             continue;
         };
