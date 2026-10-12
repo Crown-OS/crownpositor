@@ -46,6 +46,7 @@ use crate::rendering::{
         xcursor::XCursorSource,
     },
     surface_tree::{SurfaceElement, surface_elements},
+    unstretched::Unstretched,
 };
 
 /// Matches the X11/GTK default, and the size every theme ships.
@@ -56,24 +57,24 @@ pub struct Cursor {
     /// Consulted in order, first hit wins. The last entry always answers, so
     /// there is no "no cursor" outcome.
     sources: Vec<Box<dyn CursorSource>>,
-    /// Nominal *logical* size; the buffer scale multiplies it.
+    /// Nominal *logical* size; an output's scale multiplies it into pixels.
     size: u32,
-    /// Keyed on icon and buffer scale. Rasterising is file I/O plus a parse, so
+    /// Keyed on icon and pixel size. Rasterising is file I/O plus a parse, so
     /// it must not happen per frame — and a `None` records a shape no source
     /// could produce, which must not be retried per frame either.
-    cache: HashMap<(CursorIcon, i32), Option<Image>>,
+    cache: HashMap<(CursorIcon, u32), Option<Image>>,
     /// What the focused client last asked for.
     pub status: CursorImageStatus,
     /// Nothing is drawn while set: a locked pointer points at nothing.
     pub suppressed: bool,
 }
 
-/// A rasterised cursor image, ready to draw.
+/// A rasterised cursor image, ready to draw one image pixel per output pixel.
 struct Image {
     buffer: MemoryRenderBuffer,
-    /// Where the hot point sits inside the image, in logical pixels from its
+    /// Where the hot point sits inside the image, in its pixels from its
     /// top-left corner.
-    hotspot: Point<f64, Logical>,
+    hotspot: Point<f64, Physical>,
 }
 
 impl Cursor {
@@ -138,29 +139,28 @@ impl Cursor {
         true
     }
 
-    /// The buffer scale to rasterise for. Integer, because themes ship discrete
-    /// sizes; rounding up keeps a fractional-scale output sharp at the cost of a
-    /// marginally smaller cursor.
-    pub fn buffer_scale(scale: Scale<f64>) -> i32 {
-        (scale.x.max(scale.y).ceil() as i32).max(1)
+    /// How many pixels across the cursor is on an output of this scale.
+    ///
+    /// Exactly the nominal size times the scale, not times the scale rounded
+    /// up: an image rasterised for 2x and squeezed into a 1.25x output is
+    /// resampled, and a cursor is nearly all edges.
+    fn pixel_size(&self, scale: Scale<f64>) -> u32 {
+        (f64::from(self.size) * scale.x.max(scale.y))
+            .round()
+            .max(1.0) as u32
     }
 
-    /// The image for `icon` at `scale`, walking the source chain on a miss.
-    fn image(&mut self, icon: CursorIcon, scale: i32) -> Option<&Image> {
+    /// The image for `icon` at `pixels` across, walking the source chain on a
+    /// miss.
+    fn image(&mut self, icon: CursorIcon, pixels: u32) -> Option<&Image> {
         // Split so the cache can be borrowed mutably while the chain is read.
-        let Self {
-            sources,
-            size,
-            cache,
-            ..
-        } = self;
-        let size = *size * scale as u32;
+        let Self { sources, cache, .. } = self;
 
         cache
-            .entry((icon, scale))
+            .entry((icon, pixels))
             .or_insert_with(|| {
                 let raw = sources.iter().find_map(|source| {
-                    let image = source.shape(icon, size)?;
+                    let image = source.shape(icon, pixels)?;
                     tracing::debug!(
                         cursor = icon.name(),
                         source = %source.describe(),
@@ -174,19 +174,19 @@ impl Cursor {
                 if raw.is_none() {
                     tracing::warn!(cursor = icon.name(), "no source could draw this cursor");
                 }
-                raw.map(|raw| Image::new(&raw, scale))
+                raw.map(|raw| Image::new(&raw))
             })
             .as_ref()
     }
 
-    /// The pixels of a named shape at a buffer scale, straight from the theme
-    /// chain. Uncached: only the capture path asks, and only when the shape
-    /// changes.
-    pub fn raw_image(&self, icon: CursorIcon, scale: i32) -> Option<RawImage> {
-        let size = self.size * scale.max(1) as u32;
+    /// The pixels of a named shape for an output of this scale, straight from
+    /// the theme chain. Uncached: only the capture path asks, and only when the
+    /// shape changes.
+    pub fn raw_image(&self, icon: CursorIcon, scale: Scale<f64>) -> Option<RawImage> {
+        let pixels = self.pixel_size(scale);
         self.sources
             .iter()
-            .find_map(|source| source.shape(icon, size))
+            .find_map(|source| source.shape(icon, pixels))
             .filter(RawImage::is_valid)
     }
 
@@ -205,7 +205,7 @@ impl Cursor {
     ) where
         R: Renderer + ImportAll + ImportMem,
         R::TextureId: Send + Clone + 'static,
-        E: From<SurfaceElement<R>> + From<MemoryRenderBufferRenderElement<R>>,
+        E: From<SurfaceElement<R>> + From<Unstretched<MemoryRenderBufferRenderElement<R>>>,
     {
         self.refresh();
         if self.suppressed {
@@ -226,23 +226,23 @@ impl Cursor {
                 elements.extend(surfaces.into_iter().map(E::from));
             }
             CursorImageStatus::Named(icon) => {
-                let Some(image) = self.image(icon, Self::buffer_scale(scale)) else {
+                let pixels = self.pixel_size(scale);
+                let Some(image) = self.image(icon, pixels) else {
                     return;
                 };
-                // Physical and fractional: rounding the hotspot to a logical
-                // pixel would make the cursor visibly stutter on a scaled
-                // output.
-                let location = (local - image.hotspot).to_physical(scale);
+                // On a whole physical pixel, because it is drawn 1:1; rounding
+                // to a logical pixel instead would make it visibly stutter.
+                let location = (local.to_physical(scale) - image.hotspot).to_i32_round::<i32>();
                 match MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
-                    location,
+                    location.to_f64(),
                     &image.buffer,
                     None,
                     None,
                     None,
                     Kind::Cursor,
                 ) {
-                    Ok(element) => elements.push(E::from(element)),
+                    Ok(element) => elements.push(E::from(Unstretched::at_own_size(element, scale))),
                     // An import failure is per-frame, not permanent, so the
                     // cache entry stays: the next frame tries again.
                     Err(_) => tracing::warn!(cursor = icon.name(), "failed to import the cursor"),
@@ -279,19 +279,17 @@ impl Default for Cursor {
 }
 
 impl Image {
-    fn new(raw: &RawImage, scale: i32) -> Self {
+    fn new(raw: &RawImage) -> Self {
         Self {
             buffer: MemoryRenderBuffer::from_slice(
                 &raw.pixels,
                 raw.format,
                 (raw.width, raw.height),
-                scale,
+                1,
                 Transform::Normal,
                 None,
             ),
-            // The source works in its own pixels; the buffer scale is what
-            // turns those into the logical size the element is drawn at.
-            hotspot: Point::from((raw.hotspot.0 / scale as f64, raw.hotspot.1 / scale as f64)),
+            hotspot: Point::from(raw.hotspot),
         }
     }
 }
@@ -314,12 +312,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn buffer_scale_rounds_up_and_never_reaches_zero() {
-        assert_eq!(Cursor::buffer_scale(Scale::from(1.0)), 1);
-        assert_eq!(Cursor::buffer_scale(Scale::from(1.25)), 2);
-        assert_eq!(Cursor::buffer_scale(Scale::from(2.0)), 2);
-        // A misconfigured output must not divide the hotspot by zero.
-        assert_eq!(Cursor::buffer_scale(Scale::from(0.0)), 1);
+    fn the_cursor_is_rasterised_for_the_exact_scale() {
+        let cursor = Cursor::new();
+        let nominal = f64::from(cursor.size);
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let pixels = cursor.pixel_size(Scale::from(scale));
+            assert_eq!(f64::from(pixels), (nominal * scale).round(), "at {scale}");
+        }
+        // A misconfigured output must still get a cursor.
+        assert_eq!(cursor.pixel_size(Scale::from(0.0)), 1);
     }
 
     #[test]
@@ -335,33 +336,31 @@ mod tests {
         // Runs on machines with and without a cursor theme installed, which is
         // exactly the point: the fallback covers the difference.
         let mut cursor = Cursor::new();
-        for scale in 1..=2 {
-            assert!(cursor.image(CursorIcon::Default, scale).is_some());
-            assert!(cursor.image(CursorIcon::Text, scale).is_some());
+        for pixels in [24, 30, 36, 48] {
+            assert!(cursor.image(CursorIcon::Default, pixels).is_some());
+            assert!(cursor.image(CursorIcon::Text, pixels).is_some());
         }
     }
 
     #[test]
     fn resolving_a_shape_twice_hits_the_cache() {
         let mut cursor = Cursor::new();
-        cursor.image(CursorIcon::Default, 1);
-        cursor.image(CursorIcon::Default, 1);
+        cursor.image(CursorIcon::Default, 24);
+        cursor.image(CursorIcon::Default, 24);
         assert_eq!(cursor.cache.len(), 1);
     }
 
     #[test]
-    fn the_hotspot_is_scaled_into_logical_pixels() {
-        // A HiDPI image's hot point is in its own dense pixels; drawn at the
-        // matching scale it has to land back on the same logical spot, or the
-        // click point drifts from the drawn tip.
+    fn the_hotspot_stays_in_the_image_pixels_it_is_drawn_in() {
+        // Drawn 1:1, the hot point must stay on the pixel the theme put it on,
+        // or the click point drifts from the drawn tip.
         let raw = RawImage {
-            pixels: vec![0; 4 * 48 * 48],
+            pixels: vec![0; 4 * 30 * 30],
             format: smithay::backend::allocator::Fourcc::Argb8888,
-            width: 48,
-            height: 48,
-            hotspot: (8.0, 12.0),
+            width: 30,
+            height: 30,
+            hotspot: (5.0, 7.5),
         };
-        let image = Image::new(&raw, 2);
-        assert_eq!(image.hotspot, Point::from((4.0, 6.0)));
+        assert_eq!(Image::new(&raw).hotspot, Point::from((5.0, 7.5)));
     }
 }
