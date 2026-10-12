@@ -54,7 +54,7 @@ use crate::{
     },
     shell::{
         Shell,
-        decoration::{Control, TitleBarLayout},
+        decoration::{Control, Insets, TitleBarLayout},
         gaming,
         monitor::Monitor,
         tile::{Tile, WindowState},
@@ -374,7 +374,8 @@ fn tile_elements<R, D>(
     let frame_loc: Point<i32, Physical> = (animated.loc + offset).to_physical_precise_round(scale);
     let frame = Rectangle::new(frame_loc, animated.size.to_physical_precise_round(scale));
 
-    let inset: i32 = (tile.insets().top as f64 * scale.y).round() as i32;
+    let inset: i32 = (tile.render_titlebar() * scale.y).round() as i32;
+    let reveal = tile.titlebar_reveal();
     // Where the client actually draws. Equal to the frame when undecorated, so
     // the undecorated path costs nothing extra.
     let clip = Rectangle::new(
@@ -401,7 +402,17 @@ fn tile_elements<R, D>(
 
     if inset > 0 {
         frame_overlay(
-            elements, shell, tile, renderer, decorator, frame, inset, radius, scale, style, alpha,
+            elements,
+            shell,
+            tile,
+            renderer,
+            decorator,
+            frame,
+            inset,
+            radius,
+            scale,
+            style,
+            alpha * reveal,
         );
     }
 
@@ -419,7 +430,7 @@ fn tile_elements<R, D>(
     // same corner and leave a notch between them.
     let radii = match client_radius {
         Some(radius) => [radius; 4],
-        None => corner_radii(radius, inset > 0),
+        None => corner_radii(radius, reveal),
     };
 
     let surfaces = surface_tree::transformed_surface_elements(
@@ -486,7 +497,15 @@ fn tile_elements<R, D>(
     // client's rounding cuts away, and the ring.
     if inset > 0 {
         frame_backing(
-            elements, tile, renderer, decorator, frame, inset, radius, style, alpha,
+            elements,
+            tile,
+            renderer,
+            decorator,
+            frame,
+            inset,
+            radius,
+            style,
+            alpha * reveal,
         );
     }
 }
@@ -526,7 +545,7 @@ fn frame_overlay<R, D>(
     // which the menu row needs mutably to shape its labels.
     let output_scale = style.scale;
     let physical = |value: i32| (value as f64 * output_scale) as f32;
-    let layout = frame_layout(tile, frame, output_scale);
+    let layout = frame_layout(frame, inset, output_scale);
 
     // The title. Rasterised at the output's scale and cached, so this is a hash
     // lookup on every frame but the one where the title changed.
@@ -540,22 +559,27 @@ fn frame_overlay<R, D>(
         // tail, which is what every titlebar has always done.
         let visible = Size::from((
             label.size.w.min(physical(label_area.size.w) as i32),
-            label.size.h,
+            label.size.h.min(inset),
         ));
         let location = Point::<i32, Physical>::from((
             frame.loc.x + physical(label_area.loc.x) as i32,
             frame.loc.y + (inset - visible.h) / 2,
         ));
+        let crop = Rectangle::new(
+            Point::from((0.0, ((label.size.h - visible.h) / 2) as f64)),
+            visible.to_f64(),
+        );
 
         // Rasterised at this output's scale, so drawn one pixel per pixel:
         // smithay would size it in logical pixels and stretch it by the scale.
         if visible.w > 0
+            && visible.h > 0
             && let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
                 location.to_f64(),
                 &label.buffer,
                 Some(alpha),
-                Some(Rectangle::from_size(visible.to_f64())),
+                Some(crop),
                 Some(visible),
                 Kind::Unspecified,
             )
@@ -591,11 +615,11 @@ fn frame_overlay<R, D>(
 /// positioned from the settled width would drift outside it while it grows.
 /// Measured at the origin, so every rect that comes back is already an offset
 /// into the frame.
-fn frame_layout(tile: &Tile, frame: Rectangle<i32, Physical>, scale: f64) -> TitleBarLayout {
+fn frame_layout(frame: Rectangle<i32, Physical>, inset: i32, scale: f64) -> TitleBarLayout {
     let logical = |value: i32| (value as f64 / scale).round() as i32;
     TitleBarLayout::new(
         Rectangle::from_size(Size::from((logical(frame.size.w), logical(frame.size.h)))),
-        tile.insets(),
+        Insets::top(logical(inset)),
     )
 }
 
@@ -683,7 +707,7 @@ fn frame_backing<R, D>(
         None => (frame, palette),
     };
 
-    let layout = frame_layout(tile, frame, style.scale);
+    let layout = frame_layout(frame, inset, style.scale);
     let physical = |value: i32| (value as f64 * style.scale) as f32;
     let first = layout.first_control_centre();
 
@@ -1004,10 +1028,10 @@ fn snap_preview_elements<R, D>(
 ///
 /// A decorated window's top pair are square: the titlebar sits over them and
 /// rounds them itself, and two shapes each rounding the same corner leaves a
-/// notch between them. The order is the one the shader reads: right-bottom,
+/// notch between them. They round back in as the titlebar slides away. The order is the one the shader reads: right-bottom,
 /// right-top, left-bottom, left-top.
-fn corner_radii(radius: f32, decorated: bool) -> [f32; 4] {
-    let top = if decorated { 0.0 } else { radius };
+fn corner_radii(radius: f32, titlebar_reveal: f32) -> [f32; 4] {
+    let top = radius * (1.0 - titlebar_reveal);
     [radius, top, radius, top]
 }
 
