@@ -30,7 +30,7 @@ use smithay::{
         element::{
             Kind,
             memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
-            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
+            surface::WaylandSurfaceRenderElement,
         },
     },
     input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData},
@@ -40,10 +40,13 @@ use smithay::{
     wayland::compositor::with_states,
 };
 
-use crate::rendering::cursor::{
-    builtin::BuiltinSource,
-    source::{CursorSource, RawImage},
-    xcursor::XCursorSource,
+use crate::rendering::{
+    cursor::{
+        builtin::BuiltinSource,
+        source::{CursorSource, RawImage},
+        xcursor::XCursorSource,
+    },
+    surface_tree::surface_elements,
 };
 
 /// Matches the X11/GTK default, and the size every theme ships.
@@ -219,15 +222,8 @@ impl Cursor {
                 let hotspot = surface_hotspot(&surface);
                 let location: Point<i32, Physical> =
                     (local - hotspot.to_f64()).to_physical_precise_round(scale);
-                let surfaces: Vec<WaylandSurfaceRenderElement<R>> =
-                    render_elements_from_surface_tree(
-                        renderer,
-                        &surface,
-                        location,
-                        scale,
-                        1.0,
-                        Kind::Cursor,
-                    );
+                let surfaces =
+                    surface_elements(renderer, &surface, location, scale, 1.0, Kind::Cursor);
                 elements.extend(surfaces.into_iter().map(E::from));
             }
             CursorImageStatus::Named(icon) => {

@@ -1,11 +1,17 @@
-//! A surface tree's render elements with `crownos_surface_animation_v1`
-//! transforms applied.
+//! A surface tree's render elements, every surface on a whole physical pixel.
 //!
-//! The same walk as smithay's `render_elements_from_surface_tree`, carrying a
-//! [`UniformAffine`] and an opacity down the tree: an animated subsurface and
-//! everything under it are relocated, rescaled about its center and faded.
-//! Untransformed trees come out as the plain elements wrapped at scale 1,
-//! which draws and damages exactly like the bare element.
+//! The same walk as smithay's `render_elements_from_surface_tree`, except that
+//! no surface is left between pixels. A subsurface's logical offset lands
+//! between them on a fractional output, and smithay sizes an element by
+//! rounding its two edges separately: a quarter of such subsurfaces came out a
+//! pixel wider or narrower than the buffer the client drew for them, and a
+//! buffer stretched by a pixel is resampled whole, every glyph in it softened.
+//!
+//! [`transformed_surface_elements`] also carries a [`UniformAffine`] and an
+//! opacity down the tree for `crownos_surface_animation_v1`: an animated
+//! subsurface and everything under it are relocated, rescaled about its center
+//! and faded. Untransformed trees come out as the plain elements wrapped at
+//! scale 1, which draws and damages exactly like the bare element.
 
 use protocols::crownos_surface_animation::surface_transform;
 use smithay::{
@@ -30,6 +36,79 @@ struct Placement {
     location: Point<f64, Physical>,
     affine: UniformAffine,
     alpha: f32,
+}
+
+/// The tree's elements as the client committed them, for what no animation
+/// reaches: popups, lock surfaces and cursors.
+pub fn surface_elements<R>(
+    renderer: &mut R,
+    root: &WlSurface,
+    location: Point<i32, Physical>,
+    scale: Scale<f64>,
+    alpha: f32,
+    kind: Kind,
+) -> Vec<WaylandSurfaceRenderElement<R>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    let mut elements = Vec::new();
+    with_surface_tree_downward(
+        root,
+        location.to_f64(),
+        |_, states, parent| match offset_from(states, *parent, scale) {
+            Some(location) => TraversalAction::DoChildren(location),
+            None => TraversalAction::SkipChildren,
+        },
+        |surface, states, parent| {
+            if let Some(location) = offset_from(states, *parent, scale)
+                && let Some(element) =
+                    pixel_aligned(renderer, surface, states, location, alpha, kind)
+            {
+                elements.push(element);
+            }
+        },
+        |_, _, _| true,
+    );
+    elements
+}
+
+/// Where a surface sits, given where its parent does. `None` for a surface
+/// with nothing to show, whose children are hidden with it.
+fn offset_from(
+    states: &SurfaceData,
+    parent: Point<f64, Physical>,
+    scale: Scale<f64>,
+) -> Option<Point<f64, Physical>> {
+    let view = states
+        .data_map
+        .get::<RendererSurfaceStateUserData>()?
+        .lock()
+        .ok()?
+        .view()?;
+    Some(parent + view.offset.to_f64().to_physical(scale))
+}
+
+/// The surface's element on the whole pixel nearest `location`, where its size
+/// is the client's own rounding of the same product.
+fn pixel_aligned<R>(
+    renderer: &mut R,
+    surface: &WlSurface,
+    states: &SurfaceData,
+    location: Point<f64, Physical>,
+    alpha: f32,
+    kind: Kind,
+) -> Option<WaylandSurfaceRenderElement<R>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    let snapped = location.to_i32_round::<i32>().to_f64();
+    WaylandSurfaceRenderElement::from_surface(renderer, surface, states, snapped, alpha, kind)
+        .unwrap_or_else(|err| {
+            tracing::warn!(%err, "failed to import a surface");
+            None
+        })
 }
 
 pub fn transformed_surface_elements<R>(
@@ -121,15 +200,6 @@ where
         return None;
     }
     let relocated = affine.apply(location).downscale(affine.scale);
-    match WaylandSurfaceRenderElement::from_surface(
-        renderer, surface, states, relocated, alpha, kind,
-    ) {
-        Ok(element) => element.map(|element| {
-            RescaleRenderElement::from_element(element, Point::default(), affine.scale)
-        }),
-        Err(err) => {
-            tracing::warn!(%err, "failed to import a surface");
-            None
-        }
-    }
+    pixel_aligned(renderer, surface, states, relocated, alpha, kind)
+        .map(|element| RescaleRenderElement::from_element(element, Point::default(), affine.scale))
 }

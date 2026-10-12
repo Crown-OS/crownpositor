@@ -1,14 +1,13 @@
 use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
-        element::{
-            Kind,
-            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
-        },
+        element::{Kind, surface::WaylandSurfaceRenderElement},
     },
     desktop::{LayerSurface, PopupManager, Window},
     utils::{Physical, Point, Scale},
 };
+
+use crate::rendering::surface_tree::surface_elements;
 
 /// A window's popups, drawn whole rather than cropped to the window: a menu is
 /// free to hang past the edge of the window that opened it.
@@ -33,7 +32,7 @@ where
             let location = surface_origin
                 + (geometry_origin + offset - popup.geometry().loc)
                     .to_physical_precise_round(scale);
-            render_elements_from_surface_tree(
+            surface_elements(
                 renderer,
                 popup.wl_surface(),
                 location,
@@ -63,7 +62,7 @@ where
                 .to_f64()
                 .to_physical(scale)
                 .to_i32_round();
-            render_elements_from_surface_tree(
+            surface_elements(
                 renderer,
                 popup.wl_surface(),
                 location + offset,
