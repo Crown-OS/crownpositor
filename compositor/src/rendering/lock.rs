@@ -3,17 +3,13 @@
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
-        element::{
-            Kind,
-            solid::SolidColorRenderElement,
-            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
-        },
+        element::{Kind, solid::SolidColorRenderElement},
     },
     utils::{Point, Rectangle, Scale},
 };
 
 use crate::{
-    rendering::{Elements, decorate::TileDecorator},
+    rendering::{Elements, decorate::TileDecorator, surface_tree},
     shell::{monitor::Monitor, session_lock::SessionLock},
 };
 
@@ -33,7 +29,7 @@ pub fn lock_elements<R, D>(
     D: TileDecorator<R>,
 {
     if let Some(surface) = lock.surface_on(monitor.output()) {
-        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+        let surfaces = surface_tree::surface_elements(
             renderer,
             surface.wl_surface(),
             Point::default(),
