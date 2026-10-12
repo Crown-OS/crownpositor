@@ -38,6 +38,7 @@ use crate::{
         blur::{BlurCache, BlurConfig, BlurSession},
         corners::CornerMemory,
         rounded::GlesDecorator,
+        warp::WarpCanvases,
     },
     state::State,
 };
@@ -69,6 +70,7 @@ struct Shadow {
     tracker: Option<OutputDamageTracker>,
     blur: BlurCache,
     corners: CornerMemory,
+    canvases: WarpCanvases,
 }
 
 thread_local! {
@@ -365,6 +367,7 @@ pub fn compare(
                     );
                     shadow.blur.begin_frame();
                     shadow.corners.begin_frame();
+                    shadow.canvases.begin_frame();
                     let content = shadow.blur.content();
                     let config = BlurConfig::new(appearance, glass);
                     let blur = config.enabled.then_some(BlurSession {
@@ -383,7 +386,7 @@ pub fn compare(
                         shell,
                         monitor,
                         renderer,
-                        &mut GlesDecorator::new(blur, &mut shadow.corners),
+                        &mut GlesDecorator::new(blur, &mut shadow.corners, &mut shadow.canvases),
                         cursor,
                         pointer,
                         scale,
@@ -459,7 +462,11 @@ pub fn compare(
                 shell,
                 monitor,
                 renderer,
-                &mut GlesDecorator::new(blur, &mut CornerMemory::default()),
+                &mut GlesDecorator::new(
+                    blur,
+                    &mut CornerMemory::default(),
+                    &mut WarpCanvases::default(),
+                ),
                 cursor,
                 pointer,
                 scale,

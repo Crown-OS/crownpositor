@@ -37,6 +37,7 @@ use crate::{
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
         framebuffer::FramebufferSpace,
         snapshot::SnapshotElement,
+        warp::{self, WarpCanvases, WarpElement, WarpRequest},
     },
     shaders::rounded_corner::RoundedCornerShader,
 };
@@ -241,6 +242,7 @@ pub enum Decorated<E> {
     TitleBar(TitleBar),
     Border(WindowDecoration),
     Shadow(GlassShadow),
+    Warp(WarpElement),
 }
 
 impl<E: Element> Element for Decorated<E> {
@@ -252,6 +254,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.id(),
             Self::Border(border) => border.id(),
             Self::Shadow(shadow) => shadow.id(),
+            Self::Warp(warp) => warp.id(),
         }
     }
 
@@ -263,6 +266,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.current_commit(),
             Self::Border(border) => border.current_commit(),
             Self::Shadow(shadow) => shadow.current_commit(),
+            Self::Warp(warp) => warp.current_commit(),
         }
     }
 
@@ -274,6 +278,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.src(),
             Self::Border(border) => border.src(),
             Self::Shadow(shadow) => shadow.src(),
+            Self::Warp(warp) => warp.src(),
         }
     }
 
@@ -285,6 +290,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.geometry(scale),
             Self::Border(border) => border.geometry(scale),
             Self::Shadow(shadow) => shadow.geometry(scale),
+            Self::Warp(warp) => warp.geometry(scale),
         }
     }
 
@@ -296,6 +302,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.location(scale),
             Self::Border(border) => border.location(scale),
             Self::Shadow(shadow) => shadow.location(scale),
+            Self::Warp(warp) => warp.location(scale),
         }
     }
 
@@ -307,6 +314,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.transform(),
             Self::Border(border) => border.transform(),
             Self::Shadow(shadow) => shadow.transform(),
+            Self::Warp(warp) => warp.transform(),
         }
     }
 
@@ -322,6 +330,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.damage_since(scale, commit),
             Self::Border(border) => border.damage_since(scale, commit),
             Self::Shadow(shadow) => shadow.damage_since(scale, commit),
+            Self::Warp(warp) => warp.damage_since(scale, commit),
         }
     }
 
@@ -333,6 +342,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.opaque_regions(scale),
             Self::Border(border) => border.opaque_regions(scale),
             Self::Shadow(shadow) => shadow.opaque_regions(scale),
+            Self::Warp(warp) => warp.opaque_regions(scale),
         }
     }
 
@@ -344,6 +354,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.alpha(),
             Self::Border(border) => border.alpha(),
             Self::Shadow(shadow) => shadow.alpha(),
+            Self::Warp(warp) => warp.alpha(),
         }
     }
 
@@ -355,6 +366,7 @@ impl<E: Element> Element for Decorated<E> {
             Self::TitleBar(bar) => bar.kind(),
             Self::Border(border) => border.kind(),
             Self::Shadow(shadow) => shadow.kind(),
+            Self::Warp(warp) => warp.kind(),
         }
     }
 }
@@ -416,6 +428,15 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
                 opaque_regions,
                 cache,
             ),
+            Self::Warp(warp) => RenderElement::<GlesRenderer>::draw(
+                warp,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
         }
     }
 
@@ -431,6 +452,7 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
             Self::Shadow(shadow) => {
                 RenderElement::<GlesRenderer>::underlying_storage(shadow, renderer)
             }
+            Self::Warp(warp) => RenderElement::<GlesRenderer>::underlying_storage(warp, renderer),
         }
     }
 }
@@ -495,6 +517,15 @@ where
                 opaque_regions,
                 cache,
             ),
+            Self::Warp(warp) => RenderElement::<KmsRenderer<'render>>::draw(
+                warp,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
         }
     }
 
@@ -515,6 +546,9 @@ where
             Self::Shadow(shadow) => {
                 RenderElement::<KmsRenderer<'render>>::underlying_storage(shadow, renderer)
             }
+            Self::Warp(warp) => {
+                RenderElement::<KmsRenderer<'render>>::underlying_storage(warp, renderer)
+            }
         }
     }
 }
@@ -529,11 +563,20 @@ where
 pub struct GlesDecorator<'a> {
     blur: Option<BlurSession<'a>>,
     corners: &'a mut CornerMemory,
+    canvases: &'a mut WarpCanvases,
 }
 
 impl<'a> GlesDecorator<'a> {
-    pub fn new(blur: Option<BlurSession<'a>>, corners: &'a mut CornerMemory) -> Self {
-        Self { blur, corners }
+    pub fn new(
+        blur: Option<BlurSession<'a>>,
+        corners: &'a mut CornerMemory,
+        canvases: &'a mut WarpCanvases,
+    ) -> Self {
+        Self {
+            blur,
+            corners,
+            canvases,
+        }
     }
 }
 
@@ -610,6 +653,14 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
     fn border(&mut self, renderer: &mut GlesRenderer, border: Border) -> Option<Self::Element> {
         WindowDecoration::new(renderer, border).map(Decorated::Border)
     }
+
+    fn warp(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        request: WarpRequest<'_, '_>,
+    ) -> Option<Self::Element> {
+        warp::warp(renderer, self.canvases, request).map(Decorated::Warp)
+    }
 }
 
 /// [`GlesDecorator`], but for the multi-GPU renderer the KMS backend uses.
@@ -617,11 +668,20 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
 pub struct MultiDecorator<'a> {
     blur: Option<BlurSession<'a>>,
     corners: &'a mut CornerMemory,
+    canvases: &'a mut WarpCanvases,
 }
 
 impl<'a> MultiDecorator<'a> {
-    pub fn new(blur: Option<BlurSession<'a>>, corners: &'a mut CornerMemory) -> Self {
-        Self { blur, corners }
+    pub fn new(
+        blur: Option<BlurSession<'a>>,
+        corners: &'a mut CornerMemory,
+        canvases: &'a mut WarpCanvases,
+    ) -> Self {
+        Self {
+            blur,
+            corners,
+            canvases,
+        }
     }
 }
 
@@ -703,5 +763,13 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
         border: Border,
     ) -> Option<Self::Element> {
         WindowDecoration::new(renderer.as_mut(), border).map(Decorated::Border)
+    }
+
+    fn warp(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        request: WarpRequest<'_, '_>,
+    ) -> Option<Self::Element> {
+        warp::warp(renderer.as_mut(), self.canvases, request).map(Decorated::Warp)
     }
 }

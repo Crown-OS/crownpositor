@@ -46,6 +46,7 @@ use crate::{
     shaders::{
         blur::BlurShaders, border::BorderShader, color::ColorWindowShader,
         rounded_corner::RoundedCornerShader, shadow::ShadowShader, title_bar::TitleBarShader,
+        warp::WarpShaders,
     },
 };
 
@@ -146,6 +147,7 @@ impl CrownRenderer for GlesRenderer {
         BlurShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BorderShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         ShadowShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        WarpShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         TitleBarShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 }
@@ -165,6 +167,7 @@ impl<'render> CrownRenderer for KmsRenderer<'render> {
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
         ShadowShader::init(self.as_mut())
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        WarpShaders::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         TitleBarShader::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 }

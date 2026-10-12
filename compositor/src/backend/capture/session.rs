@@ -11,7 +11,7 @@ use smithay::{
 
 use protocols::crownos_screencast::ScreencastSession;
 
-use crate::rendering::corners::CornerMemory;
+use crate::rendering::{corners::CornerMemory, warp::WarpCanvases};
 use crate::{
     backend::capture::{
         cursor::CursorReport, nv12::Nv12Target, pacing::SlotAges, sync::ExplicitSync,
@@ -40,6 +40,7 @@ pub struct RenderTargets {
     pub ages: SlotAges,
     pub blur: BlurCache,
     pub corners: CornerMemory,
+    pub canvases: WarpCanvases,
     pub nv12: Nv12Target,
 }
 
@@ -55,6 +56,7 @@ impl RenderTargets {
         self.nv12.forget();
         self.blur = BlurCache::default();
         self.corners = CornerMemory::default();
+        self.canvases = WarpCanvases::default();
     }
 }
 

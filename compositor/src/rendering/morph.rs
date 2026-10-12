@@ -35,7 +35,8 @@ use crate::{
 const MARKS_FADE_FROM: f64 = 0.7;
 
 /// What fills the window's content.
-pub(super) enum Content<'a> {
+#[derive(Clone, Copy)]
+pub enum Content<'a> {
     /// The client's own surfaces.
     Live,
     /// The last frame of a client that is gone.
@@ -108,7 +109,7 @@ impl Placement {
 /// Draws `tile` part-way through `morph`, front to back: titlebar marks,
 /// content, its glass, and the frame's backing.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn morph_elements<R, D>(
+pub(crate) fn morph_elements<R, D>(
     elements: &mut Elements<R, D>,
     shell: &Shell,
     tile: &Tile,

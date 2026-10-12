@@ -19,7 +19,7 @@ use smithay::{
 use config::{Appearance, GlassSettings};
 use protocols::crownos_screencast::{ClaimedSlot, CursorMode};
 
-use crate::rendering::corners::CornerMemory;
+use crate::rendering::{corners::CornerMemory, warp::WarpCanvases};
 use crate::{
     backend::{
         capture::{
@@ -54,6 +54,7 @@ where
     fn decorator<'a>(
         blur: Option<BlurSession<'a>>,
         corners: &'a mut CornerMemory,
+        canvases: &'a mut WarpCanvases,
     ) -> Self::Decorator<'a>;
 
     /// The GLES renderer underneath, for the conversion passes.
@@ -64,8 +65,9 @@ impl CaptureRenderer for GlesRenderer {
     fn decorator<'a>(
         blur: Option<BlurSession<'a>>,
         corners: &'a mut CornerMemory,
+        canvases: &'a mut WarpCanvases,
     ) -> GlesDecorator<'a> {
-        GlesDecorator::new(blur, corners)
+        GlesDecorator::new(blur, corners, canvases)
     }
 
     fn gles(&mut self) -> &mut GlesRenderer {
@@ -77,8 +79,9 @@ impl<'render> CaptureRenderer for KmsRenderer<'render> {
     fn decorator<'a>(
         blur: Option<BlurSession<'a>>,
         corners: &'a mut CornerMemory,
+        canvases: &'a mut WarpCanvases,
     ) -> MultiDecorator<'a> {
-        MultiDecorator::new(blur, corners)
+        MultiDecorator::new(blur, corners, canvases)
     }
 
     fn gles(&mut self) -> &mut GlesRenderer {
@@ -189,6 +192,7 @@ where
         ages,
         blur,
         corners,
+        canvases,
         nv12,
     } = targets;
     let Some(damage_tracker) = damage.as_mut() else {
@@ -197,6 +201,7 @@ where
 
     blur.begin_frame();
     corners.begin_frame();
+    canvases.begin_frame();
     let content = blur.content();
     let blur_config = BlurConfig::new(scene.appearance, scene.glass);
     let blur_session = blur_config.enabled.then_some(BlurSession {
@@ -205,7 +210,7 @@ where
         transform: Transform::Normal,
         output: Rectangle::from_size(size),
     });
-    let mut decorator = R::decorator(blur_session, corners);
+    let mut decorator = R::decorator(blur_session, corners, canvases);
     let elements = scene_elements(renderer, &mut decorator, cursor_mode, scene, scale);
     content.observe(
         || OutputDamageTracker::new(size, Scale::from(scale), Transform::Normal),
