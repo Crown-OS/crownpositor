@@ -8,7 +8,9 @@
 //! The heuristic is Mutter's, because it is the one every GNOME user's
 //! hardware has already been judged against: aim for a *logical* density
 //! rather than a fixed multiplier, with a lower target for large displays
-//! because they are viewed from further away.
+//! because they are viewed from further away. So is its rule for which scales
+//! to offer at all: only those that divide the panel into whole logical
+//! pixels.
 
 use smithay::utils::{Physical, Raw, Size};
 
@@ -19,7 +21,8 @@ const FRACTIONAL_DENOMINATOR: f64 = 120.0;
 const MIN_SCALE: f64 = 1.0;
 const MAX_SCALE: f64 = 4.0;
 /// Quarter steps: the granularity users actually recognise, and what every
-/// settings panel offers.
+/// settings panel offers. Each is nudged within half a step to a scale that
+/// divides the resolution evenly.
 const STEP: f64 = 0.25;
 
 /// Below this a scale is not offered, however dense the panel: it would leave
@@ -50,20 +53,43 @@ pub fn guess_monitor_scale(size_mm: Size<i32, Raw>, resolution: Size<i32, Physic
     let ideal = diagonal(resolution.w, resolution.h) / diagonal_inches / target_dpi;
 
     supported_scales(resolution)
-        .min_by(|left, right| {
-            (left - ideal)
-                .abs()
-                .total_cmp(&(right - ideal).abs())
-        })
+        .min_by(|left, right| (left - ideal).abs().total_cmp(&(right - ideal).abs()))
         .unwrap_or(1.0)
 }
 
 /// The scales worth offering for a resolution, coarsest usable first.
+///
+/// A scale that leaves the logical size fractional — 1.75 makes a 4K panel
+/// 2194.3 logical pixels wide — puts every window edge that touches the
+/// screen's right or bottom between two physical pixels; 5/3 makes it 2304.
 pub fn supported_scales(resolution: Size<i32, Physical>) -> impl Iterator<Item = f64> {
     let steps = ((MAX_SCALE - MIN_SCALE) / STEP) as i32;
-    (0..=steps)
-        .map(|step| MIN_SCALE + f64::from(step) * STEP)
-        .filter(move |scale| leaves_usable_area(resolution, *scale))
+    let mut scales: Vec<f64> = (0..=steps)
+        .filter_map(|step| nearest_even_scale(resolution, MIN_SCALE + f64::from(step) * STEP))
+        .filter(|scale| leaves_usable_area(resolution, *scale))
+        .collect();
+    scales.dedup();
+    scales.into_iter()
+}
+
+/// The scale within half a step of `target` that divides `resolution` into
+/// whole logical pixels and is nearest to it, if there is one.
+fn nearest_even_scale(resolution: Size<i32, Physical>, target: f64) -> Option<f64> {
+    let in_120ths = |scale: f64| (scale * FRACTIONAL_DENOMINATOR).round() as i64;
+    (in_120ths(target - STEP / 2.0)..=in_120ths(target + STEP / 2.0))
+        .filter(|numerator| divides_evenly(resolution, *numerator))
+        .map(|numerator| numerator as f64 / FRACTIONAL_DENOMINATOR)
+        .min_by(|left, right| (left - target).abs().total_cmp(&(right - target).abs()))
+}
+
+/// Whether `numerator`/120 divides `resolution` into whole logical pixels:
+/// `width / (numerator / 120)` is whole exactly when `numerator` divides
+/// `120 × width`.
+fn divides_evenly(resolution: Size<i32, Physical>, numerator: i64) -> bool {
+    let denominator = FRACTIONAL_DENOMINATOR as i64;
+    [resolution.w, resolution.h]
+        .into_iter()
+        .all(|length| (i64::from(length) * denominator) % numerator == 0)
 }
 
 fn leaves_usable_area(resolution: Size<i32, Physical>, scale: f64) -> bool {
@@ -106,8 +132,9 @@ mod tests {
 
     #[test]
     fn a_hidpi_laptop_panel_scales_up() {
-        // 13.3" 2560x1600, ~227 dpi, viewed close.
-        assert_eq!(guess((286, 179), (2560, 1600)), 1.75);
+        // 13.3" 2560x1600, ~227 dpi, viewed close: 1.68 ideally, and 5/3 is
+        // the nearest scale that leaves it 1536x960 logical pixels.
+        assert_eq!(guess((286, 179), (2560, 1600)), 200.0 / 120.0);
     }
 
     #[test]
@@ -128,6 +155,36 @@ mod tests {
         let offered: Vec<f64> = supported_scales((1920, 1080).into()).collect();
         assert!(offered.contains(&1.0));
         assert!(!offered.contains(&4.0));
+    }
+
+    #[test]
+    fn every_offered_scale_leaves_whole_logical_pixels() {
+        for resolution in [
+            (1920, 1080),
+            (1920, 1200),
+            (2560, 1440),
+            (2880, 1800),
+            (3840, 2160),
+        ] {
+            for scale in supported_scales(resolution.into()) {
+                let logical = (
+                    f64::from(resolution.0) / scale,
+                    f64::from(resolution.1) / scale,
+                );
+                assert_eq!(logical.0, logical.0.round(), "{resolution:?} at {scale}");
+                assert_eq!(logical.1, logical.1.round(), "{resolution:?} at {scale}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_step_that_would_split_pixels_moves_to_one_that_does_not() {
+        // 1.75 on 4K is 2194.3 logical pixels wide.
+        let offered: Vec<f64> = supported_scales((3840, 2160).into()).collect();
+        assert!(!offered.contains(&1.75));
+        assert!(offered.contains(&(200.0 / 120.0)));
+        assert!(offered.contains(&1.5));
+        assert!(offered.contains(&2.0));
     }
 
     #[test]
