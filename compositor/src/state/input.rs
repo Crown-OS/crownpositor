@@ -76,7 +76,7 @@ impl InputState {
             mod_chord_armed: None,
             mod_chord_polluted: false,
             pointer_location: (0.0, 0.0).into(),
-            cursor: Cursor::new(),
+            cursor: Cursor::new(&config.appearance.cursor_theme),
             pointer_lock: PointerLock::default(),
             hovered_control: None,
             frame_press: None,

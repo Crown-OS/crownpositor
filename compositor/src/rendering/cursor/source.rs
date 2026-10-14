@@ -10,6 +10,8 @@
 //!
 //! [`Cursor::sources`]: super::Cursor::sources
 
+use std::time::Duration;
+
 use smithay::{backend::allocator::Fourcc, input::pointer::CursorIcon};
 
 /// One rasterised cursor image, in its own pixel space.
@@ -40,6 +42,47 @@ impl RawImage {
     }
 }
 
+/// One frame of a shape, and how long it stays up before the next.
+pub struct RawFrame {
+    pub image: RawImage,
+    pub delay: Duration,
+}
+
+/// A cursor shape: a single still frame, or the frames of an animation.
+pub struct RawShape {
+    frames: Vec<RawFrame>,
+}
+
+impl RawShape {
+    /// `None` unless there is at least one frame and every frame is drawable.
+    /// An animation with a zero delay anywhere would spin the redraw clock, so
+    /// it is kept as its first frame alone.
+    pub fn new(mut frames: Vec<RawFrame>) -> Option<Self> {
+        if frames.is_empty() || !frames.iter().all(|frame| frame.image.is_valid()) {
+            return None;
+        }
+        if frames.iter().any(|frame| frame.delay.is_zero()) {
+            frames.truncate(1);
+        }
+        Some(Self { frames })
+    }
+
+    pub fn still(image: RawImage) -> Option<Self> {
+        Self::new(vec![RawFrame {
+            image,
+            delay: Duration::ZERO,
+        }])
+    }
+
+    pub fn frames(&self) -> &[RawFrame] {
+        &self.frames
+    }
+
+    pub fn into_first(mut self) -> RawImage {
+        self.frames.swap_remove(0).image
+    }
+}
+
 /// A place cursor shapes come from.
 ///
 /// Sources are consulted in order and the first hit wins, so a source is free
@@ -51,7 +94,7 @@ pub trait CursorSource {
 
     /// The shape for `icon`, rasterised as close to `size` pixels square as
     /// this source can manage.
-    fn shape(&self, icon: CursorIcon, size: u32) -> Option<RawImage>;
+    fn shape(&self, icon: CursorIcon, size: u32) -> Option<RawShape>;
 }
 
 /// The shape names to try for an icon, most standard first.

@@ -264,6 +264,9 @@ impl State {
         self.shell
             .set_workspace_animation(SpringProfile::from_config(new.appearance.animations));
 
+        if self.input.cursor.set_theme(&new.appearance.cursor_theme) {
+            self.queue_pointer_redraw();
+        }
         self.config.current = new;
         self.reapply_window_rules();
         self.shell.apply_output_settings(&self.config.current);
@@ -345,6 +348,7 @@ impl State {
                     .set_titlebar_height(appearance.titlebar_height.into());
                 self.shell
                     .set_workspace_animation(SpringProfile::from_config(appearance.animations));
+                self.input.cursor.set_theme(&appearance.cursor_theme);
                 config.appearance = appearance;
                 self.sync_background_effect_capabilities();
             }
