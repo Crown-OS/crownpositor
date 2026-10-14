@@ -14,15 +14,21 @@
 //! commit instead of recompositing the screen.
 //!
 //! The theme format is behind [`CursorSource`]: this module does the caching,
-//! the scale arithmetic and the render element, and knows nothing about file
-//! formats. Adding hyprcursor means adding one implementation of that trait and
-//! one line in [`Cursor::sources`].
+//! the scale arithmetic, animation and the render element, and knows nothing
+//! about file formats. Hyprcursor is tried first, XCursor after it, and the
+//! built-in arrow last.
 
 pub mod builtin;
+pub mod hyprcursor;
 pub mod source;
 pub mod xcursor;
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
+use calloop::ping::Ping;
 
 use smithay::{
     backend::renderer::{
@@ -42,7 +48,8 @@ use smithay::{
 use crate::rendering::{
     cursor::{
         builtin::BuiltinSource,
-        source::{CursorSource, RawImage},
+        hyprcursor::HyprcursorSource,
+        source::{CursorSource, RawFrame, RawImage, RawShape},
         xcursor::XCursorSource,
     },
     surface_tree::{SurfaceElement, surface_elements},
@@ -57,35 +64,59 @@ pub struct Cursor {
     /// Consulted in order, first hit wins. The last entry always answers, so
     /// there is no "no cursor" outcome.
     sources: Vec<Box<dyn CursorSource>>,
+    /// The theme `appearance.cursor_theme` names; empty defers to the
+    /// environment.
+    theme: String,
     /// Nominal *logical* size; an output's scale multiplies it into pixels.
     size: u32,
     /// Keyed on icon and pixel size. Rasterising is file I/O plus a parse, so
     /// it must not happen per frame — and a `None` records a shape no source
     /// could produce, which must not be retried per frame either.
-    cache: HashMap<(CursorIcon, u32), Option<Image>>,
+    cache: HashMap<(CursorIcon, u32), Option<Shape>>,
     /// What the focused client last asked for.
     pub status: CursorImageStatus,
     /// Nothing is drawn while set: a locked pointer points at nothing.
     pub suppressed: bool,
+    animation: Animation,
 }
 
-/// A rasterised cursor image, ready to draw one image pixel per output pixel.
-struct Image {
+/// A rasterised shape, ready to draw one image pixel per output pixel.
+struct Shape {
+    frames: Vec<Frame>,
+    /// One full cycle; zero for a still shape.
+    period: Duration,
+}
+
+struct Frame {
     buffer: MemoryRenderBuffer,
     /// Where the hot point sits inside the image, in its pixels from its
     /// top-left corner.
     hotspot: Point<f64, Physical>,
+    delay: Duration,
+}
+
+/// The clock of an animated shape, and the wake-up that redraws it.
+///
+/// Animations restart whenever the shape changes, so a spinner always begins
+/// on its first frame. The redraw is requested through `wake` once per frame
+/// change and only while an animated shape is actually drawn, so a still
+/// cursor costs no timers at all.
+struct Animation {
+    icon: Option<CursorIcon>,
+    since: Instant,
+    wake: Option<Ping>,
+    due: Option<Instant>,
 }
 
 impl Cursor {
-    pub fn new() -> Self {
-        let size = std::env::var("XCURSOR_SIZE")
-            .ok()
-            .and_then(|size| size.parse::<u32>().ok())
-            .filter(|size| *size > 0)
+    pub fn new(theme: &str) -> Self {
+        let size = ["XCURSOR_SIZE", "HYPRCURSOR_SIZE"]
+            .iter()
+            .filter_map(|name| std::env::var(name).ok()?.parse::<u32>().ok())
+            .find(|size| *size > 0)
             .unwrap_or(DEFAULT_SIZE);
 
-        let sources = Self::sources();
+        let sources = Self::sources(theme);
         tracing::info!(
             size,
             chain = ?sources.iter().map(|source| source.describe()).collect::<Vec<_>>(),
@@ -94,21 +125,66 @@ impl Cursor {
 
         Self {
             sources,
+            theme: theme.to_owned(),
             size,
             cache: HashMap::new(),
             status: CursorImageStatus::default_named(),
             suppressed: false,
+            animation: Animation::idle(),
         }
     }
 
     /// The theme chain, most preferred first.
     ///
-    /// The order is the whole configuration: a new format goes in ahead of the
-    /// ones it should win over, and shapes it does not carry fall through to
-    /// them. [`BuiltinSource`] must stay last — it answers everything, so
-    /// nothing after it would ever be reached.
-    fn sources() -> Vec<Box<dyn CursorSource>> {
-        vec![Box::new(XCursorSource::from_env()), Box::new(BuiltinSource)]
+    /// A hyprcursor theme by the configured name goes first, and XCursor
+    /// answers whatever it does not carry: from the same name when hyprcursor
+    /// had none, otherwise from the environment's theme. [`BuiltinSource`]
+    /// must stay last — it answers everything, so nothing after it would ever
+    /// be reached.
+    fn sources(theme: &str) -> Vec<Box<dyn CursorSource>> {
+        let configured = Some(theme).filter(|theme| !theme.is_empty());
+        let hyprcursor = HyprcursorSource::new(configured);
+        let xcursor_theme = configured.filter(|_| hyprcursor.is_none());
+
+        let mut sources: Vec<Box<dyn CursorSource>> = Vec::with_capacity(3);
+        if let Some(hyprcursor) = hyprcursor {
+            sources.push(Box::new(hyprcursor));
+        }
+        sources.push(Box::new(XCursorSource::new(xcursor_theme)));
+        sources.push(Box::new(BuiltinSource));
+        sources
+    }
+
+    /// Switches to the theme `appearance.cursor_theme` now names. Returns
+    /// whether anything changed, i.e. whether the cursor needs a redraw.
+    pub fn set_theme(&mut self, theme: &str) -> bool {
+        if self.theme == theme {
+            return false;
+        }
+        let mut fresh = Self::new(theme);
+        fresh.status = std::mem::replace(&mut self.status, CursorImageStatus::Hidden);
+        fresh.suppressed = self.suppressed;
+        fresh.animation.wake = self.animation.wake.take();
+        *self = fresh;
+        true
+    }
+
+    /// Lets animated shapes ask for redraws: `wake` is pinged whenever the
+    /// drawn frame is about to change, and the owner of the event loop then
+    /// waits until [`Cursor::animation_due`] and redraws the pointer.
+    pub fn set_animation_wake(&mut self, wake: Ping) {
+        self.animation.wake = Some(wake);
+    }
+
+    /// When the next frame of the drawn animation is due.
+    pub fn animation_due(&self) -> Option<Instant> {
+        self.animation.due
+    }
+
+    /// The due frame is being drawn, so the redraw that shows it may ask for
+    /// the one after.
+    pub fn animation_frame_reached(&mut self) {
+        self.animation.due = None;
     }
 
     /// Drops a surface cursor whose client is gone. Without this the pointer
@@ -150,9 +226,9 @@ impl Cursor {
             .max(1.0) as u32
     }
 
-    /// The image for `icon` at `pixels` across, walking the source chain on a
+    /// The shape for `icon` at `pixels` across, walking the source chain on a
     /// miss.
-    fn image(&mut self, icon: CursorIcon, pixels: u32) -> Option<&Image> {
+    fn shape(&mut self, icon: CursorIcon, pixels: u32) -> Option<&Shape> {
         // Split so the cache can be borrowed mutably while the chain is read.
         let Self { sources, cache, .. } = self;
 
@@ -174,20 +250,20 @@ impl Cursor {
                 if raw.is_none() {
                     tracing::warn!(cursor = icon.name(), "no source could draw this cursor");
                 }
-                raw.map(|raw| Image::new(&raw))
+                raw.map(|raw| Shape::new(&raw))
             })
             .as_ref()
     }
 
     /// The pixels of a named shape for an output of this scale, straight from
-    /// the theme chain. Uncached: only the capture path asks, and only when the
-    /// shape changes.
+    /// the theme chain, first frame only. Uncached: only the capture path
+    /// asks, and only when the shape changes.
     pub fn raw_image(&self, icon: CursorIcon, scale: Scale<f64>) -> Option<RawImage> {
         let pixels = self.pixel_size(scale);
         self.sources
             .iter()
             .find_map(|source| source.shape(icon, pixels))
-            .filter(RawImage::is_valid)
+            .map(RawShape::into_first)
     }
 
     /// Pushes the cursor's elements for one output, front of everything.
@@ -226,17 +302,20 @@ impl Cursor {
                 elements.extend(surfaces.into_iter().map(E::from));
             }
             CursorImageStatus::Named(icon) => {
+                let now = Instant::now();
+                let elapsed = self.animation.restart_on_change(icon, now);
                 let pixels = self.pixel_size(scale);
-                let Some(image) = self.image(icon, pixels) else {
+                let Some(shape) = self.shape(icon, pixels) else {
                     return;
                 };
+                let (frame, next) = shape.frame_at(elapsed);
                 // On a whole physical pixel, because it is drawn 1:1; rounding
                 // to a logical pixel instead would make it visibly stutter.
-                let location = (local.to_physical(scale) - image.hotspot).to_i32_round::<i32>();
+                let location = (local.to_physical(scale) - frame.hotspot).to_i32_round::<i32>();
                 match MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     location.to_f64(),
-                    &image.buffer,
+                    &frame.buffer,
                     None,
                     None,
                     None,
@@ -246,6 +325,9 @@ impl Cursor {
                     // An import failure is per-frame, not permanent, so the
                     // cache entry stays: the next frame tries again.
                     Err(_) => tracing::warn!(cursor = icon.name(), "failed to import the cursor"),
+                }
+                if let Some(next) = next {
+                    self.animation.request(now + next);
                 }
             }
         }
@@ -274,22 +356,86 @@ impl Cursor {
 
 impl Default for Cursor {
     fn default() -> Self {
-        Self::new()
+        Self::new("")
     }
 }
 
-impl Image {
-    fn new(raw: &RawImage) -> Self {
+impl Animation {
+    fn idle() -> Self {
+        Self {
+            icon: None,
+            since: Instant::now(),
+            wake: None,
+            due: None,
+        }
+    }
+
+    /// How far into its animation `icon` is, starting over when it differs
+    /// from the shape drawn last.
+    fn restart_on_change(&mut self, icon: CursorIcon, now: Instant) -> Duration {
+        if self.icon != Some(icon) {
+            self.icon = Some(icon);
+            self.since = now;
+        }
+        now - self.since
+    }
+
+    /// One wake-up per frame change, however many outputs draw the cursor.
+    fn request(&mut self, due: Instant) {
+        let Some(wake) = &self.wake else {
+            return;
+        };
+        if self.due.is_none() {
+            self.due = Some(due);
+            wake.ping();
+        }
+    }
+}
+
+impl Shape {
+    fn new(raw: &RawShape) -> Self {
+        let frames: Vec<Frame> = raw.frames().iter().map(Frame::new).collect();
+        let period = if frames.len() > 1 {
+            frames.iter().map(|frame| frame.delay).sum()
+        } else {
+            Duration::ZERO
+        };
+        Self { frames, period }
+    }
+
+    /// The frame showing `elapsed` into the animation, and how long until the
+    /// next one replaces it; `None` for a still shape.
+    fn frame_at(&self, elapsed: Duration) -> (&Frame, Option<Duration>) {
+        let first = &self.frames[0];
+        if self.period.is_zero() {
+            return (first, None);
+        }
+        let mut into_cycle =
+            Duration::from_nanos((elapsed.as_nanos() % self.period.as_nanos()) as u64);
+        for frame in &self.frames {
+            if into_cycle < frame.delay {
+                return (frame, Some(frame.delay - into_cycle));
+            }
+            into_cycle -= frame.delay;
+        }
+        (first, Some(first.delay))
+    }
+}
+
+impl Frame {
+    fn new(raw: &RawFrame) -> Self {
+        let image = &raw.image;
         Self {
             buffer: MemoryRenderBuffer::from_slice(
-                &raw.pixels,
-                raw.format,
-                (raw.width, raw.height),
+                &image.pixels,
+                image.format,
+                (image.width, image.height),
                 1,
                 Transform::Normal,
                 None,
             ),
-            hotspot: Point::from(raw.hotspot),
+            hotspot: Point::from(image.hotspot),
+            delay: raw.delay,
         }
     }
 }
@@ -313,7 +459,7 @@ mod tests {
 
     #[test]
     fn the_cursor_is_rasterised_for_the_exact_scale() {
-        let cursor = Cursor::new();
+        let cursor = Cursor::default();
         let nominal = f64::from(cursor.size);
         for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
             let pixels = cursor.pixel_size(Scale::from(scale));
@@ -326,7 +472,7 @@ mod tests {
     #[test]
     fn the_chain_ends_in_a_source_that_always_answers() {
         // The invariant the whole "cursor is never missing" guarantee rests on.
-        let sources = Cursor::sources();
+        let sources = Cursor::sources("");
         let last = sources.last().expect("the chain must not be empty");
         assert!(last.shape(CursorIcon::Default, DEFAULT_SIZE).is_some());
     }
@@ -335,18 +481,18 @@ mod tests {
     fn a_named_shape_always_resolves_to_an_image() {
         // Runs on machines with and without a cursor theme installed, which is
         // exactly the point: the fallback covers the difference.
-        let mut cursor = Cursor::new();
+        let mut cursor = Cursor::default();
         for pixels in [24, 30, 36, 48] {
-            assert!(cursor.image(CursorIcon::Default, pixels).is_some());
-            assert!(cursor.image(CursorIcon::Text, pixels).is_some());
+            assert!(cursor.shape(CursorIcon::Default, pixels).is_some());
+            assert!(cursor.shape(CursorIcon::Text, pixels).is_some());
         }
     }
 
     #[test]
     fn resolving_a_shape_twice_hits_the_cache() {
-        let mut cursor = Cursor::new();
-        cursor.image(CursorIcon::Default, 24);
-        cursor.image(CursorIcon::Default, 24);
+        let mut cursor = Cursor::default();
+        cursor.shape(CursorIcon::Default, 24);
+        cursor.shape(CursorIcon::Default, 24);
         assert_eq!(cursor.cache.len(), 1);
     }
 
@@ -361,6 +507,58 @@ mod tests {
             height: 30,
             hotspot: (5.0, 7.5),
         };
-        assert_eq!(Image::new(&raw).hotspot, Point::from((5.0, 7.5)));
+        let frame = RawFrame {
+            image: raw,
+            delay: Duration::ZERO,
+        };
+        assert_eq!(Frame::new(&frame).hotspot, Point::from((5.0, 7.5)));
+    }
+
+    fn animation(delays_ms: &[u64]) -> Shape {
+        let frames = delays_ms
+            .iter()
+            .map(|delay| RawFrame {
+                image: RawImage {
+                    pixels: vec![0; 4],
+                    format: smithay::backend::allocator::Fourcc::Argb8888,
+                    width: 1,
+                    height: 1,
+                    hotspot: (0.0, 0.0),
+                },
+                delay: Duration::from_millis(*delay),
+            })
+            .collect();
+        Shape::new(&RawShape::new(frames).expect("valid frames"))
+    }
+
+    #[test]
+    fn an_animation_cycles_through_its_frames() {
+        let shape = animation(&[20, 30]);
+        let at = |ms| {
+            let (frame, next) = shape.frame_at(Duration::from_millis(ms));
+            (frame.delay.as_millis(), next.map(|next| next.as_millis()))
+        };
+        assert_eq!(at(0), (20, Some(20)));
+        assert_eq!(at(25), (30, Some(25)));
+        assert_eq!(at(55), (20, Some(15)));
+    }
+
+    #[test]
+    fn a_still_shape_never_asks_for_a_redraw() {
+        let shape = animation(&[0]);
+        assert!(shape.frame_at(Duration::from_secs(5)).1.is_none());
+    }
+
+    #[test]
+    fn animation_wakes_once_per_frame_change() {
+        let (ping, _source) = calloop::ping::make_ping().expect("ping");
+        let mut cursor = Cursor::default();
+        cursor.set_animation_wake(ping);
+        let due = Instant::now();
+        cursor.animation.request(due);
+        cursor.animation.request(due + Duration::from_millis(5));
+        assert_eq!(cursor.animation_due(), Some(due));
+        cursor.animation_frame_reached();
+        assert_eq!(cursor.animation_due(), None);
     }
 }

@@ -8,7 +8,7 @@
 use smithay::{backend::allocator::Fourcc, input::pointer::CursorIcon};
 use tiny_skia::{FillRule, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
-use crate::rendering::cursor::source::{CursorSource, RawImage};
+use crate::rendering::cursor::source::{CursorSource, RawImage, RawShape};
 
 /// A left-pointing arrow in the unit square, so one path serves every size:
 /// the tip, down the vertical left edge, around the tail, and back up the
@@ -36,8 +36,8 @@ impl CursorSource for BuiltinSource {
     /// The same arrow for every icon. Drawing a distinct shape per icon would
     /// mean maintaining a font's worth of paths for a case that only comes up
     /// when the session has no theme at all.
-    fn shape(&self, _icon: CursorIcon, size: u32) -> Option<RawImage> {
-        draw_arrow(size.max(MIN_SIZE))
+    fn shape(&self, _icon: CursorIcon, size: u32) -> Option<RawShape> {
+        draw_arrow(size.max(MIN_SIZE)).and_then(RawShape::still)
     }
 }
 
@@ -119,7 +119,8 @@ mod tests {
         // inside tiny-skia or hand back a zero-sized buffer.
         let image = BuiltinSource
             .shape(CursorIcon::Default, 1)
-            .expect("the floor must keep the arrow drawable");
+            .expect("the floor must keep the arrow drawable")
+            .into_first();
         assert!(image.is_valid());
         assert_eq!(image.width, MIN_SIZE as i32);
     }

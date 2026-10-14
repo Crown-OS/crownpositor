@@ -5,6 +5,7 @@ mod backend;
 mod client;
 mod common;
 mod config;
+mod cursor;
 mod display;
 mod idle;
 mod input;
@@ -152,6 +153,7 @@ impl State {
         // The global was created advertising everything the renderer can do;
         // the config gets the first word on what it will actually do.
         state.sync_background_effect_capabilities();
+        state.animate_cursor()?;
 
         Ok(state)
     }
