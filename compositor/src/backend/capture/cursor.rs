@@ -25,7 +25,7 @@ impl CursorReport {
         &mut self,
         session: &ScreencastSession,
         cursor: &Cursor,
-        output: Rectangle<i32, Logical>,
+        area: Option<Rectangle<i32, Logical>>,
         scale: f64,
         pointer: Point<f64, Logical>,
     ) {
@@ -35,8 +35,8 @@ impl CursorReport {
             self.position = None;
         }
 
-        let position = on_output(output, pointer).then(|| {
-            let local = (pointer - output.loc.to_f64()).to_physical(scale);
+        let position = area.filter(|area| on_output(*area, pointer)).map(|area| {
+            let local = (pointer - area.loc.to_f64()).to_physical(scale);
             Point::<i32, BufferCoords>::from((local.x.round() as i32, local.y.round() as i32))
         });
         if position == self.position {

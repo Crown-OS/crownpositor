@@ -110,6 +110,26 @@ impl State {
         }
     }
 
+    /// A window or workspace capture has to notice a commit even when nothing
+    /// on screen shows the window, so commits reach it directly.
+    pub(crate) fn damage_window_captures(&mut self, surface: &WlSurface) {
+        if !self.capture.follows_windows() {
+            return;
+        }
+        let root = root_surface(surface);
+        let root = self
+            .shell
+            .popups
+            .find_popup(&root)
+            .and_then(|popup| find_popup_root_surface(&popup).ok())
+            .unwrap_or(root);
+        if let Some(window) = self.shell.window_id(&root)
+            && let Some(location) = self.shell.location(window)
+        {
+            self.capture.mark_window_damaged(window, location.workspace);
+        }
+    }
+
     /// Shows one of the compositor's own cursor shapes. Only for where no
     /// client is in charge of the image — a frame, or mid-grab.
     pub fn show_cursor(&mut self, icon: CursorIcon) {

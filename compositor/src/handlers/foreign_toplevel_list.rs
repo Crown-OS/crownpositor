@@ -37,8 +37,12 @@ impl ForeignToplevels {
             .map(|(id, _)| *id)
     }
 
-    pub fn handle(&self, window: WindowId) -> Option<&ForeignToplevelHandle> {
-        self.handles.get(&window).map(|announced| &announced.handle)
+    /// The window behind a handle, e.g. one an image capture source names.
+    pub fn window_of(&self, handle: &ForeignToplevelHandle) -> Option<WindowId> {
+        self.handles
+            .iter()
+            .find(|(_, announced)| announced.handle.matches(handle))
+            .map(|(id, _)| *id)
     }
 }
 

@@ -9,7 +9,7 @@ use protocols::ext_workspace::{
     WorkspaceGroup, WorkspaceInfo,
 };
 
-use crate::{state::State, utils::id::WorkspaceId};
+use crate::{shell::Shell, state::State, utils::id::WorkspaceId};
 
 impl ExtWorkspaceHandler for State {
     fn ext_workspace_state(&mut self) -> &mut ExtWorkspaceState {
@@ -75,8 +75,19 @@ pub fn workspace_identifier(id: WorkspaceId) -> String {
     format!("crownos-workspace-{}", id.raw())
 }
 
-pub fn parse_workspace_identifier(identifier: &str) -> Option<u64> {
+fn parse_workspace_identifier(identifier: &str) -> Option<u64> {
     identifier.strip_prefix("crownos-workspace-")?.parse().ok()
+}
+
+/// The workspace a client named by its `ext_workspace_handle_v1` id.
+pub fn workspace_by_identifier(shell: &Shell, identifier: &str) -> Option<WorkspaceId> {
+    let raw = parse_workspace_identifier(identifier)?;
+    shell
+        .monitors()
+        .iter()
+        .flat_map(|monitor| monitor.workspaces())
+        .map(|workspace| workspace.id())
+        .find(|id| id.raw() == raw)
 }
 
 delegate_global_dispatch!(State: [ExtWorkspaceManagerV1: ExtWorkspaceGlobalData] => ExtWorkspaceState);

@@ -16,6 +16,7 @@ mod nv12;
 mod pacing;
 mod render;
 mod session;
+pub mod source;
 pub mod sync;
 
 use std::time::Duration;
@@ -38,8 +39,10 @@ use crate::{
     backend::capture::{
         pacing::next_frame_at,
         render::{Outcome, Scene, capture_frame},
+        source::{CaptureSource, View},
     },
     state::{BackendState, State},
+    utils::id::{WindowId, WorkspaceId},
 };
 
 #[derive(Default)]
@@ -78,16 +81,39 @@ impl CaptureState {
         for session in self
             .sessions
             .iter_mut()
-            .filter(|session| session.output == *output)
+            .filter(|session| session.shown_on.as_ref() == Some(output))
         {
             session.dirty = true;
         }
     }
 
+    /// A window committed. Sessions capturing it, or the workspace it is on,
+    /// must look again even when nothing on screen shows it.
+    pub fn mark_window_damaged(&mut self, window: WindowId, workspace: WorkspaceId) {
+        for session in self
+            .sessions
+            .iter_mut()
+            .filter(|session| match session.source {
+                CaptureSource::Window(id) => id == window,
+                CaptureSource::Workspace(id) => id == workspace,
+                CaptureSource::Output(_) => false,
+            })
+        {
+            session.dirty = true;
+        }
+    }
+
+    /// Whether any session captures something other than a whole output.
+    pub fn follows_windows(&self) -> bool {
+        self.sessions
+            .iter()
+            .any(|session| !matches!(session.source, CaptureSource::Output(_)))
+    }
+
     /// Ends every session capturing `output`, which is going away.
     pub fn output_removed(&mut self, output: &Output) {
         self.sessions.retain(|session| {
-            let captures = session.output == *output;
+            let captures = session.source == CaptureSource::Output(output.clone());
             if captures {
                 session.protocol.stop(StopReason::SourceDestroyed);
             }
@@ -110,14 +136,12 @@ impl State {
             })
             .filter(supports_syncobj_eventfd);
 
-        let capabilities = if device.is_some() {
-            Capability::ExplicitSync
-        } else {
-            Capability::empty()
-        };
+        let mut capabilities = Capability::ToplevelSource | Capability::WorkspaceSource;
+        capabilities.set(Capability::ExplicitSync, device.is_some());
+        let device_supports_sync = device.is_some();
         self.wayland.screencast_state.set_capabilities(capabilities);
         self.capture.sync_device = device;
-        tracing::info!(explicit_sync = !capabilities.is_empty(), "screencast ready");
+        tracing::info!(explicit_sync = device_supports_sync, "screencast ready");
     }
 }
 
@@ -126,6 +150,7 @@ pub fn render_pending(state: &mut State) {
     if state.capture.sessions.is_empty() {
         return;
     }
+    stop_lost_sources(state);
     report_cursors(state);
 
     let now: Duration = state.wayland.clock.now().into();
@@ -176,12 +201,30 @@ fn pace(state: &mut State, id: &ObjectId, now: Duration) -> bool {
     true
 }
 
+/// Ends sessions whose window or workspace went away, and notes where the
+/// others are now.
+fn stop_lost_sources(state: &mut State) {
+    let State { capture, shell, .. } = state;
+    capture.sessions.retain_mut(|session| {
+        let Some(placement) = session.source.place(shell) else {
+            session.protocol.stop(StopReason::SourceDestroyed);
+            return false;
+        };
+        if session.shown_on.as_ref() != Some(placement.output()) {
+            session.shown_on = Some(placement.output().clone());
+            session.dirty = true;
+        }
+        true
+    });
+}
+
 fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
-    let Some(scale) = state
-        .capture
-        .session_mut(id)
-        .map(|session| session.output.current_scale().fractional_scale())
-    else {
+    let Some(scale) = state.capture.session_mut(id).and_then(|session| {
+        session
+            .shown_on
+            .as_ref()
+            .map(|output| output.current_scale().fractional_scale())
+    }) else {
         return;
     };
     state.layout_menus(scale);
@@ -199,16 +242,17 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
         let Some(session) = capture.session_mut(id) else {
             return;
         };
-        let Some(monitor) = shell.monitor(&session.output) else {
+        let Some(placement) = session.source.place(shell) else {
             if let Some(session) = capture.remove(id) {
                 session.protocol.stop(StopReason::SourceDestroyed);
             }
             return;
         };
+        let callbacks = frame_callback_target(&placement);
 
         let scene = Scene {
             shell,
-            monitor,
+            placement,
             cursor: &mut input.cursor,
             pointer: input.pointer_location,
             appearance: &config.current.appearance,
@@ -232,6 +276,11 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
         if matches!(outcome, Ok(Outcome::Rendered(_))) {
             session.last_frame_at = Some(now);
         }
+        if let Some((output, windows)) = callbacks {
+            for window in &windows {
+                window.send_frame(&output, now, None, |_, _| Some(output.clone()));
+            }
+        }
         outcome
     };
 
@@ -247,6 +296,23 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
     }
 }
 
+/// The windows a window or workspace capture draws, which need frame
+/// callbacks from the capture itself: off screen, nothing else paces them.
+fn frame_callback_target(
+    placement: &source::Placement<'_>,
+) -> Option<(smithay::output::Output, Vec<smithay::desktop::Window>)> {
+    let windows = match placement.view {
+        View::Output => return None,
+        View::Window(tile) => vec![tile.window().clone()],
+        View::Workspace(workspace) => workspace
+            .tiles()
+            .iter()
+            .map(|tile| tile.window().clone())
+            .collect(),
+    };
+    Some((placement.output().clone(), windows))
+}
+
 fn report_cursors(state: &mut State) {
     let State {
         capture,
@@ -257,14 +323,14 @@ fn report_cursors(state: &mut State) {
     for session in capture.sessions.iter_mut().filter(|session| {
         session.protocol.cursor_mode() == CursorMode::Metadata && session.protocol.is_running()
     }) {
-        let Some(monitor) = shell.monitor(&session.output) else {
+        let Some(placement) = session.source.place(shell) else {
             continue;
         };
         session.cursor.update(
             &session.protocol,
             &input.cursor,
-            monitor.geometry(),
-            session.output.current_scale().fractional_scale(),
+            placement.on_screen.then_some(placement.area),
+            placement.scale(),
             input.pointer_location,
         );
     }

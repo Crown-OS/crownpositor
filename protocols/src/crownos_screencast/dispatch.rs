@@ -11,7 +11,7 @@ use wayland_server::{
 };
 
 use super::{
-    ScreencastGlobalData, ScreencastHandler, ScreencastState,
+    ScreencastGlobalData, ScreencastHandler, ScreencastSource, ScreencastState,
     constraints::join_halves,
     ring::{Released, Ring},
     session::{AttachedBuffer, Phase, ScreencastSession, SessionData},
@@ -48,7 +48,11 @@ impl<D: ScreencastDispatch> GlobalDispatch<CrownosScreencastManagerV1, Screencas
         data_init: &mut DataInit<'_, D>,
     ) {
         let manager = data_init.init(resource, ());
-        manager.capabilities(state.screencast_state().capabilities);
+        let mut capabilities = state.screencast_state().capabilities;
+        if manager.version() < 2 {
+            capabilities -= super::Capability::ToplevelSource | super::Capability::WorkspaceSource;
+        }
+        manager.capabilities(capabilities);
     }
 
     fn can_view(client: Client, global_data: &ScreencastGlobalData) -> bool {
@@ -66,29 +70,59 @@ impl<D: ScreencastDispatch> Dispatch<CrownosScreencastManagerV1, (), D> for Scre
         _dhandle: &DisplayHandle,
         data_init: &mut DataInit<'_, D>,
     ) {
-        match request {
-            crownos_screencast_manager_v1::Request::CreateOutputSession {
+        use crownos_screencast_manager_v1::{Capability, Error, Request};
+
+        let (session, source, cursor_mode, needs) = match request {
+            Request::CreateOutputSession {
                 session,
                 output,
                 cursor_mode,
-            } => {
-                let WEnum::Value(cursor_mode) = cursor_mode else {
-                    // Initialised first: a `new_id` left uninitialised takes
-                    // the compositor down instead of the client.
-                    data_init.init(session, SessionData::new(CursorMode::Hidden));
-                    manager.post_error(
-                        crownos_screencast_manager_v1::Error::InvalidCursorMode,
-                        "cursor_mode is not a value of the cursor_mode enum",
-                    );
-                    return;
-                };
-                let session =
-                    ScreencastSession(data_init.init(session, SessionData::new(cursor_mode)));
-                state.new_screencast_session(session, &output);
-            }
-            crownos_screencast_manager_v1::Request::Destroy => {}
-            _ => {}
+            } => (session, ScreencastSource::Output(output), cursor_mode, None),
+            Request::CreateToplevelSession {
+                session,
+                toplevel_identifier,
+                cursor_mode,
+            } => (
+                session,
+                ScreencastSource::Toplevel(toplevel_identifier),
+                cursor_mode,
+                Some(Capability::ToplevelSource),
+            ),
+            Request::CreateWorkspaceSession {
+                session,
+                workspace_id,
+                cursor_mode,
+            } => (
+                session,
+                ScreencastSource::Workspace(workspace_id),
+                cursor_mode,
+                Some(Capability::WorkspaceSource),
+            ),
+            _ => return,
+        };
+
+        // Initialised before any error: a `new_id` left uninitialised takes
+        // the compositor down instead of the client.
+        let WEnum::Value(cursor_mode) = cursor_mode else {
+            data_init.init(session, SessionData::new(CursorMode::Hidden));
+            manager.post_error(
+                Error::InvalidCursorMode,
+                "cursor_mode is not a value of the cursor_mode enum",
+            );
+            return;
+        };
+        if let Some(needs) = needs
+            && !state.screencast_state().capabilities.contains(needs)
+        {
+            data_init.init(session, SessionData::new(cursor_mode));
+            manager.post_error(
+                Error::UnsupportedSource,
+                "the compositor did not advertise this source kind",
+            );
+            return;
         }
+        let session = ScreencastSession(data_init.init(session, SessionData::new(cursor_mode)));
+        state.new_screencast_session(session, source);
     }
 }
 
