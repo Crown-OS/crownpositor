@@ -26,6 +26,7 @@ use crate::{
             formats::buffer_constraints,
             nv12::Nv12Error,
             session::{CaptureSession, RenderTargets},
+            source::{Placement, View},
         },
         render::{CrownRenderer, KmsRenderer},
     },
@@ -35,9 +36,10 @@ use crate::{
         cursor::Cursor,
         decoration::TextRenderer,
         rounded::{GlesDecorator, MultiDecorator},
+        sources::{CursorOverlay, window_elements, workspace_elements},
     },
     shaders::nv12::Nv12Shader,
-    shell::{Shell, decoration::Control, monitor::Monitor},
+    shell::{Shell, decoration::Control},
     utils::id::WindowId,
 };
 
@@ -92,7 +94,7 @@ impl<'render> CaptureRenderer for KmsRenderer<'render> {
 /// What the frame is drawn from.
 pub struct Scene<'a> {
     pub shell: &'a Shell,
-    pub monitor: &'a Monitor,
+    pub placement: Placement<'a>,
     pub cursor: &'a mut Cursor,
     pub pointer: Point<f64, Logical>,
     pub appearance: &'a Appearance,
@@ -135,12 +137,8 @@ where
     R: CaptureRenderer,
     R::TextureId: Send + Clone + 'static,
 {
-    let scale = scene.monitor.output().current_scale().fractional_scale();
-    let size: Size<i32, Physical> = scene
-        .monitor
-        .geometry()
-        .size
-        .to_physical_precise_round(scale);
+    let scale = scene.placement.scale();
+    let size: Size<i32, Physical> = scene.placement.area.size.to_physical_precise_round(scale);
     let buffer_size = Size::<i32, BufferCoords>::from((size.w, size.h));
 
     if session.protocol.constraint_size() != Some(buffer_size) || session.targets.damage.is_none() {
@@ -263,7 +261,7 @@ where
 {
     let Scene {
         shell,
-        monitor,
+        placement,
         cursor,
         pointer,
         appearance,
@@ -272,29 +270,57 @@ where
         hovered,
     } = scene;
 
-    let hidden = cursor_mode != CursorMode::Embedded;
-    let status = hidden.then(|| std::mem::replace(&mut cursor.status, CursorImageStatus::Hidden));
-    let elements = rendering::output_elements(
-        shell,
-        monitor,
-        renderer,
-        decorator,
-        cursor,
-        pointer,
-        Scale::from(scale),
-        &mut FrameStyle::new(
-            appearance,
-            scale,
-            monitor.geometry().loc,
-            text,
-            shell.focused_window_id(),
-            hovered,
-        ),
+    let monitor = placement.monitor;
+    let mut style = FrameStyle::new(
+        appearance,
+        scale,
+        monitor.geometry().loc,
+        text,
+        shell.focused_window_id(),
+        hovered,
     );
-    if let Some(status) = status {
-        cursor.status = status;
+    let scale = Scale::from(scale);
+
+    let embedded = cursor_mode == CursorMode::Embedded;
+    let overlay = |cursor| {
+        (embedded && placement.on_screen).then_some(CursorOverlay {
+            cursor,
+            pointer,
+            origin: placement.area.loc,
+        })
+    };
+    match placement.view {
+        View::Window(tile) => window_elements(
+            shell,
+            tile,
+            renderer,
+            decorator,
+            overlay(cursor),
+            scale,
+            &mut style,
+        ),
+        View::Workspace(workspace) => workspace_elements(
+            shell,
+            monitor,
+            workspace,
+            renderer,
+            decorator,
+            overlay(cursor),
+            scale,
+            &mut style,
+        ),
+        View::Output => {
+            let status = (!embedded)
+                .then(|| std::mem::replace(&mut cursor.status, CursorImageStatus::Hidden));
+            let elements = rendering::output_elements(
+                shell, monitor, renderer, decorator, cursor, pointer, scale, &mut style,
+            );
+            if let Some(status) = status {
+                cursor.status = status;
+            }
+            elements
+        }
     }
-    elements
 }
 
 /// Renders into `target`, returning the damage in buffer coordinates, or

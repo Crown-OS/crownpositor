@@ -4,19 +4,20 @@
 
 use std::os::fd::{AsFd, OwnedFd};
 
-use wayland_server::{delegate_dispatch, delegate_global_dispatch, protocol::wl_output::WlOutput};
+use wayland_server::{delegate_dispatch, delegate_global_dispatch};
 
 use crownos_protocols::screencast::v1::server::{
     crownos_screencast_manager_v1::CrownosScreencastManagerV1,
     crownos_screencast_session_v1::CrownosScreencastSessionV1,
 };
 use protocols::crownos_screencast::{
-    ScreencastGlobalData, ScreencastHandler, ScreencastSession, ScreencastState, SessionData,
-    StopReason,
+    ScreencastGlobalData, ScreencastHandler, ScreencastSession, ScreencastSource, ScreencastState,
+    SessionData, StopReason,
 };
 
 use crate::{
-    backend::capture::{CaptureSession, delivery, sync::ExplicitSync},
+    backend::capture::{CaptureSession, delivery, source::CaptureSource, sync::ExplicitSync},
+    handlers::ext_workspace::workspace_by_identifier,
     state::State,
 };
 
@@ -25,9 +26,20 @@ impl ScreencastHandler for State {
         &mut self.wayland.screencast_state
     }
 
-    fn new_screencast_session(&mut self, session: ScreencastSession, output: &WlOutput) {
-        match self.output_for(output) {
-            Some(output) => self.capture.insert(CaptureSession::new(session, output)),
+    fn new_screencast_session(&mut self, session: ScreencastSession, source: ScreencastSource) {
+        let source = match source {
+            ScreencastSource::Output(output) => self.output_for(&output).map(CaptureSource::Output),
+            ScreencastSource::Toplevel(identifier) => self
+                .wayland
+                .foreign_toplevels
+                .window(&identifier)
+                .map(CaptureSource::Window),
+            ScreencastSource::Workspace(identifier) => {
+                workspace_by_identifier(&self.shell, &identifier).map(CaptureSource::Workspace)
+            }
+        };
+        match source.filter(|source| source.place(&self.shell).is_some()) {
+            Some(source) => self.capture.insert(CaptureSession::new(session, source)),
             None => session.stop(StopReason::SourceDestroyed),
         }
     }

@@ -28,16 +28,26 @@ pub use ring::{MAX_SLOTS, Released, RingError, SlotOwner};
 pub use session::{ClaimedSlot, CursorImage, ScreencastSession, SessionData, frame_interval};
 
 /// The protocol version this module speaks.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+
+/// What a session captures, as the client named it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreencastSource {
+    Output(WlOutput),
+    /// The identifier of an `ext_foreign_toplevel_handle_v1`.
+    Toplevel(String),
+    /// The id of an `ext_workspace_handle_v1`.
+    Workspace(String),
+}
 
 /// What the compositor provides for this protocol to be delegated to
 /// [`ScreencastState`].
 pub trait ScreencastHandler {
     fn screencast_state(&mut self) -> &mut ScreencastState;
 
-    /// A client asked to capture `output`. The compositor sends the first
-    /// constraints, or stops the session if the output is unusable.
-    fn new_screencast_session(&mut self, session: ScreencastSession, output: &WlOutput);
+    /// A client asked to capture `source`. The compositor sends the first
+    /// constraints, or stops the session if the source is unusable.
+    fn new_screencast_session(&mut self, session: ScreencastSession, source: ScreencastSource);
 
     /// Something happened that may let a frame be rendered: `start`, a buffer
     /// attached or released, `force_frame`.

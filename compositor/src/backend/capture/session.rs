@@ -14,14 +14,18 @@ use protocols::crownos_screencast::ScreencastSession;
 use crate::rendering::{corners::CornerMemory, warp::WarpCanvases};
 use crate::{
     backend::capture::{
-        cursor::CursorReport, nv12::Nv12Target, pacing::SlotAges, sync::ExplicitSync,
+        cursor::CursorReport, nv12::Nv12Target, pacing::SlotAges, source::CaptureSource,
+        sync::ExplicitSync,
     },
     rendering::blur::BlurCache,
 };
 
 pub struct CaptureSession {
     pub protocol: ScreencastSession,
-    pub output: Output,
+    pub source: CaptureSource,
+    /// The output the source was last seen on, whose frames may have changed
+    /// it.
+    pub shown_on: Option<Output>,
     /// Something on the source may have changed since the last frame.
     pub dirty: bool,
     pub last_frame_at: Option<Duration>,
@@ -61,10 +65,14 @@ impl RenderTargets {
 }
 
 impl CaptureSession {
-    pub fn new(protocol: ScreencastSession, output: Output) -> Self {
+    pub fn new(protocol: ScreencastSession, source: CaptureSource) -> Self {
         Self {
             protocol,
-            output,
+            shown_on: match &source {
+                CaptureSource::Output(output) => Some(output.clone()),
+                CaptureSource::Window(_) | CaptureSource::Workspace(_) => None,
+            },
+            source,
             dirty: true,
             last_frame_at: None,
             pacing_timer: None,

@@ -49,6 +49,7 @@ impl CompositorHandler for State {
         self.handle_layer_commit(surface);
         self.shell.advertise_output(surface);
         self.queue_redraw_for_surface(surface);
+        self.damage_window_captures(surface);
     }
 
     fn destroyed(&mut self, _surface: &WlSurface) {}

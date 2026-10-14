@@ -25,6 +25,7 @@ mod painter;
 pub mod popup;
 pub mod rounded;
 pub mod snapshot;
+pub mod sources;
 pub mod surface_tree;
 pub mod unstretched;
 pub mod warp;
@@ -60,6 +61,7 @@ use crate::{
         gaming,
         monitor::Monitor,
         tile::{Tile, WindowState},
+        workspace::Workspace,
     },
     utils::id::WindowId,
 };
@@ -251,89 +253,17 @@ where
         false => Some(monitor.visible_workspaces()),
     };
     for (workspace, offset) in workspaces.into_iter().flatten() {
-        // Frontmost: a window that just closed shrinks away over everything
-        // that was behind it.
-        for closing in workspace.closing() {
-            let tile = closing.tile();
-            let radius = match tile.state() {
-                WindowState::Fullscreen => 0.0,
-                _ => style.radius,
-            };
-            if let Some(dust) = closing.dust() {
-                let request = WarpRequest {
-                    shell,
-                    tile,
-                    content: morph::Content::Snapshot(closing.snapshot()),
-                    motion: Motion::Dust(dust),
-                    scale,
-                    offset,
-                    radius,
-                    style,
-                };
-                if let Some(element) = decorator.warp(renderer, request) {
-                    elements.push(CrownElement::Tile(Wrap::from(element)));
-                }
-            } else if let Some(morph) = tile.morph() {
-                morph::morph_elements(
-                    &mut elements,
-                    shell,
-                    tile,
-                    morph,
-                    morph::Content::Snapshot(closing.snapshot()),
-                    renderer,
-                    decorator,
-                    scale,
-                    offset,
-                    radius,
-                    style,
-                );
-            }
-        }
-        // A fullscreen window on its way out of or into its icon has the
-        // desktop showing round it, so it is drawn like any other.
-        let fullscreen = workspace.fullscreen().and_then(|id| workspace.tile(id));
-        match fullscreen.filter(|tile| tile.morph().is_none()) {
-            // A fullscreen window covers its page edge to edge, so rounding it
-            // would just cut four notches out of the display — and while it is
-            // the only page on screen there is nothing behind it to draw.
-            Some(tile) => {
-                covered |= offset.x == 0.0;
-                // Square corners and no frame: a fullscreen window covers its
-                // page edge to edge, so rounding it would cut four notches out
-                // of the display.
-
-                tile_elements(
-                    &mut elements,
-                    shell,
-                    tile,
-                    renderer,
-                    decorator,
-                    scale,
-                    offset,
-                    0.0,
-                    style,
-                );
-            }
-            None => {
-                for tile in workspace.stacking_order() {
-                    let radius = match tile.state() {
-                        WindowState::Fullscreen => 0.0,
-                        _ => style.radius,
-                    };
-                    tile_elements(
-                        &mut elements,
-                        shell,
-                        tile,
-                        renderer,
-                        decorator,
-                        scale,
-                        offset,
-                        radius,
-                        style,
-                    );
-                }
-            }
-        }
+        let fullscreen = workspace_window_elements(
+            &mut elements,
+            shell,
+            workspace,
+            renderer,
+            decorator,
+            scale,
+            offset,
+            style,
+        );
+        covered |= fullscreen && offset.x == 0.0;
     }
 
     if !covered {
@@ -349,6 +279,95 @@ where
 
     let _ = shell;
     elements
+}
+
+/// One workspace's windows, closing ones included, at `offset` from where
+/// the workspace normally sits. Returns whether a settled fullscreen window
+/// covered the whole page, so nothing below it needs drawing.
+#[allow(clippy::too_many_arguments)]
+fn workspace_window_elements<R, D>(
+    elements: &mut Elements<R, D>,
+    shell: &Shell,
+    workspace: &Workspace,
+    renderer: &mut R,
+    decorator: &mut D,
+    scale: Scale<f64>,
+    offset: Point<f64, Logical>,
+    style: &mut FrameStyle<'_>,
+) -> bool
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+    D: TileDecorator<R>,
+{
+    // Frontmost: a window that just closed shrinks away over everything
+    // that was behind it.
+    for closing in workspace.closing() {
+        let tile = closing.tile();
+        let radius = match tile.state() {
+            WindowState::Fullscreen => 0.0,
+            _ => style.radius,
+        };
+        if let Some(dust) = closing.dust() {
+            let request = WarpRequest {
+                shell,
+                tile,
+                content: morph::Content::Snapshot(closing.snapshot()),
+                motion: Motion::Dust(dust),
+                scale,
+                offset,
+                radius,
+                style,
+            };
+            if let Some(element) = decorator.warp(renderer, request) {
+                elements.push(CrownElement::Tile(Wrap::from(element)));
+            }
+        } else if let Some(morph) = tile.morph() {
+            morph::morph_elements(
+                elements,
+                shell,
+                tile,
+                morph,
+                morph::Content::Snapshot(closing.snapshot()),
+                renderer,
+                decorator,
+                scale,
+                offset,
+                radius,
+                style,
+            );
+        }
+    }
+    // A fullscreen window on its way out of or into its icon has the
+    // desktop showing round it, so it is drawn like any other.
+    let fullscreen = workspace.fullscreen().and_then(|id| workspace.tile(id));
+    match fullscreen.filter(|tile| tile.morph().is_none()) {
+        // A fullscreen window covers its page edge to edge, so rounding it
+        // would just cut four notches out of the display — and while it is
+        // the only page on screen there is nothing behind it to draw.
+        Some(tile) => {
+            // Square corners and no frame: a fullscreen window covers its
+            // page edge to edge, so rounding it would cut four notches out
+            // of the display.
+
+            tile_elements(
+                elements, shell, tile, renderer, decorator, scale, offset, 0.0, style,
+            );
+            true
+        }
+        None => {
+            for tile in workspace.stacking_order() {
+                let radius = match tile.state() {
+                    WindowState::Fullscreen => 0.0,
+                    _ => style.radius,
+                };
+                tile_elements(
+                    elements, shell, tile, renderer, decorator, scale, offset, radius, style,
+                );
+            }
+            false
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
