@@ -49,12 +49,13 @@ pub struct RenderTargets {
 }
 
 impl RenderTargets {
-    /// Starts over for a new buffer size: nothing rendered so far is valid.
-    pub fn reset(&mut self, size: Size<i32, Physical>, scale: f64) {
+    /// Starts over for a new image: nothing rendered so far is valid.
+    /// `size` is the image upright; `transform` turns it into the buffer.
+    pub fn reset(&mut self, size: Size<i32, Physical>, scale: f64, transform: Transform) {
         self.damage = Some(OutputDamageTracker::new(
-            size,
+            transform.invert().transform_size(size),
             Scale::from(scale),
-            Transform::Normal,
+            transform,
         ));
         self.ages.forget();
         self.nv12.forget();

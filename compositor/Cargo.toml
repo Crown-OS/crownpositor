@@ -73,3 +73,6 @@ name = "liquid_glass"
 
 [[example]]
 name = "data_control_probe"
+
+[[example]]
+name = "capture_sources"

@@ -9,12 +9,15 @@
 //! nothing, and an encoder that holds every slot stops the compositor from
 //! rendering for it at all.
 
+pub mod copy;
+pub mod copy_cursor;
 mod cursor;
 pub mod delivery;
 pub mod formats;
 mod nv12;
 mod pacing;
 mod render;
+pub mod screencopy;
 mod session;
 pub mod source;
 pub mod sync;
@@ -35,6 +38,17 @@ use protocols::crownos_screencast::{Capability, CursorMode, StopReason};
 
 pub use session::CaptureSession;
 
+use smithay::{
+    backend::{allocator::dmabuf::Dmabuf, renderer::Bind},
+    wayland::image_copy_capture::{CaptureFailureReason, DmabufConstraints},
+};
+
+use crate::backend::capture::{
+    copy::{CopyOutcome, CopySession},
+    copy_cursor::CopyCursor,
+    screencopy::Screencopies,
+};
+
 use crate::{
     backend::capture::{
         pacing::next_frame_at,
@@ -48,6 +62,13 @@ use crate::{
 #[derive(Default)]
 pub struct CaptureState {
     sessions: Vec<CaptureSession>,
+    /// `ext-image-copy-capture-v1` sessions, and their cursor sessions.
+    pub copies: Vec<CopySession>,
+    pub copy_cursors: Vec<CopyCursor>,
+    /// `wlr-screencopy` frames waiting to be filled.
+    pub screencopies: Screencopies,
+    /// What copy-capture clients may hand over as dmabufs, worked out once.
+    dmabuf: Option<Option<DmabufConstraints>>,
     /// The primary GPU, when it can import syncobj timelines and wait on
     /// them with an eventfd. `None` means explicit sync is not advertised.
     sync_device: Option<DrmDeviceFd>,
@@ -85,40 +106,81 @@ impl CaptureState {
         {
             session.dirty = true;
         }
+        for copy in self
+            .copies
+            .iter_mut()
+            .filter(|copy| copy.shown_on.as_ref() == Some(output))
+        {
+            copy.dirty = true;
+        }
+        self.screencopies.mark_output_damaged(output);
     }
 
     /// A window committed. Sessions capturing it, or the workspace it is on,
     /// must look again even when nothing on screen shows it.
     pub fn mark_window_damaged(&mut self, window: WindowId, workspace: WorkspaceId) {
+        let shows = |source: &CaptureSource| match source {
+            CaptureSource::Window(id) => *id == window,
+            CaptureSource::Workspace(id) => *id == workspace,
+            CaptureSource::Output(_) => false,
+        };
         for session in self
             .sessions
             .iter_mut()
-            .filter(|session| match session.source {
-                CaptureSource::Window(id) => id == window,
-                CaptureSource::Workspace(id) => id == workspace,
-                CaptureSource::Output(_) => false,
-            })
+            .filter(|session| shows(&session.source))
         {
             session.dirty = true;
+        }
+        for copy in self.copies.iter_mut().filter(|copy| shows(&copy.source)) {
+            copy.dirty = true;
         }
     }
 
     /// Whether any session captures something other than a whole output.
     pub fn follows_windows(&self) -> bool {
-        self.sessions
-            .iter()
-            .any(|session| !matches!(session.source, CaptureSource::Output(_)))
+        let follows = |source: &CaptureSource| !matches!(source, CaptureSource::Output(_));
+        self.sessions.iter().any(|session| follows(&session.source))
+            || self.copies.iter().any(|copy| follows(&copy.source))
+    }
+
+    /// The dmabuf constraints of copy-capture sessions: the primary GPU's
+    /// render node and the 8-bit RGB formats it draws into. `None` where
+    /// clients cannot share buffers with it, as nested.
+    pub fn dmabuf_constraints(&mut self, backend: &mut BackendState) -> Option<DmabufConstraints> {
+        self.dmabuf
+            .get_or_insert_with(|| {
+                let BackendState::Kms(kms) = backend else {
+                    return None;
+                };
+                let node = kms.primary_render_node;
+                let renderer = kms.primary_renderer().ok()?;
+                let formats = formats::rgb_formats(
+                    &Bind::<Dmabuf>::supported_formats(&renderer).unwrap_or_default(),
+                );
+                Some(DmabufConstraints {
+                    node,
+                    formats: formats
+                        .into_iter()
+                        .map(|format| (format.format, format.modifiers))
+                        .collect(),
+                })
+            })
+            .clone()
     }
 
     /// Ends every session capturing `output`, which is going away.
     pub fn output_removed(&mut self, output: &Output) {
+        let gone = CaptureSource::Output(output.clone());
         self.sessions.retain(|session| {
-            let captures = session.source == CaptureSource::Output(output.clone());
+            let captures = session.source == gone;
             if captures {
                 session.protocol.stop(StopReason::SourceDestroyed);
             }
             !captures
         });
+        self.copies.retain(|copy| copy.source != gone);
+        self.copy_cursors.retain(|cursor| cursor.source != gone);
+        self.screencopies.output_removed(output);
     }
 }
 
@@ -145,8 +207,34 @@ impl State {
     }
 }
 
+/// Evaluates `$body` with `$renderer` bound to the renderer captures draw
+/// with: the primary GPU's, or the nested window's.
+macro_rules! with_capture_renderer {
+    ($backend:expr, |$renderer:ident| $body:expr) => {
+        match $backend {
+            BackendState::Kms(kms) => match kms.primary_renderer() {
+                Ok(mut renderer) => {
+                    let $renderer = &mut renderer;
+                    Some($body)
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "no renderer for a capture frame");
+                    None
+                }
+            },
+            BackendState::Winit(winit) => {
+                let $renderer = winit.backend.renderer();
+                Some($body)
+            }
+            BackendState::Unset => None,
+        }
+    };
+}
+
 /// Renders every session that is due. Called once per loop iteration.
 pub fn render_pending(state: &mut State) {
+    render_copies(state);
+    render_screencopies(state);
     if state.capture.sessions.is_empty() {
         return;
     }
@@ -260,16 +348,10 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
             text,
             hovered: input.hovered_control,
         };
-        let outcome = match backend {
-            BackendState::Kms(kms) => match kms.primary_renderer() {
-                Ok(mut renderer) => capture_frame(&mut renderer, session, scene),
-                Err(err) => {
-                    tracing::warn!(%err, "no renderer for a capture frame");
-                    return;
-                }
-            },
-            BackendState::Winit(winit) => capture_frame(winit.backend.renderer(), session, scene),
-            BackendState::Unset => return,
+        let Some(outcome) =
+            with_capture_renderer!(backend, |renderer| capture_frame(renderer, session, scene))
+        else {
+            return;
         };
 
         session.dirty = session.targets.blur.wants_redraw();
@@ -292,6 +374,178 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
             if let Some(session) = state.capture.remove(id) {
                 session.protocol.stop(StopReason::RenderFailed);
             }
+        }
+    }
+}
+
+/// Completes copy-capture frames whose source changed, and moves cursor
+/// sessions along with the pointer.
+fn render_copies(state: &mut State) {
+    if state.capture.copies.is_empty() && state.capture.copy_cursors.is_empty() {
+        return;
+    }
+    let now: Duration = state.wayland.clock.now().into();
+    {
+        let State {
+            capture,
+            shell,
+            input,
+            ..
+        } = state;
+        capture.copy_cursors.retain_mut(|cursor| {
+            let Some(placement) = cursor.source.place(shell) else {
+                return false;
+            };
+            cursor.update(&input.cursor, &placement, input.pointer_location, now);
+            true
+        });
+        capture.copies.retain_mut(|copy| {
+            let Some(placement) = copy.source.place(shell) else {
+                for frame in copy.pending.drain(..) {
+                    frame.fail(CaptureFailureReason::Stopped);
+                }
+                return false;
+            };
+            if copy.shown_on.as_ref() != Some(placement.output()) {
+                copy.shown_on = Some(placement.output().clone());
+                copy.dirty = true;
+            }
+            true
+        });
+    }
+
+    let mut failed = Vec::new();
+    for index in 0..state.capture.copies.len() {
+        let copy = &state.capture.copies[index];
+        if !copy.dirty || copy.pending.is_empty() {
+            continue;
+        }
+        let Some(scale) = copy
+            .shown_on
+            .as_ref()
+            .map(|output| output.current_scale().fractional_scale())
+        else {
+            continue;
+        };
+        state.layout_menus(scale);
+        let dma = state.capture.dmabuf_constraints(&mut state.backend);
+
+        let State {
+            backend,
+            shell,
+            capture,
+            input,
+            config,
+            text,
+            ..
+        } = state;
+        let copy = &mut capture.copies[index];
+        let Some(placement) = copy.source.place(shell) else {
+            continue;
+        };
+        let callbacks = frame_callback_target(&placement);
+        let scene = Scene {
+            shell,
+            placement,
+            cursor: &mut input.cursor,
+            pointer: input.pointer_location,
+            appearance: &config.current.appearance,
+            glass: &config.current.glass,
+            text,
+            hovered: input.hovered_control,
+        };
+        let Some(outcome) =
+            with_capture_renderer!(backend, |renderer| copy.copy(renderer, scene, dma))
+        else {
+            continue;
+        };
+
+        match outcome {
+            Ok(CopyOutcome::Copied(damage)) => {
+                copy::complete(copy, damage, now);
+                copy.dirty = copy.copier.targets.blur.wants_redraw();
+                if let Some((output, windows)) = callbacks {
+                    for window in &windows {
+                        window.send_frame(&output, now, None, |_, _| Some(output.clone()));
+                    }
+                }
+            }
+            Ok(CopyOutcome::Unchanged) => copy.dirty = false,
+            Ok(CopyOutcome::Reconfigured) => {}
+            Err(err) => {
+                tracing::warn!(%err, "copy-capture frame failed");
+                failed.push(index);
+            }
+        }
+    }
+    for index in failed.into_iter().rev() {
+        let copy = state.capture.copies.remove(index);
+        for frame in copy.pending {
+            frame.fail(CaptureFailureReason::Unknown);
+        }
+    }
+}
+
+/// Fills every `wlr-screencopy` frame that is due.
+fn render_screencopies(state: &mut State) {
+    let pending = &mut state.capture.screencopies.pending;
+    pending.retain(|pending| pending.frame.is_alive());
+    if pending.iter().all(|pending| !pending.due) {
+        return;
+    }
+    let now: Duration = state.wayland.clock.now().into();
+    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(pending)
+        .into_iter()
+        .partition(|pending| pending.due);
+    state.capture.screencopies.pending = waiting;
+
+    for pending in due {
+        state.layout_menus(pending.output.current_scale().fractional_scale());
+        let State {
+            backend,
+            shell,
+            capture,
+            input,
+            config,
+            text,
+            ..
+        } = state;
+        let source = CaptureSource::Output(pending.output.clone());
+        let Some(placement) = source.place(shell) else {
+            pending.frame.fail();
+            continue;
+        };
+        let scene = Scene {
+            shell,
+            placement,
+            cursor: &mut input.cursor,
+            pointer: input.pointer_location,
+            appearance: &config.current.appearance,
+            glass: &config.current.glass,
+            text,
+            hovered: input.hovered_control,
+        };
+        let copier = capture.screencopies.copier(&pending.output);
+        let outcome = with_capture_renderer!(backend, |renderer| screencopy::copy(
+            renderer,
+            copier,
+            &pending.frame,
+            scene
+        ));
+        match outcome {
+            Some(Ok(Some(damage))) => pending.frame.success(&damage, now),
+            Some(Ok(None)) => capture
+                .screencopies
+                .pending
+                .push(screencopy::PendingScreencopy {
+                    due: false,
+                    ..pending
+                }),
+            Some(Err(err)) => {
+                tracing::warn!(%err, "screencopy frame failed");
+                pending.frame.fail();
+            }
+            None => pending.frame.fail(),
         }
     }
 }

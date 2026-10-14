@@ -121,7 +121,11 @@ fn stop(state: &mut State, id: &ObjectId) {
 
 /// Runs `action` once `fd` is readable. If the loop refuses the source the
 /// action runs right away rather than never, so a slot cannot get stuck.
-fn when_readable(state: &mut State, fd: OwnedFd, action: impl FnOnce(&mut State) + 'static) {
+pub(super) fn when_readable(
+    state: &mut State,
+    fd: OwnedFd,
+    action: impl FnOnce(&mut State) + 'static,
+) {
     let action = Rc::new(RefCell::new(Some(action)));
     let pending = Rc::clone(&action);
     let inserted = state.common.event_loop_handle.insert_source(

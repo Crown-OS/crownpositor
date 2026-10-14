@@ -26,6 +26,8 @@ use smithay::{
         fractional_scale::FractionalScaleManagerState,
         idle_inhibit::IdleInhibitManagerState,
         idle_notify::IdleNotifierState,
+        image_capture_source::{OutputCaptureSourceState, ToplevelCaptureSourceState},
+        image_copy_capture::ImageCopyCaptureState,
         input_method::InputMethodManagerState,
         keyboard_shortcuts_inhibit::{KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor},
         output::OutputManagerState,
@@ -73,6 +75,7 @@ use protocols::{
     output_management::OutputManagementState,
     output_power::OutputPowerState,
     tearing_control::TearingControlState,
+    wlr_screencopy::ScreencopyState,
     xdg_toplevel_drag::XdgToplevelDragState,
 };
 
@@ -153,10 +156,15 @@ pub struct WaylandState {
     /// `crownos_surface_visibility_v1`. Unprivileged: a client only learns
     /// about surfaces it owns.
     pub surface_visibility_state: SurfaceVisibilityState,
-    // pub cosmic_image_capture_source_state: CosmicImageCaptureSourceState,
-    // pub output_capture_source_state: OutputCaptureSourceState,
-    // pub toplevel_capture_source_state: ToplevelCaptureSourceState,
-    // pub image_copy_capture_state: ImageCopyCaptureState,
+    /// `ext_image_capture_source_v1` sources for outputs and windows, and
+    /// `ext_image_copy_capture_v1` to read them. Privileged: they read every
+    /// pixel on screen.
+    pub output_capture_source_state: OutputCaptureSourceState,
+    pub toplevel_capture_source_state: ToplevelCaptureSourceState,
+    pub image_copy_capture_state: ImageCopyCaptureState,
+    /// `zwlr_screencopy_manager_v1`. Privileged: it reads every pixel on
+    /// screen.
+    pub screencopy_state: ScreencopyState,
     /// `wp_security_context_v1`. Sandbox engines register a listener per app,
     /// and every client that connects through it loses the privileged globals.
     pub security_context_state: SecurityContextState,
@@ -287,6 +295,19 @@ impl WaylandState {
             ),
             foreign_toplevels: ForeignToplevels::default(),
             ext_workspace_state: ExtWorkspaceState::new::<State, _>(display, is_privileged),
+            output_capture_source_state: OutputCaptureSourceState::new_with_filter::<State, _>(
+                display,
+                is_privileged,
+            ),
+            toplevel_capture_source_state: ToplevelCaptureSourceState::new_with_filter::<State, _>(
+                display,
+                is_privileged,
+            ),
+            image_copy_capture_state: ImageCopyCaptureState::new_with_filter::<State, _>(
+                display,
+                is_privileged,
+            ),
+            screencopy_state: ScreencopyState::new::<State, _>(display, is_privileged),
             virtual_output_state: VirtualOutputState::new::<State, _>(display, is_privileged),
             crownos_input_state: CrownosInputState::new::<State, _>(display, is_privileged),
             app_icons_state: AppIconsState::new::<State, _>(display, is_privileged),

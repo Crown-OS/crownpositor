@@ -2,6 +2,7 @@ pub mod affine;
 pub mod constraint_region;
 pub mod edid;
 pub mod id;
+pub mod pixels;
 pub mod privilege;
 pub mod region;
 pub mod runtime;
