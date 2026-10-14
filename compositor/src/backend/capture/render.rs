@@ -32,7 +32,7 @@ use crate::{
     },
     rendering::{
         self, Elements, FrameStyle,
-        blur::{BlurConfig, BlurSession},
+        blur::{BlurCache, BlurConfig, BlurSession},
         cursor::Cursor,
         decoration::TextRenderer,
         rounded::{GlesDecorator, MultiDecorator},
@@ -46,7 +46,7 @@ use crate::{
 const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
 
 /// What changed in a frame, and when the GPU is done drawing it.
-type DrawnFrame = (Vec<Rectangle<i32, BufferCoords>>, SyncPoint);
+pub type DrawnFrame = (Vec<Rectangle<i32, BufferCoords>>, SyncPoint);
 
 /// A renderer a frame can be captured with.
 pub trait CaptureRenderer: CrownRenderer + Bind<Dmabuf> + Bind<GlesTexture>
@@ -149,7 +149,7 @@ where
             buffer_size,
             gpu_conversion,
         ));
-        session.targets.reset(size, scale);
+        session.targets.reset(size, scale, Transform::Normal);
         return Ok(Outcome::Reconfigured);
     }
 
@@ -193,34 +193,36 @@ where
         canvases,
         nv12,
     } = targets;
-    let Some(damage_tracker) = damage.as_mut() else {
+    let Some(tracker) = damage.as_mut() else {
         return Ok(Outcome::Idle);
     };
-
-    blur.begin_frame();
-    corners.begin_frame();
-    canvases.begin_frame();
-    let content = blur.content();
-    let blur_config = BlurConfig::new(scene.appearance, scene.glass);
-    let blur_session = blur_config.enabled.then_some(BlurSession {
-        cache: &mut *blur,
-        config: blur_config,
+    let effects = Effects {
+        blur,
+        corners,
+        canvases,
+    };
+    let canvas = Canvas {
+        size,
+        scale,
         transform: Transform::Normal,
-        output: Rectangle::from_size(size),
-    });
-    let mut decorator = R::decorator(blur_session, corners, canvases);
-    let elements = scene_elements(renderer, &mut decorator, cursor_mode, scene, scale);
-    content.observe(
-        || OutputDamageTracker::new(size, Scale::from(scale), Transform::Normal),
-        &elements,
-    );
+    };
 
-    let mut target = slot.dmabuf.clone();
+    let target = slot.dmabuf.clone();
     let rendered = if target.format().code == Fourcc::Nv12 {
         let (mut intermediate, holds_previous) =
             nv12.intermediate(renderer.gles(), target.size())?;
         let age = usize::from(holds_previous && !slot.full_frame);
-        match render_into(renderer, damage_tracker, &mut intermediate, age, &elements)? {
+        let drawn = draw_scene(
+            renderer,
+            tracker,
+            effects,
+            cursor_mode,
+            scene,
+            canvas,
+            DrawTarget::Texture(&mut intermediate),
+            age,
+        )?;
+        match drawn {
             Some((damage, _)) => {
                 let sync = nv12.convert(renderer.gles(), &intermediate, slot.index, &target)?;
                 Some((damage, sync))
@@ -233,7 +235,16 @@ where
         } else {
             ages.age(slot.index)
         };
-        render_into(renderer, damage_tracker, &mut target, age, &elements)?
+        draw_scene(
+            renderer,
+            tracker,
+            effects,
+            cursor_mode,
+            scene,
+            canvas,
+            DrawTarget::Dmabuf(target),
+            age,
+        )?
     };
 
     let Some((damage, sync)) = rendered else {
@@ -245,6 +256,85 @@ where
         damage,
         sync,
     }))
+}
+
+/// The per-session effect caches a frame's decorations draw from.
+pub struct Effects<'a> {
+    pub blur: &'a mut BlurCache,
+    pub corners: &'a mut CornerMemory,
+    pub canvases: &'a mut WarpCanvases,
+}
+
+/// The image being drawn: its size upright in pixels, its scale, and how it
+/// is turned to fit the buffer.
+#[derive(Clone, Copy)]
+pub struct Canvas {
+    pub size: Size<i32, Physical>,
+    pub scale: f64,
+    pub transform: Transform,
+}
+
+pub enum DrawTarget<'a> {
+    Dmabuf(Dmabuf),
+    Texture(&'a mut GlesTexture),
+}
+
+/// Draws `scene` into `target`, whose contents are `age` frames old, and
+/// returns the damage, or `None` when nothing needed drawing.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_scene<R>(
+    renderer: &mut R,
+    tracker: &mut OutputDamageTracker,
+    effects: Effects<'_>,
+    cursor_mode: CursorMode,
+    scene: Scene<'_>,
+    canvas: Canvas,
+    target: DrawTarget<'_>,
+    age: usize,
+) -> Result<Option<DrawnFrame>, CaptureError>
+where
+    R: CaptureRenderer,
+    R::TextureId: Send + Clone + 'static,
+{
+    let Effects {
+        blur,
+        corners,
+        canvases,
+    } = effects;
+    let Canvas {
+        size,
+        scale,
+        transform,
+    } = canvas;
+    blur.begin_frame();
+    corners.begin_frame();
+    canvases.begin_frame();
+    let content = blur.content();
+    let blur_config = BlurConfig::new(scene.appearance, scene.glass);
+    let blur_session = blur_config.enabled.then_some(BlurSession {
+        cache: &mut *blur,
+        config: blur_config,
+        transform,
+        output: Rectangle::from_size(size),
+    });
+    let mut decorator = R::decorator(blur_session, corners, canvases);
+    let elements = scene_elements(renderer, &mut decorator, cursor_mode, scene, scale);
+    content.observe(
+        || {
+            OutputDamageTracker::new(
+                transform.invert().transform_size(size),
+                Scale::from(scale),
+                transform,
+            )
+        },
+        &elements,
+    );
+    match target {
+        DrawTarget::Dmabuf(mut dmabuf) => {
+            render_into(renderer, tracker, &mut dmabuf, age, &elements)
+        }
+        DrawTarget::Texture(texture) => render_into(renderer, tracker, texture, age, &elements),
+    }
 }
 
 /// The scene, with the cursor left out unless it is to be embedded.

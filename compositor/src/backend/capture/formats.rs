@@ -28,6 +28,24 @@ pub const NV12_CHROMA_PLANE: Fourcc = Fourcc::Gr88;
 /// VA-API and V4L2 encoder imports.
 const NV12_MODIFIER: Modifier = Modifier::Linear;
 
+/// The 8-bit RGB formats the renderer can draw into, with their modifiers.
+pub fn rgb_formats(render_formats: &FormatSet) -> Vec<FormatModifiers> {
+    RGB_FORMATS
+        .iter()
+        .filter_map(|code| {
+            let modifiers: Vec<Modifier> = render_formats
+                .iter()
+                .filter(|format| format.code == *code)
+                .map(|format| format.modifier)
+                .collect();
+            (!modifiers.is_empty()).then_some(FormatModifiers {
+                format: *code,
+                modifiers,
+            })
+        })
+        .collect()
+}
+
 pub fn buffer_constraints(
     render_formats: &FormatSet,
     size: Size<i32, BufferCoords>,
@@ -47,21 +65,12 @@ pub fn buffer_constraints(
         modifiers: vec![NV12_MODIFIER],
     });
 
-    let rgb = RGB_FORMATS.iter().filter_map(|code| {
-        let modifiers: Vec<Modifier> = render_formats
-            .iter()
-            .filter(|format| format.code == *code)
-            .map(|format| format.modifier)
-            .collect();
-        (!modifiers.is_empty()).then_some(FormatModifiers {
-            format: *code,
-            modifiers,
-        })
-    });
-
     BufferConstraints {
         size,
-        formats: nv12.into_iter().chain(rgb).collect(),
+        formats: nv12
+            .into_iter()
+            .chain(rgb_formats(render_formats))
+            .collect(),
     }
 }
 

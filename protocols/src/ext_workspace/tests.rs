@@ -36,10 +36,17 @@ delegate_dispatch!(Server: [ExtWorkspaceManagerV1: ManagerData] => ExtWorkspaceS
 delegate_dispatch!(Server: [ExtWorkspaceGroupHandleV1: u64] => ExtWorkspaceState);
 delegate_dispatch!(Server: [ExtWorkspaceHandleV1: WorkspaceData] => ExtWorkspaceState);
 
+struct SeenWorkspace {
+    handle: ClientWorkspace,
+    id: Option<String>,
+    active: bool,
+    removed: bool,
+}
+
 #[derive(Default)]
 struct Seen {
     manager: Option<ClientManager>,
-    workspaces: Vec<(ClientWorkspace, Option<String>, Option<String>, bool, bool)>,
+    workspaces: Vec<SeenWorkspace>,
     groups: usize,
     entered: usize,
     dones: usize,
@@ -75,7 +82,12 @@ impl ClientDispatch<ClientManager, ()> for Seen {
     ) {
         match event {
             manager_client::Event::Workspace { workspace } => {
-                state.workspaces.push((workspace, None, None, false, false))
+                state.workspaces.push(SeenWorkspace {
+                    handle: workspace,
+                    id: None,
+                    active: false,
+                    removed: false,
+                })
             }
             manager_client::Event::WorkspaceGroup { .. } => state.groups += 1,
             manager_client::Event::Done => state.dones += 1,
@@ -116,19 +128,18 @@ impl ClientDispatch<ClientWorkspace, ()> for Seen {
         let Some(entry) = state
             .workspaces
             .iter_mut()
-            .find(|entry| entry.0 == *workspace)
+            .find(|entry| entry.handle == *workspace)
         else {
             return;
         };
         match event {
-            workspace_client::Event::Id { id } => entry.1 = Some(id),
-            workspace_client::Event::Name { name } => entry.2 = Some(name),
+            workspace_client::Event::Id { id } => entry.id = Some(id),
             workspace_client::Event::State { state } => {
-                entry.3 = state
+                entry.active = state
                     .into_result()
                     .is_ok_and(|state| state.contains(workspace_client::State::Active))
             }
-            workspace_client::Event::Removed => entry.4 = true,
+            workspace_client::Event::Removed => entry.removed = true,
             _ => {}
         }
     }
@@ -143,7 +154,7 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        let mut display = Display::<Server>::new().unwrap();
+        let display = Display::<Server>::new().unwrap();
         let state = ExtWorkspaceState::new::<Server, _>(&display.handle(), |_| true);
         let (server_end, client_end) = UnixStream::pair().unwrap();
         display
@@ -227,8 +238,8 @@ fn clients_see_new_changed_and_removed_workspaces() {
     assert_eq!(harness.seen.groups, 1);
     assert_eq!(harness.seen.entered, 2);
     assert_eq!(harness.seen.workspaces.len(), 2);
-    assert_eq!(harness.seen.workspaces[0].1.as_deref(), Some("ws-10"));
-    assert!(harness.seen.workspaces[0].3);
+    assert_eq!(harness.seen.workspaces[0].id.as_deref(), Some("ws-10"));
+    assert!(harness.seen.workspaces[0].active);
     let dones = harness.seen.dones;
 
     harness.update(
@@ -241,11 +252,11 @@ fn clients_see_new_changed_and_removed_workspaces() {
     );
 
     harness.update(vec![group], vec![workspace(10, false), workspace(11, true)]);
-    assert!(!harness.seen.workspaces[0].3);
-    assert!(harness.seen.workspaces[1].3);
+    assert!(!harness.seen.workspaces[0].active);
+    assert!(harness.seen.workspaces[1].active);
 
     harness.update(Vec::new(), Vec::new());
-    assert!(harness.seen.workspaces.iter().all(|entry| entry.4));
+    assert!(harness.seen.workspaces.iter().all(|entry| entry.removed));
 }
 
 #[test]
@@ -257,7 +268,7 @@ fn activation_waits_for_commit() {
     };
     harness.update(vec![group], vec![workspace(10, true), workspace(11, false)]);
 
-    harness.seen.workspaces[1].0.activate();
+    harness.seen.workspaces[1].handle.activate();
     harness.pump();
     assert!(harness.server.activated.is_empty());
 
