@@ -47,6 +47,21 @@ pub fn app_id(surface: &WlSurface) -> Option<String> {
     })
 }
 
+/// Runs `f` on a toplevel's `app_id`, empty when it gave none, without
+/// copying it.
+pub fn with_app_id<T>(surface: &WlSurface, f: impl FnOnce(&str) -> T) -> T {
+    with_states(surface, |states| {
+        let data = states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .and_then(|data| data.lock().ok());
+        f(data
+            .as_ref()
+            .and_then(|data| data.app_id.as_deref())
+            .unwrap_or_default())
+    })
+}
+
 /// Whether a toplevel is transient for another: a dialog, not an application
 /// window of its own.
 pub fn has_parent(surface: &WlSurface) -> bool {

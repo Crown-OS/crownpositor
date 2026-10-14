@@ -21,5 +21,8 @@ impl OutputHandler for State {
                 surface.enter(&wl_output);
             }
         });
+        self.wayland
+            .ext_workspace_state
+            .output_bound(&output, &wl_output);
     }
 }
