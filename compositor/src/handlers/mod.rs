@@ -13,6 +13,8 @@ mod crownos_surface_visibility;
 mod crownos_virtual_output;
 mod dmabuf;
 mod drm_lease;
+pub mod ext_workspace;
+pub mod foreign_toplevel_list;
 pub mod drm_syncobj;
 mod fractional_scale;
 mod gamma_control;

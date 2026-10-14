@@ -22,6 +22,7 @@ use smithay::{
         drm_syncobj::DrmSyncobjState,
         fifo::FifoManagerState,
         fixes::FixesState,
+        foreign_toplevel_list::ForeignToplevelListState,
         fractional_scale::FractionalScaleManagerState,
         idle_inhibit::IdleInhibitManagerState,
         idle_notify::IdleNotifierState,
@@ -67,6 +68,7 @@ use protocols::{
     crownos_surface_animation::SurfaceAnimationState,
     crownos_surface_visibility::SurfaceVisibilityState,
     crownos_virtual_output::VirtualOutputState,
+    ext_workspace::ExtWorkspaceState,
     gamma_control::GammaControlState,
     output_management::OutputManagementState,
     output_power::OutputPowerState,
@@ -75,6 +77,7 @@ use protocols::{
 };
 
 use crate::{
+    handlers::foreign_toplevel_list::ForeignToplevels,
     shell::morph::IconOrigin,
     state::{State, agent_access::AgentAccessPolicy},
     utils::{id::OutputId, privilege::is_privileged},
@@ -125,6 +128,12 @@ pub struct WaylandState {
     pub wlr_data_control_state: WlrDataControlState,
     /// `crownos_screencast_v1`. Privileged: it reads every pixel on screen.
     pub screencast_state: ScreencastState,
+    /// `ext_foreign_toplevel_list_v1`. Privileged: it names every window of
+    /// every application.
+    pub foreign_toplevel_list_state: ForeignToplevelListState,
+    pub foreign_toplevels: ForeignToplevels,
+    /// `ext_workspace_v1`. Privileged: it switches workspaces.
+    pub ext_workspace_state: ExtWorkspaceState,
     /// `crownos_virtual_output_v1`. Privileged: it adds outputs windows can
     /// be moved onto, out of the user's sight.
     pub virtual_output_state: VirtualOutputState,
@@ -272,6 +281,12 @@ impl WaylandState {
             ),
             primary_selection_state,
             screencast_state: ScreencastState::new::<State, _>(display, is_privileged),
+            foreign_toplevel_list_state: ForeignToplevelListState::new_with_filter::<State>(
+                display,
+                is_privileged,
+            ),
+            foreign_toplevels: ForeignToplevels::default(),
+            ext_workspace_state: ExtWorkspaceState::new::<State, _>(display, is_privileged),
             virtual_output_state: VirtualOutputState::new::<State, _>(display, is_privileged),
             crownos_input_state: CrownosInputState::new::<State, _>(display, is_privileged),
             app_icons_state: AppIconsState::new::<State, _>(display, is_privileged),
