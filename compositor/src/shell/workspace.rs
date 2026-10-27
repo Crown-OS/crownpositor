@@ -8,7 +8,7 @@ use crate::{
     shell::{
         closing::ClosingWindow,
         morph::IconOrigin,
-        tile::{Tile, WindowState},
+        tile::{StackLayer, Tile, WindowState},
     },
     utils::id::{OutputId, WindowId, WorkspaceId},
 };
@@ -127,22 +127,21 @@ impl Workspace {
         &self.tiles
     }
 
-    /// Front-to-back: floating above tiled, topmost first.
+    /// Front-to-back: fullscreen above floating above tiled, topmost first.
     ///
     /// Rendering and hit-testing both go through this, so they cannot disagree
     /// about what is on top.
     pub fn stacking_order(&self) -> impl DoubleEndedIterator<Item = &Tile> {
-        let floating = self
-            .tiles
-            .iter()
-            .rev()
-            .filter(|tile| tile.is_shown() && tile.state().floats_above());
-        let tiled = self
-            .tiles
-            .iter()
-            .rev()
-            .filter(|tile| tile.is_shown() && !tile.state().floats_above());
-        floating.chain(tiled)
+        let tiles = &self.tiles;
+        let layer = move |layer: StackLayer| {
+            tiles
+                .iter()
+                .rev()
+                .filter(move |tile| tile.is_shown() && tile.stack_layer() == layer)
+        };
+        layer(StackLayer::Fullscreen)
+            .chain(layer(StackLayer::Floating))
+            .chain(layer(StackLayer::Tiled))
     }
 
     pub fn tiles_mut(&mut self) -> &mut [Tile] {
@@ -266,13 +265,13 @@ impl Workspace {
 
         // Floating windows go to the front of their subsequence (topmost);
         // tiled windows append in layout order.
-        if tile.state().floats_above() {
+        if tile.floats() {
             self.tiles.push(tile);
         } else {
             let insert_at = self
                 .tiles
                 .iter()
-                .position(|existing| existing.state().floats_above())
+                .position(Tile::floats)
                 .unwrap_or(self.tiles.len());
             self.tiles.insert(insert_at, tile);
         }
@@ -319,9 +318,7 @@ impl Workspace {
         self.dirty.focus = true;
 
         // Floating windows raise within their subsequence when focused.
-        if self
-            .tile(id)
-            .is_some_and(|tile| tile.state().floats_above())
+        if self.tile(id).is_some_and(Tile::floats)
             && let Some(index) = self.tiles.iter().position(|tile| tile.id() == id)
         {
             let tile = self.tiles.remove(index);

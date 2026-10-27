@@ -83,6 +83,14 @@ impl WindowState {
     }
 }
 
+/// The band a window is drawn and hit-tested in, back to front.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackLayer {
+    Tiled,
+    Floating,
+    Fullscreen,
+}
+
 pub struct Tile {
     id: WindowId,
     window: Window,
@@ -260,6 +268,28 @@ impl Tile {
                 WindowState::Floating | WindowState::Snapped(_) => true,
                 WindowState::Maximized => self.restore_state.is_floating(),
             }
+    }
+
+    /// Whether this window lives among the floating ones. A maximized or
+    /// fullscreen window belongs wherever it will return to, so maximizing a
+    /// floating window keeps it in front rather than dropping it behind the
+    /// tiled ones.
+    pub fn floats(&self) -> bool {
+        match self.state {
+            WindowState::Floating | WindowState::Snapped(_) => true,
+            WindowState::Tiled => false,
+            WindowState::Maximized | WindowState::Fullscreen => self.restore_state.is_floating(),
+        }
+    }
+
+    pub fn stack_layer(&self) -> StackLayer {
+        if self.state == WindowState::Fullscreen {
+            StackLayer::Fullscreen
+        } else if self.floats() {
+            StackLayer::Floating
+        } else {
+            StackLayer::Tiled
+        }
     }
 
     /// Whether the compositor answers for this window's edges. Only a framed
