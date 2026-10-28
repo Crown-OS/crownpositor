@@ -174,7 +174,10 @@ fn descriptor_tag(descriptor: &[u8]) -> Option<u8> {
 /// dropped rather than carried into a log line or a config file.
 fn descriptor_text(descriptor: &[u8]) -> Option<String> {
     let payload = &descriptor[5..DESCRIPTOR_LEN];
-    let end = payload.iter().position(|byte| *byte == 0x0A).unwrap_or(payload.len());
+    let end = payload
+        .iter()
+        .position(|byte| *byte == 0x0A)
+        .unwrap_or(payload.len());
     let text: String = payload[..end]
         .iter()
         .copied()
@@ -189,7 +192,11 @@ fn descriptor_text(descriptor: &[u8]) -> Option<String> {
 fn range_limits(descriptor: &[u8]) -> Option<RangeLimits> {
     // EDID 1.4 byte 4 says whether 255 has to be added back to the rates that
     // would otherwise not fit in a byte.
-    let offset = if descriptor[4] & 0x03 == 0x03 { 255u16 } else { 0 };
+    let offset = if descriptor[4] & 0x03 == 0x03 {
+        255u16
+    } else {
+        0
+    };
     let min = descriptor[5] as u16 + offset;
     let max = descriptor[6] as u16 + offset;
 

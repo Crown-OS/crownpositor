@@ -17,7 +17,10 @@ use crate::rendering::{
 use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
-        element::{Element, Id, RenderElement, memory::MemoryRenderBufferRenderElement, utils::CropRenderElement},
+        element::{
+            Element, Id, RenderElement, memory::MemoryRenderBufferRenderElement,
+            utils::CropRenderElement,
+        },
         utils::CommitCounter,
     },
     utils::{Physical, Rectangle, Scale},

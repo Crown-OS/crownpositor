@@ -43,12 +43,13 @@ fn send_parametric(object: &WpImageDescriptionInfoV1, parametric: &ParametricDes
         chromaticity_to_wire(primaries.blue),
         chromaticity_to_wire(primaries.white),
     );
-    object.primaries(red.0, red.1, green.0, green.1, blue.0, blue.1, white.0, white.1);
+    object.primaries(
+        red.0, red.1, green.0, green.1, blue.0, blue.1, white.0, white.1,
+    );
 
     if let PrimariesSpec::Named(named) = parametric.primaries
-        && let Ok(wire) = super::reexports::wp_color_manager_v1::Primaries::try_from(
-            primaries_wire_value(named),
-        )
+        && let Ok(wire) =
+            super::reexports::wp_color_manager_v1::Primaries::try_from(primaries_wire_value(named))
     {
         object.primaries_named(wire);
     }
@@ -65,11 +66,7 @@ fn send_parametric(object: &WpImageDescriptionInfoV1, parametric: &ParametricDes
     }
 
     let luminances = parametric.luminances;
-    object.luminances(
-        luminances.min_scaled,
-        luminances.max,
-        luminances.reference,
-    );
+    object.luminances(luminances.min_scaled, luminances.max, luminances.reference);
 
     let target = parametric.target_primaries;
     let (red, green, blue, white) = (
@@ -107,12 +104,15 @@ fn send_icc(object: &WpImageDescriptionInfoV1, icc: &super::record::IccData) {
 /// A read-only, size-sealed memfd holding `bytes`.
 fn sealed_memfd(bytes: &[u8]) -> Option<std::os::fd::OwnedFd> {
     use smithay::reexports::rustix::{
-        fs::{MemfdFlags, SealFlags, memfd_create, fcntl_add_seals},
+        fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create},
         io::write,
     };
 
-    let fd = memfd_create("crownpositor-icc", MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)
-        .ok()?;
+    let fd = memfd_create(
+        "crownpositor-icc",
+        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+    )
+    .ok()?;
 
     let mut written = 0;
     while written < bytes.len() {

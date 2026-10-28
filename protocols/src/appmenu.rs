@@ -261,7 +261,9 @@ fn publish<D: AppmenuHandler>(state: &mut D, surface: &WlSurface, address: Optio
 /// client re-setting the same address does not make the compositor reconnect.
 fn store(surface: &WlSurface, address: Option<MenuAddress>) -> bool {
     with_states(surface, |states| {
-        let slot = states.data_map.get_or_insert_threadsafe(AddressSlot::default);
+        let slot = states
+            .data_map
+            .get_or_insert_threadsafe(AddressSlot::default);
         let mut current = slot.0.lock().unwrap_or_else(|err| err.into_inner());
         if *current == address {
             return false;

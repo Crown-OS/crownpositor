@@ -5,16 +5,17 @@ use std::sync::{Arc, Mutex};
 use smithay::wayland::compositor::{Cacheable, SurfaceData, with_states};
 use wayland_protocols::wp::color_management::v1::server::{
     wp_color_management_output_v1::WpColorManagementOutputV1,
-    wp_image_description_info_v1::WpImageDescriptionInfoV1 as InfoObject,
     wp_color_management_surface_feedback_v1::WpColorManagementSurfaceFeedbackV1,
     wp_color_management_surface_v1::WpColorManagementSurfaceV1,
     wp_color_manager_v1::WpColorManagerV1,
     wp_image_description_creator_icc_v1::WpImageDescriptionCreatorIccV1,
     wp_image_description_creator_params_v1::WpImageDescriptionCreatorParamsV1,
+    wp_image_description_info_v1::WpImageDescriptionInfoV1 as InfoObject,
     wp_image_description_v1::WpImageDescriptionV1,
 };
 use wayland_server::{
-    Client, Dispatch, DisplayHandle, GlobalDispatch, Resource, Weak, backend::GlobalId,
+    Client, Dispatch, DisplayHandle, GlobalDispatch, Resource, Weak,
+    backend::GlobalId,
     protocol::{wl_output::WlOutput, wl_surface::WlSurface},
 };
 

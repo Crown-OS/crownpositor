@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 
 use smithay::{
-    wayland::drm_lease::{DrmLease, DrmLeaseState},
     backend::{
         allocator::{
             dmabuf::DmabufAllocator,
@@ -11,7 +10,11 @@ use smithay::{
         },
         drm::{DrmDevice, DrmDeviceFd, DrmNode},
     },
-    reexports::{calloop::RegistrationToken, drm::control::{connector, crtc}},
+    reexports::{
+        calloop::RegistrationToken,
+        drm::control::{connector, crtc},
+    },
+    wayland::drm_lease::{DrmLease, DrmLeaseState},
 };
 use smithay_drm_extras::drm_scanner::DrmScanner;
 

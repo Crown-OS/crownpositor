@@ -68,7 +68,9 @@ impl Watch {
                 section(&sink, Display::SECTION, Update::Display),
                 section(&sink, Glass::SECTION, Update::Glass),
                 section(&sink, Lock::SECTION, |lock| Update::Lock(Box::new(lock))),
-                section(&sink, Theme::SECTION, |theme| Update::Theme(Box::new(theme))),
+                section(&sink, Theme::SECTION, |theme| {
+                    Update::Theme(Box::new(theme))
+                }),
             ],
         }
     }

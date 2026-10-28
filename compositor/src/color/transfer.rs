@@ -29,9 +29,7 @@ const BT2020_LUMA: [f64; 3] = [0.2627, 0.6780, 0.0593];
 /// exists for the curve tests and for the shader's per-channel stage.
 pub fn eotf(transfer: TransferFunction, signal: f64) -> f64 {
     match transfer {
-        TransferFunction::Power(exponent) => {
-            power(signal, f64::from(exponent) / 10_000.0)
-        }
+        TransferFunction::Power(exponent) => power(signal, f64::from(exponent) / 10_000.0),
         TransferFunction::Named(named) => named_eotf(named, signal),
     }
 }
@@ -61,9 +59,7 @@ fn named_eotf(transfer: NamedTransferFunction, signal: f64) -> f64 {
 /// Display light back to a signal.
 pub fn inverse_eotf(transfer: TransferFunction, light: f64) -> f64 {
     match transfer {
-        TransferFunction::Power(exponent) => {
-            power(light, 10_000.0 / f64::from(exponent))
-        }
+        TransferFunction::Power(exponent) => power(light, 10_000.0 / f64::from(exponent)),
         TransferFunction::Named(named) => named_inverse_eotf(named, light),
     }
 }
@@ -375,7 +371,10 @@ mod tests {
     #[test]
     fn a_power_curve_handles_negative_signal() {
         let transfer = TransferFunction::Power(22_000);
-        assert!(eotf(transfer, -0.5) < 0.0, "a negative signal stays negative");
+        assert!(
+            eotf(transfer, -0.5) < 0.0,
+            "a negative signal stays negative"
+        );
         assert!(!eotf(transfer, -0.5).is_nan());
     }
 

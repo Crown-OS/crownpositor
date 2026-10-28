@@ -72,7 +72,12 @@ pub fn assign(
 
     let seeds: Vec<Option<usize>> = wanted
         .iter()
-        .map(|connector| pinned.get(connector).and_then(|crtc| crtc_index.get(crtc)).copied())
+        .map(|connector| {
+            pinned
+                .get(connector)
+                .and_then(|crtc| crtc_index.get(crtc))
+                .copied()
+        })
         .collect();
 
     let matched = match_connectors(&candidates, &seeds, crtcs.len())

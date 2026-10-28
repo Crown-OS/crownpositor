@@ -29,10 +29,8 @@ use std::sync::Arc;
 use smithay::utils::{Logical, Physical, Point, Raw, Size, Transform};
 use wayland_protocols_wlr::output_management::v1::server::{
     zwlr_output_configuration_head_v1::ZwlrOutputConfigurationHeadV1,
-    zwlr_output_configuration_v1::ZwlrOutputConfigurationV1,
-    zwlr_output_head_v1::ZwlrOutputHeadV1,
-    zwlr_output_manager_v1::ZwlrOutputManagerV1,
-    zwlr_output_mode_v1::ZwlrOutputModeV1,
+    zwlr_output_configuration_v1::ZwlrOutputConfigurationV1, zwlr_output_head_v1::ZwlrOutputHeadV1,
+    zwlr_output_manager_v1::ZwlrOutputManagerV1, zwlr_output_mode_v1::ZwlrOutputModeV1,
 };
 use wayland_server::{Client, Dispatch, DisplayHandle, GlobalDispatch, backend::GlobalId};
 

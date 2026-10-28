@@ -202,8 +202,16 @@ mod tests {
     #[test]
     fn hdr_static_metadata_decodes_eotfs_and_luminances() {
         // tag 7, length 5: extended tag 6, eotf bits, sm bits, max, avg, min.
-        let parsed = parse(&extension(&[&[0xE6, HDR_STATIC_METADATA, 0x06, 0x01, 0xBE, 0xAF, 0x08]]))
-            .expect("a CTA block");
+        let parsed = parse(&extension(&[&[
+            0xE6,
+            HDR_STATIC_METADATA,
+            0x06,
+            0x01,
+            0xBE,
+            0xAF,
+            0x08,
+        ]]))
+        .expect("a CTA block");
         let hdr = parsed.hdr.expect("an HDR block");
 
         assert!(hdr.eotf.traditional_hdr);
@@ -218,8 +226,7 @@ mod tests {
 
     #[test]
     fn colorimetry_reports_bt2020_rgb() {
-        let parsed =
-            parse(&extension(&[&[0xE3, COLORIMETRY, 0xC0, 0x00]])).expect("a CTA block");
+        let parsed = parse(&extension(&[&[0xE3, COLORIMETRY, 0xC0, 0x00]])).expect("a CTA block");
         assert!(parsed.colorimetry.bt2020_rgb);
         assert!(parsed.colorimetry.bt2020_ycc);
         assert!(!parsed.colorimetry.bt2020_cycc);

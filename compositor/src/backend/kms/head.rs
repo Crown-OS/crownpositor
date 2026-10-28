@@ -17,16 +17,14 @@ use smithay::{
     reexports::drm::control::{Device as ControlDevice, Mode as DrmMode, ModeTypeFlags, connector},
 };
 
-use crate::{
-    backend::kms::props,
-    shell::monitor::ConnectorId,
-    utils::edid::EdidInfo,
-};
+use crate::{backend::kms::props, shell::monitor::ConnectorId, utils::edid::EdidInfo};
 
 /// Whether this connector is currently driving an output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeadState {
-    Enabled { crtc: smithay::reexports::drm::control::crtc::Handle },
+    Enabled {
+        crtc: smithay::reexports::drm::control::crtc::Handle,
+    },
     Disabled,
 }
 
@@ -75,11 +73,7 @@ impl Head {
             return None;
         }
 
-        let name = format!(
-            "{}-{}",
-            info.interface().as_str(),
-            info.interface_id()
-        );
+        let name = format!("{}-{}", info.interface().as_str(), info.interface_id());
         let edid = props::edid(drm, connector);
 
         let physical_mm = edid
@@ -150,7 +144,11 @@ impl Head {
             return Some(mode);
         }
         if wanted.is_some() {
-            tracing::warn!(output = self.name, mode = wanted, "no such mode; using the default");
+            tracing::warn!(
+                output = self.name,
+                mode = wanted,
+                "no such mode; using the default"
+            );
         }
 
         self.preferred

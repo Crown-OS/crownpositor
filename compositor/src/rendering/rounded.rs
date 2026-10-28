@@ -753,8 +753,10 @@ impl<'a> MultiDecorator<'a> {
 }
 
 impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
-    type Element =
-        Decorated<Cropped<KmsRenderer<'render>>, MemoryRenderBufferRenderElement<KmsRenderer<'render>>>;
+    type Element = Decorated<
+        Cropped<KmsRenderer<'render>>,
+        MemoryRenderBufferRenderElement<KmsRenderer<'render>>,
+    >;
 
     fn decorate(
         &mut self,

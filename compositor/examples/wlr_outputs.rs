@@ -137,7 +137,10 @@ fn configure(
     for argument in arguments {
         if argument.contains('=') {
             if let Some(name) = &current {
-                wanted.entry(name.clone()).or_default().push(argument.clone());
+                wanted
+                    .entry(name.clone())
+                    .or_default()
+                    .push(argument.clone());
             }
         } else {
             current = Some(argument.clone());
@@ -145,7 +148,9 @@ fn configure(
         }
     }
 
-    let serial = app.serial.expect("a serial arrives before any configuration");
+    let serial = app
+        .serial
+        .expect("a serial arrives before any configuration");
     let configuration = manager.create_configuration(serial, qh, ());
 
     for handle in app.order.clone() {
@@ -173,8 +178,7 @@ fn configure(
                 "scale" => configured.set_scale(value.parse().unwrap_or(1.0)),
                 "pos" => {
                     if let Some((x, y)) = value.split_once(',') {
-                        configured
-                            .set_position(x.parse().unwrap_or(0), y.parse().unwrap_or(0));
+                        configured.set_position(x.parse().unwrap_or(0), y.parse().unwrap_or(0));
                     }
                 }
                 "transform" => {
@@ -194,9 +198,10 @@ fn configure(
                 // may well refuse.
                 "custom" => {
                     let (size, refresh) = match value.split_once('@') {
-                        Some((size, refresh)) => {
-                            (size, (refresh.parse::<f64>().unwrap_or(0.0) * 1000.0) as i32)
-                        }
+                        Some((size, refresh)) => (
+                            size,
+                            (refresh.parse::<f64>().unwrap_or(0.0) * 1000.0) as i32,
+                        ),
                         None => (value, 0),
                     };
                     if let Some((width, height)) = size.split_once('x') {

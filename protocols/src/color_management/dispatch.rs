@@ -19,7 +19,7 @@ use wayland_server::{
 
 use super::{
     capabilities::{Capabilities, Feature, RenderIntent},
-    creator::{self, IccCreator, IccFile, Params, ParamsData, IccCreatorData},
+    creator::{self, IccCreator, IccCreatorData, IccFile, Params, ParamsData},
     info,
     math::Primaries,
     record::{
@@ -27,8 +27,8 @@ use super::{
         PrimariesSpec, TransferFunction, chromaticity_from_wire,
     },
     state::{
-        ColorDispatch, ColorManagementGlobalData, ColorManagementState,
-        DescriptionData, DescriptionState, FeedbackData, InfoData, OutputData, SurfaceColor,
+        ColorDispatch, ColorManagementGlobalData, ColorManagementState, DescriptionData,
+        DescriptionState, FeedbackData, InfoData, OutputData, SurfaceColor,
         SurfaceColorCachedState, SurfaceData_, VERSION,
     },
 };
@@ -155,7 +155,12 @@ impl<D: ColorDispatch> Dispatch<WpColorManagerV1, (), D> for ColorManagementStat
                     );
                     return;
                 }
-                finish(state, data_init, image_description, DescriptionKind::WindowsScrgb);
+                finish(
+                    state,
+                    data_init,
+                    image_description,
+                    DescriptionKind::WindowsScrgb,
+                );
             }
 
             wp_color_manager_v1::Request::CreateWindowsBt2100 { image_description } => {
@@ -166,7 +171,12 @@ impl<D: ColorDispatch> Dispatch<WpColorManagerV1, (), D> for ColorManagementStat
                     );
                     return;
                 }
-                finish(state, data_init, image_description, DescriptionKind::WindowsBt2100);
+                finish(
+                    state,
+                    data_init,
+                    image_description,
+                    DescriptionKind::WindowsBt2100,
+                );
             }
 
             _ => {}
@@ -227,9 +237,7 @@ fn fail(object: &WpImageDescriptionV1, cause: wp_image_description_v1::Cause, me
 
 // --- MARK: output ---
 
-impl<D: ColorDispatch> Dispatch<WpColorManagementOutputV1, OutputData, D>
-    for ColorManagementState
-{
+impl<D: ColorDispatch> Dispatch<WpColorManagementOutputV1, OutputData, D> for ColorManagementState {
     fn request(
         state: &mut D,
         _client: &Client,
@@ -295,14 +303,15 @@ fn has_surface_object(surface: &wayland_server::protocol::wl_surface::WlSurface)
     })
 }
 
-fn mark_surface_object(
-    surface: &wayland_server::protocol::wl_surface::WlSurface,
-    present: bool,
-) {
+fn mark_surface_object(surface: &wayland_server::protocol::wl_surface::WlSurface, present: bool) {
     with_states(surface, |states| {
-        states.data_map.insert_if_missing_threadsafe(SurfaceObjectMarker::default);
+        states
+            .data_map
+            .insert_if_missing_threadsafe(SurfaceObjectMarker::default);
         if let Some(marker) = states.data_map.get::<SurfaceObjectMarker>() {
-            marker.0.store(present, std::sync::atomic::Ordering::Relaxed);
+            marker
+                .0
+                .store(present, std::sync::atomic::Ordering::Relaxed);
         }
     });
 }
@@ -449,9 +458,7 @@ impl<D: ColorDispatch> Dispatch<WpColorManagementSurfaceFeedbackV1, FeedbackData
             // A profile-backed preference cannot answer the parametric
             // request; the protocol expects an approximation, and refusing is
             // better than inventing one.
-            Some(description)
-                if parametric_only && description.parametric().is_none() =>
-            {
+            Some(description) if parametric_only && description.parametric().is_none() => {
                 fail(
                     &object,
                     wp_image_description_v1::Cause::Unsupported,
@@ -511,13 +518,19 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
 
         match request {
             Request::SetTfNamed { tf } => {
-                let Some(named) = tf.into_result().ok().and_then(|tf| creator::named_transfer(tf as u32))
+                let Some(named) = tf
+                    .into_result()
+                    .ok()
+                    .and_then(|tf| creator::named_transfer(tf as u32))
                 else {
                     resource.post_error(Error::InvalidTf, "unknown transfer function");
                     return;
                 };
                 if !Capabilities::for_version(resource.version()).supports_transfer(named) {
-                    resource.post_error(Error::InvalidTf, "that transfer function was not advertised");
+                    resource.post_error(
+                        Error::InvalidTf,
+                        "that transfer function was not advertised",
+                    );
                     return;
                 }
                 set_once!(params.transfer, TransferFunction::Named(named));
@@ -527,7 +540,8 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
                 if !Capabilities::for_version(resource.version())
                     .supports_feature(Feature::SetTfPower)
                 {
-                    resource.post_error(Error::UnsupportedFeature, "power curves are not supported");
+                    resource
+                        .post_error(Error::UnsupportedFeature, "power curves are not supported");
                     return;
                 }
                 // The protocol's range: 1.0 to 10.0, in ten-thousandths.
@@ -551,12 +565,22 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
             }
 
             Request::SetPrimaries {
-                r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y,
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                w_x,
+                w_y,
             } => {
                 if !Capabilities::for_version(resource.version())
                     .supports_feature(Feature::SetPrimaries)
                 {
-                    resource.post_error(Error::UnsupportedFeature, "custom primaries are not supported");
+                    resource.post_error(
+                        Error::UnsupportedFeature,
+                        "custom primaries are not supported",
+                    );
                     return;
                 }
                 set_once!(
@@ -565,7 +589,11 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
                 );
             }
 
-            Request::SetLuminances { min_lum, max_lum, reference_lum } => {
+            Request::SetLuminances {
+                min_lum,
+                max_lum,
+                reference_lum,
+            } => {
                 if !Capabilities::for_version(resource.version())
                     .supports_feature(Feature::SetLuminances)
                 {
@@ -574,12 +602,23 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
                 }
                 set_once!(
                     params.luminances,
-                    Luminances { min_scaled: min_lum, max: max_lum, reference: reference_lum }
+                    Luminances {
+                        min_scaled: min_lum,
+                        max: max_lum,
+                        reference: reference_lum
+                    }
                 );
             }
 
             Request::SetMasteringDisplayPrimaries {
-                r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y,
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                w_x,
+                w_y,
             } => {
                 if !Capabilities::for_version(resource.version())
                     .supports_feature(Feature::SetMasteringDisplayPrimaries)
@@ -669,7 +708,14 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
 }
 
 fn primaries_from_wire(
-    r_x: i32, r_y: i32, g_x: i32, g_y: i32, b_x: i32, b_y: i32, w_x: i32, w_y: i32,
+    r_x: i32,
+    r_y: i32,
+    g_x: i32,
+    g_y: i32,
+    b_x: i32,
+    b_y: i32,
+    w_x: i32,
+    w_y: i32,
 ) -> Primaries {
     Primaries {
         red: chromaticity_from_wire(r_x, r_y),
@@ -701,7 +747,11 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorIccV1, IccCreatorData, 
         }
 
         match request {
-            Request::SetIccFile { icc_profile, offset, length } => {
+            Request::SetIccFile {
+                icc_profile,
+                offset,
+                length,
+            } => {
                 if creator_state.file.is_some() {
                     resource.post_error(Error::AlreadySet, "the profile has already been set");
                     return;
@@ -710,7 +760,11 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorIccV1, IccCreatorData, 
                     resource.post_error(Error::BadSize, "the profile size is out of range");
                     return;
                 }
-                creator_state.file = Some(IccFile { fd: icc_profile, offset, length });
+                creator_state.file = Some(IccFile {
+                    fd: icc_profile,
+                    offset,
+                    length,
+                });
             }
 
             Request::Create { image_description } => {
@@ -725,10 +779,8 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorIccV1, IccCreatorData, 
                 let bytes = match creator::read_icc(&file) {
                     Ok(bytes) => bytes,
                     Err(error) => {
-                        resource.post_error(
-                            creator::icc_error(error),
-                            "the profile could not be read",
-                        );
+                        resource
+                            .post_error(creator::icc_error(error), "the profile could not be read");
                         return;
                     }
                 };
@@ -773,9 +825,7 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorIccV1, IccCreatorData, 
 
 // --- MARK: image description ---
 
-impl<D: ColorDispatch> Dispatch<WpImageDescriptionV1, DescriptionData, D>
-    for ColorManagementState
-{
+impl<D: ColorDispatch> Dispatch<WpImageDescriptionV1, DescriptionData, D> for ColorManagementState {
     fn request(
         state: &mut D,
         _client: &Client,

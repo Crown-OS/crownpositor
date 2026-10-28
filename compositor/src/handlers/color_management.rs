@@ -1,5 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
+use protocols::color_management::reexports::wp_image_description_info_v1::WpImageDescriptionInfoV1;
 use protocols::{
     color_management::{
         ColorManagementHandler, ColorManagementState,
@@ -11,10 +12,7 @@ use protocols::{
     },
     delegate_color_management,
 };
-use smithay::reexports::wayland_server::protocol::{
-    wl_output::WlOutput, wl_surface::WlSurface,
-};
-use protocols::color_management::reexports::wp_image_description_info_v1::WpImageDescriptionInfoV1;
+use smithay::reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface};
 
 use crate::state::State;
 
