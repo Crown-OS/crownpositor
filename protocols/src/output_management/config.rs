@@ -169,9 +169,7 @@ mod tests {
     #[test]
     fn a_configuration_that_turns_everything_off_is_recognised() {
         assert!(request(&[("DP-1", HeadConfig::Disabled)]).is_all_disabled());
-        assert!(
-            !request(&[("DP-1", HeadConfig::Disabled), ("DP-2", enabled())]).is_all_disabled()
-        );
+        assert!(!request(&[("DP-1", HeadConfig::Disabled), ("DP-2", enabled())]).is_all_disabled());
     }
 
     #[test]
@@ -182,7 +180,10 @@ mod tests {
     #[test]
     fn heads_are_looked_up_by_id() {
         let request = request(&[("DP-1", enabled()), ("DP-2", HeadConfig::Disabled)]);
-        assert_eq!(request.get(&HeadId::new("DP-2")), Some(&HeadConfig::Disabled));
+        assert_eq!(
+            request.get(&HeadId::new("DP-2")),
+            Some(&HeadConfig::Disabled)
+        );
         assert_eq!(request.get(&HeadId::new("HDMI-A-1")), None);
     }
 }

@@ -10,8 +10,7 @@
 
 use protocols::color_management::color_of;
 use smithay::{
-    desktop::layer_map_for_output,
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    desktop::layer_map_for_output, reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::seat::WaylandFocus,
 };
 
@@ -53,8 +52,7 @@ pub fn output_needs_color(shell: &Shell, monitor: &Monitor) -> bool {
     }
 
     let map = layer_map_for_output(monitor.output());
-    map.layers()
-        .any(|layer| is_described(layer.wl_surface()))
+    map.layers().any(|layer| is_described(layer.wl_surface()))
 }
 
 fn is_described(surface: &WlSurface) -> bool {

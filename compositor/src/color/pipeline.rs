@@ -58,11 +58,7 @@ pub struct SurfaceTransform {
 }
 
 /// The transform for content that is already in the compositing space.
-const IDENTITY_MATRIX: [[f32; 3]; 3] = [
-    [1.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0],
-    [0.0, 0.0, 1.0],
-];
+const IDENTITY_MATRIX: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 impl SurfaceTransform {
     /// What an undescribed surface gets.
@@ -72,9 +68,7 @@ impl SurfaceTransform {
     /// titlebar all take the same path as a client that said so explicitly.
     pub fn default_srgb() -> Self {
         Self::from_parts(
-            PrimariesSpec::Named(
-                protocols::color_management::record::NamedPrimaries::Srgb,
-            ),
+            PrimariesSpec::Named(protocols::color_management::record::NamedPrimaries::Srgb),
             TransferFunction::Named(NamedTransferFunction::Gamma22),
             80.0,
             80.0,
@@ -161,9 +155,7 @@ fn kind_of(transfer: TransferFunction) -> (TransferKind, f32) {
     use NamedTransferFunction as Tf;
 
     match transfer {
-        TransferFunction::Power(exponent) => {
-            (TransferKind::Power, exponent as f32 / 10_000.0)
-        }
+        TransferFunction::Power(exponent) => (TransferKind::Power, exponent as f32 / 10_000.0),
         TransferFunction::Named(named) => match named {
             Tf::ExtLinear => (TransferKind::Linear, 1.0),
             Tf::Gamma22 => (TransferKind::Power, 2.2),
@@ -204,14 +196,9 @@ fn convert_to_bt2020(source: Primaries) -> Option<[[f32; 3]; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocols::color_management::record::{
-        Luminances, NamedPrimaries, ParametricDescription,
-    };
+    use protocols::color_management::record::{Luminances, NamedPrimaries, ParametricDescription};
 
-    fn transform(
-        primaries: NamedPrimaries,
-        transfer: NamedTransferFunction,
-    ) -> SurfaceTransform {
+    fn transform(primaries: NamedPrimaries, transfer: NamedTransferFunction) -> SurfaceTransform {
         let luminances = transfer.default_luminances();
         SurfaceTransform::from_parts(
             PrimariesSpec::Named(primaries),
@@ -224,10 +211,9 @@ mod tests {
     /// Applies a transform the way the shader will, on the CPU.
     fn apply(transform: SurfaceTransform, signal: [f64; 3]) -> [f64; 3] {
         let decoded = match transform.transfer {
-            TransferKind::Hlg => super::super::transfer::hlg_rgb(
-                signal,
-                f64::from(transform.transfer_param),
-            ),
+            TransferKind::Hlg => {
+                super::super::transfer::hlg_rgb(signal, f64::from(transform.transfer_param))
+            }
             kind => signal.map(|channel| decode(kind, transform.transfer_param, channel)),
         };
 
@@ -394,7 +380,11 @@ mod tests {
         let description = registry.intern(DescriptionKind::Parametric(ParametricDescription {
             primaries: PrimariesSpec::Named(NamedPrimaries::DisplayP3),
             transfer: TransferFunction::Named(NamedTransferFunction::Gamma22),
-            luminances: Luminances { min_scaled: 2_000, max: 80, reference: 80 },
+            luminances: Luminances {
+                min_scaled: 2_000,
+                max: 80,
+                reference: 80,
+            },
             target_primaries: named::SRGB,
             target_luminance: (2_000, 80),
             max_cll: None,

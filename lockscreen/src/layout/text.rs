@@ -23,7 +23,8 @@ impl Shaper {
         let metrics = Metrics::new(run.size * scale, run.line_height * scale);
         let mut buffer = Buffer::new(&mut self.fonts, metrics);
         let attrs = Attrs::new()
-            .family(family_of(&run.family)).weight(Weight(run.weight));
+            .family(family_of(&run.family))
+            .weight(Weight(run.weight));
         let align = run.centered.then_some(Align::Center);
         let mut borrowed = buffer.borrow_with(&mut self.fonts);
         borrowed.set_wrap(if run.single_line {

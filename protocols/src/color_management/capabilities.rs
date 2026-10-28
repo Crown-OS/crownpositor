@@ -181,8 +181,7 @@ mod tests {
                 .supports_transfer(NamedTransferFunction::CompoundPower2_4)
         );
         assert!(
-            Capabilities::for_version(2)
-                .supports_transfer(NamedTransferFunction::CompoundPower2_4)
+            Capabilities::for_version(2).supports_transfer(NamedTransferFunction::CompoundPower2_4)
         );
     }
 
@@ -198,9 +197,7 @@ mod tests {
     fn absolute_no_adaptation_would_appear_only_from_version_two() {
         // Not implemented yet, so absent everywhere — but the gate is in place.
         assert_eq!(RenderIntent::AbsoluteNoAdaptation.since(), 2);
-        assert!(
-            !Capabilities::for_version(3).supports_intent(RenderIntent::AbsoluteNoAdaptation)
-        );
+        assert!(!Capabilities::for_version(3).supports_intent(RenderIntent::AbsoluteNoAdaptation));
     }
 
     #[test]

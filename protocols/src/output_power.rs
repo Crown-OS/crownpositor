@@ -101,8 +101,7 @@ impl OutputPowerState {
     }
 
     fn release(&mut self, control: &ZwlrOutputPowerV1) {
-        self.controls
-            .retain(|(_, existing)| existing != control);
+        self.controls.retain(|(_, existing)| existing != control);
     }
 }
 

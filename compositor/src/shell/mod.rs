@@ -7,12 +7,12 @@ pub mod decoration;
 pub mod dust;
 pub mod gaming;
 pub mod grab;
+pub mod lock_screen;
 pub mod monitor;
 pub mod morph;
 pub mod overview;
 pub mod popup;
 pub mod scale;
-pub mod lock_screen;
 pub mod session_lock;
 pub mod snap;
 pub mod tile;
@@ -56,11 +56,11 @@ use crate::{
         closing::{ClosingWindow, Farewell},
         decoration::resize_edge,
         grab::{moves_left, moves_top},
+        lock_screen::LockScreen,
         monitor::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
         morph::IconOrigin,
-        lock_screen::LockScreen,
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
         tile::{Chrome, Tile, WindowState},

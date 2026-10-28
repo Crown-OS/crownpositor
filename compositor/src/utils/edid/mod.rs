@@ -77,9 +77,10 @@ pub fn parse(bytes: &[u8]) -> Option<EdidInfo> {
             .monitor_name
             .clone()
             .unwrap_or_else(|| format!("{:04X}", base.product_code)),
-        serial: base.serial_string.clone().or_else(|| {
-            (base.numeric_serial != 0).then(|| base.numeric_serial.to_string())
-        }),
+        serial: base
+            .serial_string
+            .clone()
+            .or_else(|| (base.numeric_serial != 0).then(|| base.numeric_serial.to_string())),
         make: base.manufacturer,
         physical_size_mm: base.physical_size_mm,
         gamma: base.gamma,

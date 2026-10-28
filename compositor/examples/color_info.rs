@@ -72,7 +72,10 @@ fn main() {
     while app.description_ready.is_none() {
         queue.blocking_dispatch(&mut app).expect("dispatch failed");
     }
-    println!("\noutput description: {}", app.description_ready.clone().unwrap_or_default());
+    println!(
+        "\noutput description: {}",
+        app.description_ready.clone().unwrap_or_default()
+    );
 
     description.get_information(&qh, ());
     while !app.info_done {
@@ -167,7 +170,10 @@ impl Dispatch<WpImageDescriptionV1, ()> for App {
             wp_image_description_v1::Event::Ready { identity } => {
                 state.description_ready = Some(format!("ready, identity {identity}"));
             }
-            wp_image_description_v1::Event::Ready2 { identity_hi, identity_lo } => {
+            wp_image_description_v1::Event::Ready2 {
+                identity_hi,
+                identity_lo,
+            } => {
                 let identity = (u64::from(identity_hi) << 32) | u64::from(identity_lo);
                 state.description_ready = Some(format!("ready2, identity {identity}"));
             }
@@ -195,27 +201,47 @@ impl Dispatch<WpImageDescriptionInfoV1, ()> for App {
     ) {
         match event {
             wp_image_description_info_v1::Event::Primaries {
-                r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y,
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                w_x,
+                w_y,
             } => state.info.push(format!(
                 "primaries R({r_x},{r_y}) G({g_x},{g_y}) B({b_x},{b_y}) W({w_x},{w_y})"
             )),
             wp_image_description_info_v1::Event::PrimariesNamed { primaries } => {
-                state.info.push(format!("primaries named {}", describe(primaries)));
+                state
+                    .info
+                    .push(format!("primaries named {}", describe(primaries)));
             }
             wp_image_description_info_v1::Event::TfNamed { tf } => {
                 state.info.push(format!("tf named {}", describe(tf)));
             }
             wp_image_description_info_v1::Event::TfPower { eexp } => {
-                state.info.push(format!("tf power {}", f64::from(eexp) / 10_000.0));
+                state
+                    .info
+                    .push(format!("tf power {}", f64::from(eexp) / 10_000.0));
             }
             wp_image_description_info_v1::Event::Luminances {
-                min_lum, max_lum, reference_lum,
+                min_lum,
+                max_lum,
+                reference_lum,
             } => state.info.push(format!(
                 "luminances min {} max {max_lum} reference {reference_lum}",
                 f64::from(min_lum) / 10_000.0
             )),
             wp_image_description_info_v1::Event::TargetPrimaries {
-                r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y,
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                w_x,
+                w_y,
             } => state.info.push(format!(
                 "target primaries R({r_x},{r_y}) G({g_x},{g_y}) B({b_x},{b_y}) W({w_x},{w_y})"
             )),

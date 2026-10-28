@@ -404,7 +404,10 @@ mod tests {
         assert_eq!((hlg.min_scaled, hlg.max, hlg.reference), (50, 1_000, 203));
 
         let bt1886 = NamedTransferFunction::Bt1886.default_luminances();
-        assert_eq!((bt1886.min_scaled, bt1886.max, bt1886.reference), (100, 100, 100));
+        assert_eq!(
+            (bt1886.min_scaled, bt1886.max, bt1886.reference),
+            (100, 100, 100)
+        );
 
         let srgb = NamedTransferFunction::Gamma22.default_luminances();
         assert_eq!((srgb.min_scaled, srgb.max, srgb.reference), (2_000, 80, 80));
@@ -427,10 +430,38 @@ mod tests {
 
     #[test]
     fn a_luminance_range_must_be_ordered_and_contain_its_reference() {
-        assert!(Luminances { min_scaled: 2_000, max: 80, reference: 80 }.is_valid());
-        assert!(!Luminances { min_scaled: 2_000, max: 0, reference: 80 }.is_valid());
-        assert!(!Luminances { min_scaled: 2_000, max: 80, reference: 100 }.is_valid());
-        assert!(!Luminances { min_scaled: 2_000, max: 80, reference: 0 }.is_valid());
+        assert!(
+            Luminances {
+                min_scaled: 2_000,
+                max: 80,
+                reference: 80
+            }
+            .is_valid()
+        );
+        assert!(
+            !Luminances {
+                min_scaled: 2_000,
+                max: 0,
+                reference: 80
+            }
+            .is_valid()
+        );
+        assert!(
+            !Luminances {
+                min_scaled: 2_000,
+                max: 80,
+                reference: 100
+            }
+            .is_valid()
+        );
+        assert!(
+            !Luminances {
+                min_scaled: 2_000,
+                max: 80,
+                reference: 0
+            }
+            .is_valid()
+        );
     }
 
     #[test]

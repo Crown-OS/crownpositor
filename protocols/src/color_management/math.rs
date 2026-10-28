@@ -164,14 +164,15 @@ pub fn chromatic_adaptation(from: Chromaticity, to: Chromaticity) -> Option<Matr
         [0.0, 0.0, safe_ratio(target[2], source[2])],
     ];
 
-    Some(multiply(
-        multiply(invert(BRADFORD)?, ratio),
-        BRADFORD,
-    ))
+    Some(multiply(multiply(invert(BRADFORD)?, ratio), BRADFORD))
 }
 
 fn safe_ratio(numerator: f64, denominator: f64) -> f64 {
-    if denominator == 0.0 { 1.0 } else { numerator / denominator }
+    if denominator == 0.0 {
+        1.0
+    } else {
+        numerator / denominator
+    }
 }
 
 /// The full conversion from one volume's linear RGB to another's.
@@ -311,8 +312,8 @@ mod tests {
 
     #[test]
     fn adaptation_moves_one_white_point_onto_the_other() {
-        let matrix = chromatic_adaptation(named::DCI_P3.white, named::SRGB.white)
-            .expect("an adaptation");
+        let matrix =
+            chromatic_adaptation(named::DCI_P3.white, named::SRGB.white).expect("an adaptation");
         let adapted = multiply_vector(matrix, named::DCI_P3.white.to_xyz());
         let expected = named::SRGB.white.to_xyz();
 
@@ -347,6 +348,9 @@ mod tests {
 
     #[test]
     fn a_singular_matrix_cannot_be_inverted() {
-        assert_eq!(invert([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [1.0, 1.0, 1.0]]), None);
+        assert_eq!(
+            invert([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [1.0, 1.0, 1.0]]),
+            None
+        );
     }
 }

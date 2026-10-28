@@ -20,8 +20,8 @@ use wayland_protocols_wlr::gamma_control::v1::server::{
     zwlr_gamma_control_v1::{self, ZwlrGammaControlV1},
 };
 use wayland_server::{
-    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
-    backend::GlobalId, protocol::wl_output::WlOutput,
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, backend::GlobalId,
+    protocol::wl_output::WlOutput,
 };
 
 /// One lookup table per channel, each `gamma_size` entries long.
@@ -377,7 +377,9 @@ mod tests {
     #[test]
     fn the_three_channels_are_split_in_order() {
         let fd = ramp_file(&[1, 2, 10, 20, 100, 200]);
-        let ramps = read_ramps(&fd, 2).map_err(|_| ()).expect("a valid ramp file");
+        let ramps = read_ramps(&fd, 2)
+            .map_err(|_| ())
+            .expect("a valid ramp file");
 
         assert_eq!(ramps.red, vec![1, 2]);
         assert_eq!(ramps.green, vec![10, 20]);
@@ -394,7 +396,9 @@ mod tests {
     #[test]
     fn a_longer_file_is_accepted_and_the_tail_ignored() {
         let fd = ramp_file(&[1, 2, 10, 20, 100, 200, 999, 999]);
-        let ramps = read_ramps(&fd, 2).map_err(|_| ()).expect("a valid ramp file");
+        let ramps = read_ramps(&fd, 2)
+            .map_err(|_| ())
+            .expect("a valid ramp file");
         assert_eq!(ramps.blue, vec![100, 200]);
     }
 

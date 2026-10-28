@@ -164,7 +164,8 @@ impl Spring {
 
     pub fn at_rest(&self) -> bool {
         let position_tolerance = EPSILON_POS.max(self.target.abs() * f32::EPSILON * SETTLE_ULPS);
-        (self.position - self.target).abs() < position_tolerance && self.velocity.abs() < EPSILON_VEL
+        (self.position - self.target).abs() < position_tolerance
+            && self.velocity.abs() < EPSILON_VEL
     }
 
     pub fn snap_to_target(&mut self) {

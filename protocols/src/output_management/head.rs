@@ -214,8 +214,7 @@ fn update_head<D: HeadDispatch>(
         head.obj.description(snapshot.description.clone());
     }
 
-    let modes_changed =
-        previous.is_none_or(|previous| previous.modes != snapshot.modes);
+    let modes_changed = previous.is_none_or(|previous| previous.modes != snapshot.modes);
     if modes_changed {
         rebuild_modes::<D>(dh, head, snapshot);
     }
@@ -264,7 +263,10 @@ fn rebuild_modes<D: HeadDispatch>(
         }
     }
 
-    for obj in head.modes.drain(snapshot.modes.len().min(head.modes.len())..) {
+    for obj in head
+        .modes
+        .drain(snapshot.modes.len().min(head.modes.len())..)
+    {
         obj.finished();
     }
 
@@ -285,7 +287,10 @@ fn send_state(head: &HeadInstance, snapshot: &HeadSnapshot) {
         return;
     }
 
-    if let Some(mode) = snapshot.current_mode.and_then(|index| head.modes.get(index)) {
+    if let Some(mode) = snapshot
+        .current_mode
+        .and_then(|index| head.modes.get(index))
+    {
         head.obj.current_mode(mode);
     }
     head.obj.position(snapshot.position.x, snapshot.position.y);

@@ -19,5 +19,4 @@ impl OutputManagementHandler for State {
     }
 }
 
-
 delegate_output_management!(State);

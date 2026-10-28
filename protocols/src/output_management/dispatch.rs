@@ -19,8 +19,10 @@ use wayland_server::{
 use super::{
     HeadConfig, HeadId, ModeRequest, OutputConfigRequest, OutputManagementGlobalData,
     OutputManagementHandler, OutputManagementState, VERSION,
-    config::{self, PendingConfiguration, PendingConfigurationInner, PendingHeadConfiguration,
-             PendingHeadConfigurationInner},
+    config::{
+        self, PendingConfiguration, PendingConfigurationInner, PendingHeadConfiguration,
+        PendingHeadConfigurationInner,
+    },
     head::{self, HeadData, ManagerInstance, ModeData},
 };
 
@@ -93,9 +95,10 @@ impl<D: ManagementDispatch> Dispatch<ZwlrOutputManagerV1, (), D> for OutputManag
         match request {
             zwlr_output_manager_v1::Request::CreateConfiguration { id, serial } => {
                 let current = state.output_management_state().serial;
-                let obj = data_init.init(id, PendingConfiguration::new(
-                    PendingConfigurationInner::new(serial),
-                ));
+                let obj = data_init.init(
+                    id,
+                    PendingConfiguration::new(PendingConfigurationInner::new(serial)),
+                );
                 // Still initialised, because the client will destroy it and a
                 // dead object would make that a protocol error.
                 if serial != current {
@@ -479,7 +482,9 @@ fn set_once(resource: &ZwlrOutputConfigurationHeadV1, already: bool) -> bool {
 }
 
 /// smithay only converts the other way, and a client can send any integer.
-fn transform_from_wl(transform: WEnum<wayland_server::protocol::wl_output::Transform>) -> Option<Transform> {
+fn transform_from_wl(
+    transform: WEnum<wayland_server::protocol::wl_output::Transform>,
+) -> Option<Transform> {
     use wayland_server::protocol::wl_output::Transform as Wl;
 
     Some(match transform.into_result().ok()? {

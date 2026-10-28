@@ -64,8 +64,7 @@ impl Params {
             Some(mut given) => {
                 // The protocol is explicit: with PQ, `max_lum` is ignored and
                 // forced to min + 10000.
-                if self.transfer == Some(TransferFunction::Named(NamedTransferFunction::St2084Pq))
-                {
+                if self.transfer == Some(TransferFunction::Named(NamedTransferFunction::St2084Pq)) {
                     given.max = (given.min().round() as u32).saturating_add(10_000);
                 }
                 given
@@ -208,7 +207,10 @@ pub fn validate_icc_header(bytes: &[u8]) -> Result<(), &'static str> {
     match bytes[8] {
         2 | 4 => {}
         version => {
-            tracing::debug!(version, "rejecting an ICC profile that is neither v2 nor v4");
+            tracing::debug!(
+                version,
+                "rejecting an ICC profile that is neither v2 nor v4"
+            );
             return Err("only ICC v2 and v4 profiles are supported");
         }
     }
@@ -442,7 +444,10 @@ mod tests {
             NamedTransferFunction::Hlg,
             NamedTransferFunction::CompoundPower2_4,
         ] {
-            assert_eq!(named_transfer(transfer_wire_value(transfer)), Some(transfer));
+            assert_eq!(
+                named_transfer(transfer_wire_value(transfer)),
+                Some(transfer)
+            );
         }
     }
 
