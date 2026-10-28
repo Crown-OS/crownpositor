@@ -12,7 +12,7 @@ use smithay::{
 };
 
 use spacecontrol::{animations::spring::SpringProfile, scene::Canvas};
-use windowcontrol::{Direction, Metrics, Slot, Switcher, layout};
+use windowcontrol::{Direction, Metrics, Panel, Slot, Switcher, layout};
 
 use crate::{shell::monitor::Monitor, utils::id::WindowId};
 
@@ -21,7 +21,6 @@ use crate::{shell::monitor::Monitor, utils::id::WindowId};
 pub struct WindowControlIds {
     pub panel: Id,
     pub shadow: Id,
-    pub ring: Id,
 }
 
 impl Default for WindowControlIds {
@@ -29,7 +28,6 @@ impl Default for WindowControlIds {
         Self {
             panel: Id::new(),
             shadow: Id::new(),
-            ring: Id::new(),
         }
     }
 }
@@ -40,7 +38,7 @@ pub struct WindowControl {
     metrics: Metrics,
     ids: WindowControlIds,
     canvas: Option<Canvas>,
-    panel: Rectangle<f64, Logical>,
+    panel: Panel,
     slots: Vec<Slot>,
     /// Width over height of every window seen since opening, so one that has
     /// closed keeps its shape while it collapses.
@@ -95,7 +93,7 @@ impl WindowControl {
     }
 
     fn slot_at(&self, at: Point<f64, Logical>) -> Option<usize> {
-        layout::slot_at(self.panel, &self.slots, at)
+        layout::slot_at(&self.panel, &self.slots, at)
     }
 
     pub fn step(&mut self, dt: f32) {
@@ -161,23 +159,22 @@ impl WindowControl {
         &self.ids
     }
 
-    pub fn panel(&self) -> Rectangle<f64, Logical> {
-        self.panel
+    pub fn panel(&self) -> &Panel {
+        &self.panel
     }
 
     pub fn slots(&self) -> &[Slot] {
         &self.slots
     }
 
-    /// The thumbnail `window` is shown as, if it is in the strip.
-    pub fn slot_of(&self, window: WindowId) -> Option<Slot> {
-        let index = self
-            .switcher
+    /// How far `window` has come forward as the selection, 0 to 1.
+    pub fn focus_of(&self, window: WindowId) -> f64 {
+        self.switcher
             .strip()
             .entries()
             .iter()
-            .position(|entry| entry.key == window)?;
-        self.slots.get(index).copied()
+            .find(|entry| entry.key == window)
+            .map_or(0.0, |entry| entry.focus())
     }
 
     /// The point the workspace behind the strip steps back towards.

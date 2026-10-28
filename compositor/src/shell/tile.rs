@@ -83,6 +83,14 @@ impl WindowState {
     }
 }
 
+/// The band a window is drawn and hit-tested in, back to front.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackLayer {
+    Tiled,
+    Floating,
+    Fullscreen,
+}
+
 pub struct Tile {
     id: WindowId,
     window: Window,
@@ -113,6 +121,9 @@ pub struct Tile {
     /// turns decoration off entirely.
     titlebar_height: i32,
     chrome: Chrome,
+    /// Floated by the compositor's own judgement rather than by a rule: a
+    /// picker or an alert, which wants no titlebar of ours.
+    dialog: bool,
 
     anim: TileAnim,
     /// Turning into its application's icon, or back out of it.
@@ -188,6 +199,7 @@ impl Tile {
             title: String::new(),
             titlebar_height,
             chrome: Chrome::Compositor,
+            dialog: false,
             anim: TileAnim::new(Rectangle::default()),
             morph: None,
             minimized: false,
@@ -254,12 +266,35 @@ impl Tile {
     /// keeps whichever answer it will return to.
     pub fn is_decorated(&self) -> bool {
         self.titlebar_height > 0
+            && !self.dialog
             && self.chrome == Chrome::Compositor
             && match self.state {
                 WindowState::Tiled | WindowState::Fullscreen => false,
                 WindowState::Floating | WindowState::Snapped(_) => true,
                 WindowState::Maximized => self.restore_state.is_floating(),
             }
+    }
+
+    /// Whether this window lives among the floating ones. A maximized or
+    /// fullscreen window belongs wherever it will return to, so maximizing a
+    /// floating window keeps it in front rather than dropping it behind the
+    /// tiled ones.
+    pub fn floats(&self) -> bool {
+        match self.state {
+            WindowState::Floating | WindowState::Snapped(_) => true,
+            WindowState::Tiled => false,
+            WindowState::Maximized | WindowState::Fullscreen => self.restore_state.is_floating(),
+        }
+    }
+
+    pub fn stack_layer(&self) -> StackLayer {
+        if self.state == WindowState::Fullscreen {
+            StackLayer::Fullscreen
+        } else if self.floats() {
+            StackLayer::Floating
+        } else {
+            StackLayer::Tiled
+        }
     }
 
     /// Whether the compositor answers for this window's edges. Only a framed
@@ -283,6 +318,10 @@ impl Tile {
 
     pub fn set_chrome(&mut self, chrome: Chrome) {
         self.chrome = chrome;
+    }
+
+    pub fn set_dialog(&mut self, dialog: bool) {
+        self.dialog = dialog;
     }
 
     pub fn set_titlebar_height(&mut self, height: i32) {

@@ -312,8 +312,8 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
             .with_context(|| "Failed to render the output")?;
 
         present::track_primary_scanout(shell, &winit.output, &input.cursor, &result.states);
-        if shell.session_lock.is_active() {
-            shell.session_lock.output_blanked(&winit.output);
+        if shell.is_locked() {
+            shell.output_drew_locked(&winit.output);
         }
         let damage = result.damage.cloned();
         drop(elements);

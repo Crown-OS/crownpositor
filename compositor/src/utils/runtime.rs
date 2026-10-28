@@ -92,6 +92,14 @@ impl TaskSender {
         });
     }
 
+    /// Runs `task` on the compositor thread, from any thread: how a worker
+    /// that produces a stream of results hands each one over.
+    pub fn deliver(&self, task: impl FnOnce(&mut State) + Send + 'static) {
+        if self.completions.send(Box::new(task)).is_err() {
+            tracing::debug!("delivery dropped: event loop is gone");
+        }
+    }
+
     /// Fire-and-forget async work that never needs the compositor state.
     pub fn spawn<F>(&self, future: F)
     where

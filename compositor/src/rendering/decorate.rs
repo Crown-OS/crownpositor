@@ -17,7 +17,7 @@ use crate::rendering::{
 use smithay::{
     backend::renderer::{
         ImportAll, Renderer,
-        element::{Element, Id, RenderElement, utils::CropRenderElement},
+        element::{Element, Id, RenderElement, memory::MemoryRenderBufferRenderElement, utils::CropRenderElement},
         utils::CommitCounter,
     },
     utils::{Physical, Rectangle, Scale},
@@ -81,6 +81,55 @@ pub struct Shadow {
     pub commit: CommitCounter,
     pub piece: ShadowPiece,
     pub alpha: f32,
+}
+
+/// How to draw one lock-screen clock glyph: bent, blurred, and maybe glass.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlyphDraw {
+    /// Column-major: the element's own UV to the sprite's UV, which undoes
+    /// the clock's warp.
+    pub unwarp: [f32; 9],
+    /// Blur radius in sprite UV units, per axis.
+    pub reach: [f32; 2],
+    /// Frosted glass showing the background through the glyph, whose sprite
+    /// is then its coverage in white.
+    pub glass: Option<GlyphGlass>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlyphGlass {
+    /// Stable for as long as the glyph's sprite lives.
+    pub id: Id,
+    /// Where the glyph's element draws, output-local.
+    pub geometry: Rectangle<i32, Physical>,
+    /// The lock's dim, when the glass behind the clock already carries it.
+    pub dim: f32,
+    /// How white the glass washes at the glyph's top, and at its baseline.
+    pub wash: [f32; 2],
+    /// The sprite rows the glyph's top and baseline sit on.
+    pub rows: [f32; 2],
+    /// How far the lit top edge reaches, in sprite rows.
+    pub edge: f32,
+}
+
+impl GlyphDraw {
+    /// Changes whenever the draw does.
+    pub fn fingerprint(&self) -> u64 {
+        let glass = self.glass.iter().flat_map(|glass| {
+            [glass.dim, glass.edge]
+                .into_iter()
+                .chain(glass.wash)
+                .chain(glass.rows)
+        });
+        self.unwarp
+            .iter()
+            .chain(&self.reach)
+            .copied()
+            .chain(glass)
+            .fold(0xcbf2_9ce4_8422_2325, |hash, value| {
+                (hash ^ u64::from(value.to_bits())).wrapping_mul(0x0100_0000_01b3)
+            })
+    }
 }
 
 /// Applies a backend's per-window effects to a tile.
@@ -155,6 +204,30 @@ where
     /// leaves it without one.
     fn border(&mut self, renderer: &mut R, border: Border) -> Option<Self::Element> {
         let _ = (renderer, border);
+        None
+    }
+
+    /// A compositor-drawn sprite blurred by `radius` texels. `None` — the
+    /// default — lets the caller draw it sharp.
+    fn blurred_sprite(
+        &mut self,
+        renderer: &mut R,
+        sprite: MemoryRenderBufferRenderElement<R>,
+        radius: f32,
+    ) -> Option<Self::Element> {
+        let _ = (renderer, sprite, radius);
+        None
+    }
+
+    /// A lock-screen clock glyph drawn as `glyph` says. `None` — the default —
+    /// lets the caller draw it flat.
+    fn lock_glyph(
+        &mut self,
+        renderer: &mut R,
+        sprite: MemoryRenderBufferRenderElement<R>,
+        glyph: GlyphDraw,
+    ) -> Option<Self::Element> {
+        let _ = (renderer, sprite, glyph);
         None
     }
 

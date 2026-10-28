@@ -21,6 +21,7 @@ pub struct Entry<K> {
     pub key: K,
     presence: Spring,
     lift: Spring,
+    focus: Spring,
 }
 
 impl<K> Entry<K> {
@@ -29,6 +30,7 @@ impl<K> Entry<K> {
             key,
             presence: Spring::with_profile(presence, motion::ENTRY),
             lift: Spring::with_profile(0.0, motion::ENTRY),
+            focus: Spring::with_profile(0.0, motion::FOCUS),
         }
     }
 
@@ -42,12 +44,17 @@ impl<K> Entry<K> {
         f64::from(self.lift.position.clamp(0.0, 1.0))
     }
 
+    /// How far it has come forward as the selection, 0 to 1.
+    pub fn focus(&self) -> f64 {
+        f64::from(self.focus.position.clamp(0.0, 1.0))
+    }
+
     pub fn is_leaving(&self) -> bool {
         self.presence.target == 0.0
     }
 
-    fn springs(&mut self) -> [&mut Spring; 2] {
-        [&mut self.presence, &mut self.lift]
+    fn springs(&mut self) -> [&mut Spring; 3] {
+        [&mut self.presence, &mut self.lift, &mut self.focus]
     }
 }
 
@@ -83,6 +90,10 @@ impl<K: Copy + Eq> Strip<K> {
             Direction::Backward => len - 1,
         };
         self.position.hold(self.selected as f32);
+        self.focus_selected();
+        if let Some(entry) = self.entries.get_mut(self.selected) {
+            entry.focus.hold(1.0);
+        }
     }
 
     pub fn entries(&self) -> &[Entry<K>] {
@@ -133,6 +144,16 @@ impl<K: Copy + Eq> Strip<K> {
         {
             self.selected = index;
             self.position.set_target(index as f32);
+            self.focus_selected();
+        }
+    }
+
+    fn focus_selected(&mut self) {
+        let selected = self.selected;
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            entry
+                .focus
+                .set_target(f32::from(u8::from(index == selected)));
         }
     }
 
@@ -144,6 +165,7 @@ impl<K: Copy + Eq> Strip<K> {
             .hold((self.position.position + entries as f32).clamp(0.0, last));
         if let Some(nearest) = self.nearest_live(self.position.position.round() as usize) {
             self.selected = nearest;
+            self.focus_selected();
         }
     }
 
@@ -216,10 +238,11 @@ impl<K: Copy + Eq> Strip<K> {
 
     pub fn at_rest(&self) -> bool {
         self.position.at_rest()
-            && self
-                .entries
-                .iter()
-                .all(|entry| entry.presence.at_rest() && entry.lift.at_rest())
+            && self.entries.iter().all(|entry| {
+                [&entry.presence, &entry.lift, &entry.focus]
+                    .into_iter()
+                    .all(Spring::at_rest)
+            })
     }
 
     pub fn settle(&mut self) {
@@ -350,5 +373,15 @@ mod tests {
         strip.scroll(-9.0);
         assert_eq!(strip.position(), 0.0);
         assert_eq!(strip.selected_key(), Some(1));
+    }
+
+    #[test]
+    fn only_the_selection_comes_forward() {
+        let mut strip = strip(&[1, 2, 3], Direction::Forward);
+        assert_eq!(strip.entries()[1].focus(), 1.0, "opened mid-glide");
+        strip.advance(Direction::Forward);
+        settled(&mut strip);
+        let focus: Vec<_> = strip.entries().iter().map(Entry::focus).collect();
+        assert_eq!(focus, [0.0, 0.0, 1.0]);
     }
 }

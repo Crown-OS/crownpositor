@@ -554,7 +554,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
     // than parked, because waking up queues its own redraw.
     if !surface.powered {
         surface.redraw_state = RedrawState::Idle;
-        shell.session_lock.output_blanked(&surface.output);
+        shell.output_drew_locked(&surface.output);
         return released;
     }
 
@@ -681,8 +681,8 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
     {
         Ok(result) => {
             present::track_primary_scanout(shell, &surface.output, &input.cursor, &result.states);
-            if shell.session_lock.is_active() {
-                shell.session_lock.output_blanked(&surface.output);
+            if shell.is_locked() {
+                shell.output_drew_locked(&surface.output);
             }
             if let Some(feedback) = &surface.feedback {
                 present::send_dmabuf_feedback(

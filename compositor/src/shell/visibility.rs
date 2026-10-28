@@ -19,7 +19,7 @@ impl Shell {
     /// `root` is a toplevel's or a layer surface's root; anything else is
     /// hidden.
     pub fn surface_visibility(&self, root: &WlSurface) -> Visibility {
-        if self.session_lock.is_active() {
+        if self.is_locked() {
             return Visibility::HIDDEN;
         }
         match self.window_id(root) {

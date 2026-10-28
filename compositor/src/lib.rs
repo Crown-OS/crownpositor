@@ -32,6 +32,7 @@ pub fn run() -> anyhow::Result<()> {
     }
     tracing::info!(backend = state.backend.name(), "backend started");
     state.configure_capture_sync();
+    state.init_lock_screen();
 
     // Point child processes at our socket rather than the host compositor.
     // Safety: no other thread is reading the environment yet.
@@ -62,6 +63,7 @@ pub fn run() -> anyhow::Result<()> {
             state.update_pointer_focus();
             state.refresh_idle_inhibit();
             state.confirm_session_lock();
+            state.refresh_lock_screen();
             state.shell.popups.cleanup();
             state.refresh_foreign_toplevels();
             state.refresh_ext_workspaces();

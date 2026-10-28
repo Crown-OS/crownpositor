@@ -1,9 +1,11 @@
 pub mod blur;
 pub mod border;
 pub mod color;
+pub mod lock_glyph;
 pub mod nv12;
 pub mod program;
 pub mod rounded_corner;
 pub mod shadow;
+pub mod sprite_blur;
 pub mod title_bar;
 pub mod warp;

@@ -17,16 +17,31 @@ impl State {
     where
         I::GestureSwipeUpdateEvent: LinearSwipe<I>,
     {
+        if !matches!(
+            event,
+            InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
+        ) {
+            self.note_user_activity();
+        }
         if self.capture_input_event(&event) {
             return;
         }
+        if self.shell.lock_screen.is_active() && self.lock_screen_input(&event) {
+            return;
+        }
         match event {
-            // A locked session has no workspaces to swipe between and no
-            // overview to open: the lock screen is all there is.
+            // A locked session has no workspaces to swipe between, no
+            // overview to open and no client to pinch: the lock screen is all
+            // there is.
             InputEvent::GestureSwipeBegin { .. }
             | InputEvent::GestureSwipeUpdate { .. }
             | InputEvent::GestureSwipeEnd { .. }
-                if self.shell.session_lock.is_active() => {}
+            | InputEvent::GesturePinchBegin { .. }
+            | InputEvent::GesturePinchUpdate { .. }
+            | InputEvent::GesturePinchEnd { .. }
+            | InputEvent::GestureHoldBegin { .. }
+            | InputEvent::GestureHoldEnd { .. }
+                if self.shell.is_locked() => {}
             // The Alt+Tab strip scrolls its own row, before Alt turns the
             // scroll into a pinch.
             InputEvent::PointerAxis { event, .. } if self.window_control_is_open() => {
