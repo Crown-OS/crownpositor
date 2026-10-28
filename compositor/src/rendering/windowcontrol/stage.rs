@@ -1,16 +1,19 @@
-//! The workspace behind the strip, and the window leaving the strip for it.
+//! The workspace behind the panel: the selected window comes forward, full
+//! size and opaque, while every other one steps back and fades.
 
 use smithay::backend::renderer::{ImportAll, ImportMem, Renderer};
 
-use spacecontrol::scene;
-use windowcontrol::{layout, motion::SCALE_BACK};
+use windowcontrol::{
+    layout,
+    motion::{FADE_BACK, SCALE_BACK},
+};
 
 use crate::{
     rendering::{
         decorate::TileDecorator,
         painter::{Backing, Painter, Thumbnail},
     },
-    shell::monitor::Monitor,
+    shell::{monitor::Monitor, tile::Tile},
 };
 
 impl<R, D> Painter<'_, R, D>
@@ -19,50 +22,37 @@ where
     R::TextureId: Send + Clone + 'static,
     D: TileDecorator<R>,
 {
-    /// The chosen window growing from its thumbnail back to its own frame as
-    /// the strip sinks, in front of everything.
-    pub(super) fn zooming(&mut self, monitor: &Monitor) {
-        let control = monitor.window_control();
-        let Some(tile) = control
-            .switcher()
-            .committed()
-            .and_then(|id| monitor.active().tile(id))
-        else {
-            return;
-        };
-        let home = tile.render_rect();
-        let rect = control.slot_of(tile.id()).map_or(home, |slot| {
-            scene::between(home, slot.rect, control.switcher().eased())
-        });
-        self.thumbnail(Thumbnail {
-            window: tile.window(),
-            rect,
-            clip: None,
-            alpha: tile.render_alpha(),
-            backing: Backing::Glass,
-        });
-    }
-
-    /// The active workspace, stepped back by however far the strip has risen.
-    /// A fullscreen window is all of its workspace, as on the desktop.
+    /// While the panel is open, windows on their way forward are drawn over
+    /// the rest, the most forward first; once it closes the stacking order is
+    /// the desktop's again. A fullscreen window hides whatever is not forward.
     pub(super) fn stage(&mut self, monitor: &Monitor) {
         let control = monitor.window_control();
-        let factor = 1.0 - (1.0 - SCALE_BACK) * control.switcher().eased();
+        let reveal = control.switcher().eased();
         let point = control.vanishing_point();
-        let committed = control.switcher().committed();
         let workspace = monitor.active();
         let fullscreen = workspace.fullscreen();
+        let open = control.switcher().is_open();
+        let focus = |tile: &Tile| control.focus_of(tile.id());
+        let forward = |tile: &Tile| open && focus(tile) > 0.0;
 
-        for tile in workspace.stacking_order() {
-            if Some(tile.id()) == committed || fullscreen.is_some_and(|id| id != tile.id()) {
-                continue;
-            }
+        let mut front: Vec<&Tile> = workspace
+            .stacking_order()
+            .filter(|tile| forward(tile))
+            .collect();
+        front.sort_by(|a, b| focus(b).total_cmp(&focus(a)));
+        let behind = workspace.stacking_order().filter(|tile| {
+            !forward(tile) && fullscreen.is_none_or(|id| id == tile.id() || focus(tile) > 0.0)
+        });
+
+        for tile in front.into_iter().chain(behind) {
+            let back = reveal * (1.0 - focus(tile));
             self.thumbnail(Thumbnail {
                 window: tile.window(),
-                rect: layout::recede(tile.render_rect(), point, factor),
+                rect: layout::recede(tile.render_rect(), point, 1.0 - (1.0 - SCALE_BACK) * back),
                 clip: None,
-                alpha: tile.render_alpha(),
+                alpha: tile.render_alpha() * (1.0 - (1.0 - FADE_BACK) * back) as f32,
                 backing: Backing::Glass,
+                radius: None,
             });
         }
     }
