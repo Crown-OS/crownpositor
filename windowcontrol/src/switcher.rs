@@ -1,6 +1,5 @@
 //! The switcher's state machine: open, browsing, then either committed to a
-//! window or dismissed. Both endings sink the strip on the same spring; a
-//! commit also remembers which window to zoom forward while it does.
+//! window or dismissed. Both endings sink the strip on the same spring.
 
 use spacecontrol::animations::spring::{Spring, SpringProfile};
 
@@ -16,7 +15,6 @@ pub struct Switcher<K> {
     reveal: Spring,
     open: bool,
     strip: Strip<K>,
-    committed: Option<K>,
     motion: bool,
 }
 
@@ -26,7 +24,6 @@ impl<K> Default for Switcher<K> {
             reveal: Spring::with_profile(0.0, motion::RISE),
             open: false,
             strip: Strip::default(),
-            committed: None,
             motion: true,
         }
     }
@@ -41,7 +38,6 @@ impl<K: Copy + Eq> Switcher<K> {
             return false;
         }
         self.open = true;
-        self.committed = None;
         self.animate(motion::RISE, 1.0);
         true
     }
@@ -58,9 +54,9 @@ impl<K: Copy + Eq> Switcher<K> {
         if !self.open {
             return None;
         }
-        self.committed = self.strip.selected_key();
+        let committed = self.strip.selected_key();
         self.close();
-        self.committed
+        committed
     }
 
     pub fn commit_at(&mut self, index: usize) -> Option<K> {
@@ -71,7 +67,6 @@ impl<K: Copy + Eq> Switcher<K> {
     /// Sinks the strip and leaves focus where it was.
     pub fn dismiss(&mut self) {
         if self.open {
-            self.committed = None;
             self.close();
         }
     }
@@ -129,11 +124,6 @@ impl<K: Copy + Eq> Switcher<K> {
         &self.strip
     }
 
-    /// The window zooming forward, until the strip is gone.
-    pub fn committed(&self) -> Option<K> {
-        self.committed
-    }
-
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -158,24 +148,16 @@ impl<K: Copy + Eq> Switcher<K> {
     pub fn step(&mut self, dt: f32) {
         self.reveal.step(dt);
         self.strip.step(dt);
-        self.forget_when_gone();
     }
 
     pub fn settle(&mut self) {
         self.reveal.snap_to_target();
         self.strip.settle();
-        self.forget_when_gone();
     }
 
     pub fn set_profile(&mut self, profile: Option<SpringProfile>) {
         self.motion = profile.is_some();
         self.land();
-    }
-
-    fn forget_when_gone(&mut self) {
-        if !self.is_visible() {
-            self.committed = None;
-        }
     }
 }
 
@@ -214,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn committing_hands_back_the_selection_and_zooms_it_until_gone() {
+    fn committing_hands_back_the_selection_and_sinks_the_strip() {
         let mut switcher = Switcher::default();
         switcher.open([1, 2, 3], Direction::Forward);
         settled(&mut switcher);
@@ -222,11 +204,9 @@ mod tests {
 
         assert_eq!(switcher.commit(), Some(3));
         assert!(!switcher.is_open());
-        assert_eq!(switcher.committed(), Some(3));
 
         settled(&mut switcher);
         assert!(!switcher.is_visible());
-        assert_eq!(switcher.committed(), None);
     }
 
     #[test]
@@ -234,7 +214,6 @@ mod tests {
         let mut switcher = Switcher::default();
         switcher.open([1, 2], Direction::Forward);
         switcher.dismiss();
-        assert_eq!(switcher.committed(), None);
         assert_eq!(switcher.commit(), None);
     }
 

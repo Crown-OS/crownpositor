@@ -9,21 +9,30 @@ pub const RISE: SpringProfile = SpringProfile {
     damping: 25.8,
 };
 
-/// The strip sinking and the chosen window zooming forward. Critically damped:
-/// a window landing on its own frame must not overshoot it.
+/// The strip sinking. Critically damped: the workspace stepping back into
+/// place must not overshoot it.
 pub const SINK: SpringProfile = SpringProfile {
     stiffness: 400.0,
     damping: 40.0,
 };
 
-/// The row gliding to a new selection, ~150 ms to arrive.
+/// The row gliding to a new selection, ~250 ms to arrive.
 pub const SELECT: SpringProfile = SpringProfile {
-    stiffness: 1000.0,
-    damping: 63.25,
+    stiffness: 500.0,
+    damping: 44.72,
+};
+
+/// A card and its window coming forward as the selection, or stepping back.
+pub const FOCUS: SpringProfile = SpringProfile {
+    stiffness: 260.0,
+    damping: 32.25,
 };
 
 /// Entries arriving and leaving, and the hover lift.
 pub const ENTRY: SpringProfile = SpringProfile::SNAPPY;
 
-/// How far the workspace behind the strip steps back, as a scale factor.
+/// How far the windows behind the strip step back, as a scale factor.
 pub const SCALE_BACK: f64 = 0.94;
+
+/// How opaque the windows behind the strip are while another is selected.
+pub const FADE_BACK: f64 = 0.3;
