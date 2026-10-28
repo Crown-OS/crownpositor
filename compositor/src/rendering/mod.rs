@@ -19,11 +19,14 @@ pub mod element;
 pub mod framebuffer;
 pub mod fullscreen;
 pub mod lock;
+mod lock_glyph;
+pub mod lock_screen;
 mod morph;
 pub mod overview;
 mod painter;
 pub mod popup;
 pub mod rounded;
+pub mod shaded_sprite;
 pub mod snapshot;
 pub mod sources;
 pub mod surface_tree;
@@ -166,8 +169,21 @@ where
     );
 
     // A locked session draws the lock and nothing else, whatever mode the
-    // desktop behind it was in.
-    if shell.session_lock.is_active() {
+    // desktop behind it was in — until an accepted password lets the desktop
+    // show through as the lock lifts.
+    if let Some(lock) = shell.lock_screen.active() {
+        let reveal = lock_screen::lock_screen_elements::<R, D>(
+            &mut elements,
+            lock,
+            monitor,
+            renderer,
+            decorator,
+            scale,
+        );
+        if !reveal {
+            return elements;
+        }
+    } else if shell.session_lock.is_active() {
         lock::lock_elements::<R, D>(&mut elements, &shell.session_lock, monitor, renderer, scale);
         return elements;
     }
@@ -1235,7 +1251,7 @@ fn surface_effect_elements<R, D>(
     }
 }
 
-fn layer_elements<R, D>(
+pub(crate) fn layer_elements<R, D>(
     elements: &mut Elements<R, D>,
     monitor: &Monitor,
     renderer: &mut R,

@@ -20,7 +20,7 @@ use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
     shell::tile::WindowState,
-    state::State,
+    state::{State, lock_screen::LockReason},
 };
 
 impl State {
@@ -36,6 +36,11 @@ impl State {
 
             Action::ReloadConfig => {
                 self.apply_config(Config::load());
+            }
+
+            Action::Lock => {
+                self.lock_screen(LockReason::Requested);
+                return;
             }
 
             Action::Spawn(argv) => {
@@ -218,7 +223,7 @@ impl State {
         // left and hears nothing more until it closes. Handing that leave over
         // is also what takes the cursor back: a client that had hidden it has
         // no say over the pointer any more.
-        let under = match self.mode_owns_input() {
+        let under = match self.mode_owns_input() || self.shell.lock_screen.is_active() {
             true => {
                 if self.input.cursor.reclaim() {
                     self.queue_pointer_redraw();
@@ -272,6 +277,7 @@ impl State {
         self.shell.apply_output_settings(&self.config.current);
         self.refresh_output_heads();
         self.sync_background_effect_capabilities();
+        self.lock_scene_changed();
         // The next refresh turns the dirty bits above into one relayout.
     }
 
@@ -357,6 +363,14 @@ impl State {
                 self.apply_display_gamma();
             }
             Update::Glass(glass) => config.glass = glass,
+            Update::Lock(lock) => {
+                config.lock = *lock;
+                self.lock_scene_changed();
+            }
+            Update::Theme(theme) => {
+                config.theme = *theme;
+                self.lock_scene_changed();
+            }
         }
 
         self.queue_redraw();

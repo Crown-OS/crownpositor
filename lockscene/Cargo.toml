@@ -1,0 +1,14 @@
+[package]
+name = "lockscene"
+description = "The lock screen scene crownplugind hands the compositor, and the rules it must pass"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
+crownos-config = { workspace = true }
+crownplugin-view = { path = "../../crownos-plugins/view" }
+postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
+serde = { workspace = true }
+sha2 = "0.10.9"
+thiserror = { workspace = true }

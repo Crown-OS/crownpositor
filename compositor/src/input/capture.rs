@@ -106,6 +106,11 @@ impl State {
 
     /// Takes `event` if a capture wants it. Returns whether it was taken.
     pub(super) fn capture_input_event<I: InputBackend>(&mut self, event: &InputEvent<I>) -> bool {
+        // Nothing typed at a lock screen may leave the machine.
+        if self.shell.is_locked() {
+            self.end_input_capture(None);
+            return false;
+        }
         if self.input.capture.active.is_some() {
             return self.forward_captured(event);
         }

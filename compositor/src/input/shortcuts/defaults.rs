@@ -87,6 +87,7 @@ pub fn bindings() -> impl Iterator<Item = (Keybind, Action)> {
     let fixed = [
         (SUPER_SHIFT, KeyCode::E, Action::Quit),
         (SUPER_SHIFT, KeyCode::C, Action::ReloadConfig),
+        (SUPER_CTRL, KeyCode::Q, Action::Lock),
         (
             SUPER,
             KeyCode::Enter,

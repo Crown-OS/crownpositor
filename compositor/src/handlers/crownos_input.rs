@@ -22,8 +22,12 @@ impl InputHandler for State {
         &mut self.wayland.crownos_input_state
     }
 
+    /// Refused while locked: a remote client may not type at, or click
+    /// through, the lock screen.
     fn inject_input(&mut self, frame: InjectedFrame) {
-        self.apply_injected_frame(frame);
+        if !self.shell.is_locked() {
+            self.apply_injected_frame(frame);
+        }
     }
 
     fn arm_input_capture(&mut self, capture: &InputCapture, edges: Edge) {

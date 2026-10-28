@@ -47,12 +47,14 @@
 mod backdrop;
 mod cache;
 mod content;
+mod glass_glyph;
 mod glow;
 mod scene;
 mod stack;
 
 pub use backdrop::BlurBackdrop;
 pub use cache::{BlurCache, BlurSession};
+pub use glass_glyph::GlassGlyph;
 pub use glow::{GlassKind, Shading};
 
 use glow::Rims;
