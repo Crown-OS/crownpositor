@@ -36,6 +36,7 @@ where
             clip: None,
             alpha: tile.render_alpha(),
             backing: Backing::Glass,
+            radius: None,
         });
     }
 
@@ -79,6 +80,7 @@ where
                     clip: None,
                     alpha: tile.render_alpha(),
                     backing: Backing::Glass,
+                    radius: None,
                 });
             }
         }

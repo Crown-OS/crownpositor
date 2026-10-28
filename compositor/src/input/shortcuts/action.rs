@@ -91,6 +91,8 @@ pub enum Action {
 
     Quit,
     ReloadConfig,
+    /// Puts the lock screen up.
+    Lock,
     Spawn(Vec<String>),
 
     SwitchVt(i32),
@@ -188,6 +190,7 @@ impl FromStr for Action {
             "none" => Ok(Self::None),
             "quit" | "exit" => Ok(Self::Quit),
             "reload-config" => Ok(Self::ReloadConfig),
+            "lock" => Ok(Self::Lock),
 
             "spawn" => {
                 let argv: Vec<String> = parts.map(str::to_owned).collect();

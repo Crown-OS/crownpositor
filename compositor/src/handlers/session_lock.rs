@@ -22,11 +22,13 @@ impl SessionLockHandler for State {
             monitor.window_control_mut().dismiss();
         }
         self.shell.session_lock.begin(confirmation);
+        self.announce_lock_state();
         self.queue_redraw();
     }
 
     fn unlock(&mut self) {
         self.shell.session_lock.end();
+        self.announce_lock_state();
         tracing::info!("session unlocked");
         self.update_keyboard_focus();
         self.queue_redraw();

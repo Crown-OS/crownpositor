@@ -9,8 +9,8 @@ use std::sync::Arc;
 use crownos_config::{
     Appearance, Display, Key, Subscription,
     schema::{
-        Binding, GamingOptions, Glass, OutputLayout, OutputSetting, WorkspaceMode, compositor,
-        keybinds,
+        Binding, GamingOptions, Glass, Lock, OutputLayout, OutputSetting, Theme, WorkspaceMode,
+        compositor, keybinds,
     },
     subscribe_key, subscribe_typed,
 };
@@ -33,6 +33,8 @@ pub enum Update {
     Appearance(Appearance),
     Display(Display),
     Glass(Glass),
+    Lock(Box<Lock>),
+    Theme(Box<Theme>),
 }
 
 /// The live subscriptions. Dropping it stops every one of them.
@@ -65,6 +67,8 @@ impl Watch {
                 section(&sink, Appearance::SECTION, Update::Appearance),
                 section(&sink, Display::SECTION, Update::Display),
                 section(&sink, Glass::SECTION, Update::Glass),
+                section(&sink, Lock::SECTION, |lock| Update::Lock(Box::new(lock))),
+                section(&sink, Theme::SECTION, |theme| Update::Theme(Box::new(theme))),
             ],
         }
     }

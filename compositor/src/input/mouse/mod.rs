@@ -153,7 +153,7 @@ impl State {
     /// has a hole in its bounding box where nothing is drawn. A pointer that
     /// has left every output is pulled to the nearest point on the nearest
     /// one instead.
-    fn clamp_to_outputs(&self, location: Point<f64, Logical>) -> Point<f64, Logical> {
+    pub(crate) fn clamp_to_outputs(&self, location: Point<f64, Logical>) -> Point<f64, Logical> {
         let mut nearest: Option<(f64, Point<f64, Logical>)> = None;
 
         for geometry in self.shell.monitors().iter().map(Monitor::geometry) {

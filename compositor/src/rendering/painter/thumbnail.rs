@@ -42,6 +42,9 @@ pub(in crate::rendering) struct Thumbnail<'a> {
     pub clip: Option<Rectangle<i32, Physical>>,
     pub alpha: f32,
     pub backing: Backing,
+    /// Its corner radius in physical pixels, if not the window's own shrunk
+    /// with it: a card concentric with the panel it sits on.
+    pub radius: Option<f32>,
 }
 
 impl<R, D> Painter<'_, R, D>
@@ -70,7 +73,9 @@ where
             thumb.rect.size.w / f64::from(geometry.size.w),
             thumb.rect.size.h / f64::from(geometry.size.h),
         ));
-        let radius = self.radius * shrink.x.min(shrink.y) as f32;
+        let radius = thumb
+            .radius
+            .unwrap_or(self.radius * shrink.x.min(shrink.y) as f32);
 
         // The geometry's corner lands on the rect's; the client's own origin
         // sits the geometry's offset before it.

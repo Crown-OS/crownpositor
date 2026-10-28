@@ -16,6 +16,7 @@ pub mod crownos_agent_access;
 pub mod crownos_app_icons;
 pub mod crownos_background_effects;
 pub mod crownos_input;
+pub mod crownos_plugin_host;
 pub mod crownos_screencast;
 pub mod crownos_surface_animation;
 pub mod crownos_surface_visibility;

@@ -283,7 +283,15 @@ impl State {
                 .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         // Structural heuristics apply only where the config is silent, so a rule
         // can always force a dialog back into the tiling.
-        if rules.floating.is_none() && auto_float(parent.is_some(), min_size, max_size, area.size) {
+        let dialog = rules.floating.is_none()
+            && auto_float(
+                app_id.as_deref(),
+                parent.is_some(),
+                min_size,
+                max_size,
+                area.size,
+            );
+        if dialog {
             rules.floating = Some(true);
         }
         // A window born mid-drag rides the cursor until it is dropped.
@@ -305,6 +313,7 @@ impl State {
         );
         tile.set_size_hints(min_size, max_size);
         tile.set_chrome(requested_chrome(&toplevel));
+        tile.set_dialog(dialog);
         // A fixed-size window that draws its own frame is an alert or a picker.
         let alert =
             min_size != Size::default() && min_size == max_size && tile.chrome() == Chrome::Client;
@@ -372,13 +381,26 @@ impl State {
     }
 }
 
+const PORTAL_APP_ID_PREFIXES: [&str; 2] =
+    ["xdg-desktop-portal", "org.freedesktop.impl.portal.desktop."];
+
 /// Structural reasons a toplevel should float, ahead of any config rule.
 fn auto_float(
+    app_id: Option<&str>,
     has_parent: bool,
     min: Size<i32, Logical>,
     max: Size<i32, Logical>,
     area: Size<i32, Logical>,
 ) -> bool {
+    // The file chooser and friends, which run as their own process and so have
+    // no parent to be transient for.
+    if app_id.is_some_and(|app_id| {
+        PORTAL_APP_ID_PREFIXES
+            .iter()
+            .any(|prefix| app_id.starts_with(prefix))
+    }) {
+        return true;
+    }
     // A transient toplevel: Blender's Preferences window, GIMP's dialogs, every
     // "Save As" that is a toplevel rather than a popup.
     if has_parent {
@@ -462,25 +484,42 @@ mod tests {
     #[test]
     fn a_transient_toplevel_floats() {
         // Blender's Preferences window, GIMP's dialogs, most "Save As".
-        assert!(auto_float(true, unset(), unset(), area()));
+        assert!(auto_float(None, true, unset(), unset(), area()));
+    }
+
+    #[test]
+    fn a_portal_picker_floats() {
+        for app_id in [
+            "xdg-desktop-portal-gtk",
+            "org.freedesktop.impl.portal.desktop.kde",
+        ] {
+            assert!(auto_float(Some(app_id), false, unset(), unset(), area()));
+        }
+        assert!(!auto_float(
+            Some("org.gnome.Nautilus"),
+            false,
+            unset(),
+            unset(),
+            area()
+        ));
     }
 
     #[test]
     fn a_fixed_size_toplevel_floats() {
         let fixed = Size::from((400, 300));
-        assert!(auto_float(false, fixed, fixed, area()));
+        assert!(auto_float(None, false, fixed, fixed, area()));
     }
 
     #[test]
     fn a_small_max_size_reads_as_a_dialog() {
-        assert!(auto_float(false, unset(), (400, 300).into(), area()));
+        assert!(auto_float(None, false, unset(), (400, 300).into(), area()));
     }
 
     #[test]
     fn an_ordinary_window_tiles() {
-        assert!(!auto_float(false, unset(), unset(), area()));
+        assert!(!auto_float(None, false, unset(), unset(), area()));
         assert!(
-            !auto_float(false, (400, 300).into(), unset(), area()),
+            !auto_float(None, false, (400, 300).into(), unset(), area()),
             "a minimum size alone is not a dialog"
         );
     }
@@ -488,6 +527,12 @@ mod tests {
     #[test]
     fn a_large_max_size_still_tiles() {
         // A window that merely caps itself below the screen is not a dialog.
-        assert!(!auto_float(false, unset(), (1600, 900).into(), area()));
+        assert!(!auto_float(
+            None,
+            false,
+            unset(),
+            (1600, 900).into(),
+            area()
+        ));
     }
 }

@@ -4,8 +4,8 @@ pub mod watch;
 
 pub use crownos_config::schema::{
     AnimationProfile, Binding, CloseAnimation, Compositor, EdgeGlow, GamingOptions,
-    Glass as GlassSettings, MinimizeAnimation, OutputLayout, OutputSetting, OutputTransform, Vrr,
-    WindowRule, WorkspaceMode,
+    Glass as GlassSettings, Lock, MinimizeAnimation, OutputLayout, OutputSetting, OutputTransform,
+    Theme, Vrr, WindowRule, WorkspaceMode,
 };
 pub use crownos_config::{Appearance, Display, Keybinds};
 pub use rules::{ResolvedRule, WindowRules};
@@ -21,6 +21,8 @@ pub struct Config {
     pub appearance: Appearance,
     pub display: Display,
     pub glass: GlassSettings,
+    pub lock: Lock,
+    pub theme: Theme,
     pub window_rules: WindowRules,
 }
 
@@ -36,6 +38,8 @@ impl Config {
             appearance: load(Appearance::SECTION),
             display: load(Display::SECTION),
             glass: load(GlassSettings::SECTION),
+            lock: load(Lock::SECTION),
+            theme: load(Theme::SECTION),
         }
     }
 

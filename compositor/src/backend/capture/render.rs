@@ -379,6 +379,12 @@ where
             origin: placement.area.loc,
         })
     };
+    // A window or a workspace is captured off screen; while locked it is
+    // nothing at all, or a recording would carry on past the lock.
+    let locked = shell.is_locked() && !matches!(placement.view, View::Output);
+    if locked {
+        return Elements::<R, R::Decorator<'frame>>::new();
+    }
     match placement.view {
         View::Window(tile) => window_elements(
             shell,

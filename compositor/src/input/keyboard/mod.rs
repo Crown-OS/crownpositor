@@ -10,7 +10,7 @@ use smithay::{
 
 use crate::{
     input::shortcuts::{Action, ModMask},
-    state::State,
+    state::{State, lock_screen},
 };
 
 fn vt_switch_target(handle: &KeysymHandle<'_>) -> Option<i32> {
@@ -54,7 +54,8 @@ impl State {
 
         // A lock screen must not be able to Super+Q out of itself.
         let inhibited = self.shortcuts_inhibited();
-        let bypass = inhibited || self.shell.session_lock.is_active();
+        let bypass = inhibited || self.shell.is_locked();
+        let mut lock_press = None;
 
         let action = keyboard.input::<Action, _>(
             self,
@@ -106,6 +107,17 @@ impl State {
                             return FilterResult::Intercept(control);
                         }
 
+                        // The lock screen takes every other key, and only the
+                        // lock screen: no client and no shortcut hears it.
+                        if state.shell.lock_screen.is_active() {
+                            state.input.intercepted.insert(handle.raw_code());
+                            lock_press = Some((
+                                lock_screen::key_input(modifiers, &handle),
+                                modifiers.caps_lock,
+                            ));
+                            return FilterResult::Intercept(Action::None);
+                        }
+
                         // An open overview owns the keyboard: the windows
                         // behind it are pictures of windows, not somewhere to
                         // type. Escape closes it, everything else is swallowed
@@ -145,6 +157,11 @@ impl State {
                         }
                     }
                     KeyState::Released => {
+                        // Caps Lock latches on its press, so the lock screen
+                        // learns of it on the release.
+                        if state.shell.lock_screen.is_active() {
+                            lock_press = Some((None, modifiers.caps_lock));
+                        }
                         // Swallow the release of an intercepted press, or the
                         // client sees a release with no matching press.
                         if state.input.intercepted.remove(&handle.raw_code()) {
@@ -156,6 +173,11 @@ impl State {
                 }
             },
         );
+
+        if let Some((input, caps_lock)) = lock_press {
+            self.on_lock_key(input, caps_lock);
+            return;
+        }
 
         if key_state == KeyState::Released && !self.alt_held() {
             self.end_scroll_pinch(time);

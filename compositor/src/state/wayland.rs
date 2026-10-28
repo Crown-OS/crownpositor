@@ -60,6 +60,7 @@ use protocols::{
     background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
     color_management::ColorManagementState,
     crownos_agent_access::AgentAccessState,
+    crownos_plugin_host::PluginHostState,
     crownos_app_icons::{AppIconsState, Launches},
     crownos_background_effects::{
         BackgroundEffectsState as CrownosBackgroundEffectsState,
@@ -92,6 +93,9 @@ pub struct WaylandState {
     pub agent_access_state: AgentAccessState,
     /// Who answers `crownos_agent_access_v1` requests.
     pub agent_access_policy: AgentAccessPolicy,
+    /// `crownos_plugin_host_v1`. Privileged: crownplugind's lock scene and
+    /// compositor actions.
+    pub plugin_host_state: PluginHostState,
     pub appmenu_state: AppmenuState,
     pub background_effect_state: BackgroundEffectState,
     /// `wp_color_management_v1`. Unprivileged: any client may describe its own
@@ -244,6 +248,7 @@ impl WaylandState {
         Ok(Self {
             agent_access_state: AgentAccessState::new::<State, _>(display, is_privileged),
             agent_access_policy: AgentAccessPolicy::from_env(),
+            plugin_host_state: PluginHostState::new::<State, _>(display, is_privileged),
             // Everything the renderer can do, which the config then narrows
             // to what it will do — see
             // `State::sync_background_effect_capabilities`. A renderer whose

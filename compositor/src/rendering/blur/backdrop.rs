@@ -23,11 +23,15 @@ use crate::{
             cache::{BlurSession, Halo},
             content::ContentDamage,
             scene::{BlurScene, grow},
+            stack::GlassStack,
         },
         decorate::Backdrop,
         framebuffer::FramebufferSpace,
     },
-    shaders::blur::{BlurShaders, KawaseProgram},
+    shaders::{
+        blur::{BlurShaders, KawaseProgram},
+        lock_glyph::Frost,
+    },
     utils::region,
 };
 
@@ -69,6 +73,30 @@ impl BlurBackdrop {
         session: &mut BlurSession<'_>,
         params: Backdrop,
     ) -> Option<Self> {
+        Self::stacked(renderer, session, params, GlassStack::occlude)
+    }
+
+    /// Glass that never hides what is behind it from the glass built after
+    /// it: a shape cut finer than its rectangle, like a glyph, covers too
+    /// little of it to claim any.
+    pub(super) fn see_through(
+        renderer: &mut GlesRenderer,
+        session: &mut BlurSession<'_>,
+        params: Backdrop,
+    ) -> Option<Self> {
+        Self::stacked(renderer, session, params, |_, _, _| Vec::new())
+    }
+
+    fn stacked(
+        renderer: &mut GlesRenderer,
+        session: &mut BlurSession<'_>,
+        params: Backdrop,
+        occlude: impl FnOnce(
+            &mut GlassStack,
+            &Backdrop,
+            Rectangle<i32, Physical>,
+        ) -> Vec<Rectangle<i32, Physical>>,
+    ) -> Option<Self> {
         let shaders = BlurShaders::get(renderer)?;
         let geometry = params.geometry.intersection(session.output)?;
 
@@ -96,7 +124,7 @@ impl BlurBackdrop {
             .inspect_err(|err| tracing::warn!(%err, "failed to allocate a blur pyramid"))
             .ok()?;
         scene.stand(geometry);
-        let occluders = session.cache.stack().occlude(&params, geometry);
+        let occluders = occlude(session.cache.stack(), &params, geometry);
         let halo = session.cache.halo(&params.id);
         let content = session.cache.content();
 
@@ -150,6 +178,34 @@ impl BlurBackdrop {
             Some(&self.shaders.finish),
             &uniforms,
         )
+    }
+
+    /// Lifts and blurs what lies under `dst` without drawing it, for glass of
+    /// another shape that samples the pyramid's top level itself. `None` when
+    /// there is nothing to sample.
+    pub(super) fn prepare(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> Result<Option<(ffi::types::GLuint, Frost)>, GlesError> {
+        let Some(top) = self.scene.levels.first() else {
+            return Ok(None);
+        };
+        let projection = *frame.projection();
+        let blurred = frame
+            .with_context(|gl| unsafe { self.blur(gl, projection, dst, damage) })?
+            .is_some();
+        self.owe_halo(dst, damage);
+        let scene = self.scene.scene.size();
+        Ok(blurred.then(|| {
+            let frost = Frost {
+                scene: [scene.w as f32, scene.h as f32],
+                half_pixel: half_pixel(top.size(), scene),
+                offset: self.config.offset.max(0.0),
+            };
+            (top.tex_id(), frost)
+        }))
     }
 
     /// `damage` without the parts an opaque piece of glass in front of this

@@ -1,6 +1,28 @@
 [package]
 name = "lockscreen"
+description = "The CrownOS lock screen: its flow, transitions, layout and pixels, shared by the compositor and Settings"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+# Password checks through libpam. Off for hosts that only preview the screen.
+pam = []
+
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash", "fontconfig"] }
+crownos-config = { workspace = true }
+crownplugin-view = { path = "../../crownos-plugins/view", features = ["icons"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+libc = "0.2.189"
+lockscene = { path = "../lockscene" }
+resvg = { version = "0.48.1", default-features = false }
+taffy = { version = "0.14.0", default-features = false, features = ["std", "flexbox", "grid", "taffy_tree", "content_size"] }
+thiserror = { workspace = true }
+tiny-skia = "0.12.0"
+zeroize = "1.8.2"
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tiny-skia = { version = "0.12.0", features = ["png-format"] }

@@ -25,6 +25,8 @@ features = [
 
 [dependencies]
 config = { path = "../config" }
+lockscreen = { path = "../lockscreen", features = ["pam"] }
+crownplugin-view = { path = "../../crownos-plugins/view" }
 protocols = { path = "../protocols" }
 spacecontrol = { path = "../spacecontrol" }
 windowcontrol = { path = "../windowcontrol" }
@@ -49,6 +51,7 @@ skrifa = "0.40"
 # decide *which* shape to draw, not how to find or decode it.
 xcursor = "0.3.11"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash", "fontconfig", "sys-locale"] }
+futures-util = { version = "0.3.34", default-features = false }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }
 resvg = { version = "0.48.1", default-features = false }

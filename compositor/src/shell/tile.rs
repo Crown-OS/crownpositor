@@ -121,6 +121,9 @@ pub struct Tile {
     /// turns decoration off entirely.
     titlebar_height: i32,
     chrome: Chrome,
+    /// Floated by the compositor's own judgement rather than by a rule: a
+    /// picker or an alert, which wants no titlebar of ours.
+    dialog: bool,
 
     anim: TileAnim,
     /// Turning into its application's icon, or back out of it.
@@ -196,6 +199,7 @@ impl Tile {
             title: String::new(),
             titlebar_height,
             chrome: Chrome::Compositor,
+            dialog: false,
             anim: TileAnim::new(Rectangle::default()),
             morph: None,
             minimized: false,
@@ -262,6 +266,7 @@ impl Tile {
     /// keeps whichever answer it will return to.
     pub fn is_decorated(&self) -> bool {
         self.titlebar_height > 0
+            && !self.dialog
             && self.chrome == Chrome::Compositor
             && match self.state {
                 WindowState::Tiled | WindowState::Fullscreen => false,
@@ -313,6 +318,10 @@ impl Tile {
 
     pub fn set_chrome(&mut self, chrome: Chrome) {
         self.chrome = chrome;
+    }
+
+    pub fn set_dialog(&mut self, dialog: bool) {
+        self.dialog = dialog;
     }
 
     pub fn set_titlebar_height(&mut self, height: i32) {

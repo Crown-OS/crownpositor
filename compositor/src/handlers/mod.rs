@@ -32,6 +32,7 @@ mod pointer_constraints;
 pub mod seat;
 mod security_context;
 mod selection;
+mod plugin_host;
 mod session_lock;
 mod shm;
 mod tearing_control;

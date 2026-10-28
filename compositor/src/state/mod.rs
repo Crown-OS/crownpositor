@@ -9,6 +9,7 @@ mod cursor;
 mod display;
 mod idle;
 mod input;
+pub mod lock_screen;
 pub mod outputs;
 mod overview;
 pub mod session_env;
@@ -62,6 +63,8 @@ pub struct State {
     pub capture: CaptureState,
     /// Outputs `crownos_virtual_output_v1` clients created.
     pub virtual_outputs: VirtualOutputs,
+    /// The built-in lock screen's scene, fonts and password checker.
+    pub lock: lock_screen::LockScreenState,
 }
 
 impl State {
@@ -169,6 +172,7 @@ impl State {
             text: TextRenderer::new(),
             capture: CaptureState::default(),
             virtual_outputs: VirtualOutputs::default(),
+            lock: lock_screen::LockScreenState::default(),
         };
         // The global was created advertising everything the renderer can do;
         // the config gets the first word on what it will actually do.

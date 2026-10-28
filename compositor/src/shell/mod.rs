@@ -12,6 +12,7 @@ pub mod morph;
 pub mod overview;
 pub mod popup;
 pub mod scale;
+pub mod lock_screen;
 pub mod session_lock;
 pub mod snap;
 pub mod tile;
@@ -59,6 +60,7 @@ use crate::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
         morph::IconOrigin,
+        lock_screen::LockScreen,
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
         tile::{Chrome, Tile, WindowState},
@@ -272,6 +274,8 @@ pub struct Shell {
     /// `ext-session-lock-v1`: while active, the only thing drawn and the only
     /// thing that hears input.
     pub session_lock: SessionLock,
+    /// The compositor's own lock screen.
+    pub lock_screen: LockScreen,
     /// Every window's menubar, and whichever one is open. Here rather than on
     /// `State` because hit-testing has to see it: an open menu is on top of
     /// every window, and a click has to reach it before anything else.
@@ -310,6 +314,7 @@ impl Shell {
             snap_previews: SnapPreviews::default(),
             toplevel_drag: None,
             session_lock: SessionLock::default(),
+            lock_screen: LockScreen::default(),
             menus: Menus::default(),
             surface_animations: SurfaceAnimations::default(),
         })
@@ -647,6 +652,9 @@ impl Shell {
     /// typeable, and before it maps, nothing at all is.
     pub fn keyboard_focus(&self) -> Option<KeyboardFocusTarget> {
         let focused = self.focused_output();
+        if self.lock_screen.is_active() {
+            return None;
+        }
         if self.session_lock.is_active() {
             return focused
                 .and_then(|output| self.session_lock.surface_on(output))
@@ -1038,6 +1046,9 @@ impl Shell {
         let origin = monitor.geometry().loc;
         let local = location - origin.to_f64();
 
+        if self.lock_screen.is_active() {
+            return None;
+        }
         if self.session_lock.is_active() {
             let lock = self.session_lock.surface_on(output)?;
             let (surface, offset) =
@@ -1682,10 +1693,23 @@ impl Shell {
         }
     }
 
+    /// Whether the desktop is hidden and deaf to input, by either lock.
+    pub fn is_locked(&self) -> bool {
+        self.lock_screen.is_active() || self.session_lock.is_active()
+    }
+
+    /// Records that `output` drew a frame while locked: what both locks wait
+    /// on before telling anyone the screen is safe.
+    pub fn output_drew_locked(&mut self, output: &Output) {
+        self.session_lock.output_blanked(output);
+        self.lock_screen.output_blanked(output);
+    }
+
     /// Short-circuits on the first moving spring, because this is asked once per
     /// frame to decide whether to schedule another.
     pub fn is_animating(&self) -> bool {
-        self.snap_previews.is_animating()
+        self.lock_screen.is_animating(std::time::Instant::now())
+            || self.snap_previews.is_animating()
             || self.surface_animations.is_animating()
             || self.monitors.iter().any(|monitor| {
                 monitor.is_switching()

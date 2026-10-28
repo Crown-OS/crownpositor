@@ -17,7 +17,10 @@
 
 use smithay::{
     backend::renderer::{
-        element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
+        element::{
+            Element, Id, Kind, RenderElement, UnderlyingStorage,
+            memory::MemoryRenderBufferRenderElement,
+        },
         gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram},
         multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
@@ -31,15 +34,19 @@ use smithay::{
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
-        blur::{BlurBackdrop, BlurSession, Glass, GlassKind},
+        blur::{BlurBackdrop, BlurSession, Glass, GlassGlyph, GlassKind},
         corners::CornerMemory,
-        decorate::{Backdrop, Cropped, Shadow, TileDecorator},
+        decorate::{Backdrop, Cropped, GlyphDraw, Shadow, TileDecorator},
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
         framebuffer::FramebufferSpace,
+        shaded_sprite::ShadedSprite,
         snapshot::SnapshotElement,
         warp::{self, WarpCanvases, WarpElement, WarpRequest},
     },
-    shaders::rounded_corner::RoundedCornerShader,
+    shaders::{
+        lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader,
+        sprite_blur::SpriteBlurShader,
+    },
 };
 
 #[derive(Debug)]
@@ -235,7 +242,7 @@ where
 /// the `render_elements!` macro derives a `From` per variant, and two wrapped
 /// generics would overlap.
 #[derive(Debug)]
-pub enum Decorated<E> {
+pub enum Decorated<E, S> {
     Window(Rounded<E>),
     Snapshot(Rounded<SnapshotElement>),
     Backdrop(BlurBackdrop),
@@ -243,9 +250,11 @@ pub enum Decorated<E> {
     Border(WindowDecoration),
     Shadow(GlassShadow),
     Warp(WarpElement),
+    Sprite(ShadedSprite<S>),
+    GlassGlyph(GlassGlyph<S>),
 }
 
-impl<E: Element> Element for Decorated<E> {
+impl<E: Element, S: Element> Element for Decorated<E, S> {
     fn id(&self) -> &Id {
         match self {
             Self::Window(window) => window.id(),
@@ -255,6 +264,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.id(),
             Self::Shadow(shadow) => shadow.id(),
             Self::Warp(warp) => warp.id(),
+            Self::Sprite(sprite) => sprite.id(),
+            Self::GlassGlyph(glyph) => glyph.id(),
         }
     }
 
@@ -267,6 +278,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.current_commit(),
             Self::Shadow(shadow) => shadow.current_commit(),
             Self::Warp(warp) => warp.current_commit(),
+            Self::Sprite(sprite) => sprite.current_commit(),
+            Self::GlassGlyph(glyph) => glyph.current_commit(),
         }
     }
 
@@ -279,6 +292,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.src(),
             Self::Shadow(shadow) => shadow.src(),
             Self::Warp(warp) => warp.src(),
+            Self::Sprite(sprite) => sprite.src(),
+            Self::GlassGlyph(glyph) => glyph.src(),
         }
     }
 
@@ -291,6 +306,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.geometry(scale),
             Self::Shadow(shadow) => shadow.geometry(scale),
             Self::Warp(warp) => warp.geometry(scale),
+            Self::Sprite(sprite) => sprite.geometry(scale),
+            Self::GlassGlyph(glyph) => glyph.geometry(scale),
         }
     }
 
@@ -303,6 +320,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.location(scale),
             Self::Shadow(shadow) => shadow.location(scale),
             Self::Warp(warp) => warp.location(scale),
+            Self::Sprite(sprite) => sprite.location(scale),
+            Self::GlassGlyph(glyph) => glyph.location(scale),
         }
     }
 
@@ -315,6 +334,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.transform(),
             Self::Shadow(shadow) => shadow.transform(),
             Self::Warp(warp) => warp.transform(),
+            Self::Sprite(sprite) => sprite.transform(),
+            Self::GlassGlyph(glyph) => glyph.transform(),
         }
     }
 
@@ -331,6 +352,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.damage_since(scale, commit),
             Self::Shadow(shadow) => shadow.damage_since(scale, commit),
             Self::Warp(warp) => warp.damage_since(scale, commit),
+            Self::Sprite(sprite) => sprite.damage_since(scale, commit),
+            Self::GlassGlyph(glyph) => glyph.damage_since(scale, commit),
         }
     }
 
@@ -343,6 +366,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.opaque_regions(scale),
             Self::Shadow(shadow) => shadow.opaque_regions(scale),
             Self::Warp(warp) => warp.opaque_regions(scale),
+            Self::Sprite(sprite) => sprite.opaque_regions(scale),
+            Self::GlassGlyph(glyph) => glyph.opaque_regions(scale),
         }
     }
 
@@ -355,6 +380,8 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.alpha(),
             Self::Shadow(shadow) => shadow.alpha(),
             Self::Warp(warp) => warp.alpha(),
+            Self::Sprite(sprite) => sprite.alpha(),
+            Self::GlassGlyph(glyph) => glyph.alpha(),
         }
     }
 
@@ -367,11 +394,17 @@ impl<E: Element> Element for Decorated<E> {
             Self::Border(border) => border.kind(),
             Self::Shadow(shadow) => shadow.kind(),
             Self::Warp(warp) => warp.kind(),
+            Self::Sprite(sprite) => sprite.kind(),
+            Self::GlassGlyph(glyph) => glyph.kind(),
         }
     }
 }
 
-impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E> {
+impl<E, S> RenderElement<GlesRenderer> for Decorated<E, S>
+where
+    E: RenderElement<GlesRenderer>,
+    S: RenderElement<GlesRenderer>,
+{
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -437,6 +470,8 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
                 opaque_regions,
                 cache,
             ),
+            Self::Sprite(sprite) => sprite.draw(frame, src, dst, damage, opaque_regions, cache),
+            Self::GlassGlyph(glyph) => glyph.draw(frame, src, dst, damage, opaque_regions, cache),
         }
     }
 
@@ -453,13 +488,16 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Decorated<E
                 RenderElement::<GlesRenderer>::underlying_storage(shadow, renderer)
             }
             Self::Warp(warp) => RenderElement::<GlesRenderer>::underlying_storage(warp, renderer),
+            Self::Sprite(_) => None,
+            Self::GlassGlyph(_) => None,
         }
     }
 }
 
-impl<'render, E> RenderElement<KmsRenderer<'render>> for Decorated<E>
+impl<'render, E, S> RenderElement<KmsRenderer<'render>> for Decorated<E, S>
 where
     E: RenderElement<KmsRenderer<'render>>,
+    S: RenderElement<KmsRenderer<'render>>,
 {
     fn draw(
         &self,
@@ -526,6 +564,8 @@ where
                 opaque_regions,
                 cache,
             ),
+            Self::Sprite(sprite) => sprite.draw(frame, src, dst, damage, opaque_regions, cache),
+            Self::GlassGlyph(glyph) => glyph.draw(frame, src, dst, damage, opaque_regions, cache),
         }
     }
 
@@ -549,6 +589,8 @@ where
             Self::Warp(warp) => {
                 RenderElement::<KmsRenderer<'render>>::underlying_storage(warp, renderer)
             }
+            Self::Sprite(_) => None,
+            Self::GlassGlyph(_) => None,
         }
     }
 }
@@ -581,7 +623,7 @@ impl<'a> GlesDecorator<'a> {
 }
 
 impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
-    type Element = Decorated<Cropped<GlesRenderer>>;
+    type Element = Decorated<Cropped<GlesRenderer>, MemoryRenderBufferRenderElement<GlesRenderer>>;
 
     fn decorate(
         &mut self,
@@ -661,6 +703,31 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
     ) -> Option<Self::Element> {
         warp::warp(renderer, self.canvases, request).map(Decorated::Warp)
     }
+
+    fn blurred_sprite(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        sprite: MemoryRenderBufferRenderElement<GlesRenderer>,
+        radius: f32,
+    ) -> Option<Self::Element> {
+        let program = SpriteBlurShader::get(renderer)?;
+        Some(Decorated::Sprite(blurred(sprite, program, radius)))
+    }
+
+    fn lock_glyph(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        sprite: MemoryRenderBufferRenderElement<GlesRenderer>,
+        glyph: GlyphDraw,
+    ) -> Option<Self::Element> {
+        if let Some(session) = self.blur.as_mut()
+            && glyph.glass.is_some()
+        {
+            return GlassGlyph::new(renderer, session, sprite, glyph).map(Decorated::GlassGlyph);
+        }
+        let program = LockGlyphShader::get(renderer)?.plain;
+        Some(Decorated::Sprite(bent(sprite, program, &glyph)))
+    }
 }
 
 /// [`GlesDecorator`], but for the multi-GPU renderer the KMS backend uses.
@@ -686,7 +753,8 @@ impl<'a> MultiDecorator<'a> {
 }
 
 impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
-    type Element = Decorated<Cropped<KmsRenderer<'render>>>;
+    type Element =
+        Decorated<Cropped<KmsRenderer<'render>>, MemoryRenderBufferRenderElement<KmsRenderer<'render>>>;
 
     fn decorate(
         &mut self,
@@ -772,4 +840,43 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
     ) -> Option<Self::Element> {
         warp::warp(renderer.as_mut(), self.canvases, request).map(Decorated::Warp)
     }
+
+    fn blurred_sprite(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        sprite: MemoryRenderBufferRenderElement<KmsRenderer<'render>>,
+        radius: f32,
+    ) -> Option<Self::Element> {
+        let program = SpriteBlurShader::get(renderer.as_mut())?;
+        Some(Decorated::Sprite(blurred(sprite, program, radius)))
+    }
+
+    fn lock_glyph(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        sprite: MemoryRenderBufferRenderElement<KmsRenderer<'render>>,
+        glyph: GlyphDraw,
+    ) -> Option<Self::Element> {
+        if let Some(session) = self.blur.as_mut()
+            && glyph.glass.is_some()
+        {
+            return GlassGlyph::new(renderer.as_mut(), session, sprite, glyph)
+                .map(Decorated::GlassGlyph);
+        }
+        let program = LockGlyphShader::get(renderer.as_mut())?.plain;
+        Some(Decorated::Sprite(bent(sprite, program, &glyph)))
+    }
+}
+
+/// `sprite` blurred by `radius` texels.
+fn blurred<E: Element>(sprite: E, program: GlesTexProgram, radius: f32) -> ShadedSprite<E> {
+    let size = sprite.src().size;
+    let uniforms = SpriteBlurShader::uniform_values(radius, [size.w, size.h]).to_vec();
+    ShadedSprite::new(sprite, program, uniforms, u64::from(radius.to_bits()))
+}
+
+/// `sprite` drawn as a clock glyph.
+fn bent<E: Element>(sprite: E, program: GlesTexProgram, glyph: &GlyphDraw) -> ShadedSprite<E> {
+    let uniforms = LockGlyphShader::uniform_values(glyph);
+    ShadedSprite::new(sprite, program, uniforms, glyph.fingerprint())
 }

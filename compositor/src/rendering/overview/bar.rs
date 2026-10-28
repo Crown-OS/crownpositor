@@ -101,6 +101,7 @@ where
                 clip: Some(clip),
                 alpha: reveal as f32,
                 backing: Backing::Bare,
+                radius: None,
             });
         }
 

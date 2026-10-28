@@ -55,7 +55,7 @@ impl Shell {
         gaming: &GamingOptions,
         tearing_hint: impl Fn(&Tile) -> bool,
     ) -> DisplayDemand {
-        let locked = self.session_lock.is_active();
+        let locked = self.is_locked();
         let fullscreen = (!locked).then(|| scanout_tile(monitor)).flatten();
         let windowed_game = || {
             self.visible_windows(monitor)
