@@ -9,7 +9,7 @@ use smithay::{
 
 use crate::{
     rendering::{
-        Elements, FrameStyle, cursor::Cursor, decorate::TileDecorator, layer_elements,
+        Elements, FrameStyle, Stacking, cursor::Cursor, decorate::TileDecorator, layer_elements,
         tile_elements, workspace_window_elements,
     },
     shell::{Shell, monitor::Monitor, tile::Tile, workspace::Workspace},
@@ -101,6 +101,7 @@ where
         scale,
         Point::default(),
         style,
+        Stacking::All,
     );
     if !covered {
         layer_elements(

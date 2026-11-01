@@ -19,7 +19,7 @@ use windowcontrol::Direction as Cycle;
 use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
-    shell::tile::WindowState,
+    shell::{morph::Choreography, tile::WindowState},
     state::{State, lock_screen::LockReason},
 };
 
@@ -268,6 +268,8 @@ impl State {
             .set_titlebar_height(new.appearance.titlebar_height.into());
         self.shell
             .set_workspace_animation(SpringProfile::from_config(new.appearance.animations));
+        self.shell
+            .set_choreography(Choreography::of(new.appearance.minimize_effect));
 
         if self.input.cursor.set_theme(&new.appearance.cursor_theme) {
             self.queue_pointer_redraw();
@@ -354,6 +356,8 @@ impl State {
                     .set_titlebar_height(appearance.titlebar_height.into());
                 self.shell
                     .set_workspace_animation(SpringProfile::from_config(appearance.animations));
+                self.shell
+                    .set_choreography(Choreography::of(appearance.minimize_effect));
                 self.input.cursor.set_theme(&appearance.cursor_theme);
                 config.appearance = appearance;
                 self.sync_background_effect_capabilities();

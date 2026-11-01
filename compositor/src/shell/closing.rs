@@ -2,11 +2,15 @@
 
 use crate::{
     rendering::snapshot::Snapshot,
-    shell::{dust::Dust, morph::IconOrigin, tile::Tile},
+    shell::{
+        dust::Dust,
+        morph::{Choreography, IconOrigin},
+        tile::Tile,
+    },
 };
 
 /// How a closed window leaves the screen.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Farewell {
     /// Shrinks into its icon, or away where it stood.
     Shrink(IconOrigin),
@@ -51,12 +55,12 @@ impl ClosingWindow {
     }
 
     /// Advances the motion; returns whether it is still on screen.
-    pub fn step(&mut self, dt: f32) -> bool {
+    pub fn step(&mut self, dt: f32, choreography: &Choreography) -> bool {
         if let Some(dust) = &mut self.dust {
             return dust.step(dt);
         }
         self.tile.anim_mut().step(dt);
-        self.tile.step_morph(dt);
+        self.tile.step_morph(dt, choreography);
         self.tile.morph().is_some()
     }
 }

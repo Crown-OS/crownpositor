@@ -1,12 +1,11 @@
 //! Where windows come from and go back to: the icons a launcher registered
 //! through `crownos_app_icons_v1`, turned into each window's motion.
 
-use config::{AnimationProfile, CloseAnimation};
-use protocols::crownos_app_icons::IconPlacement;
+use config::{AnimationProfile, CloseAnimation, MinimizeAnimation};
+use protocols::crownos_app_icons::{AppWindows, PlacedIcon};
 use smithay::{
     desktop::{WindowSurfaceType, layer_map_for_output},
     output::Output,
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Rectangle, Scale},
     wayland::shell::wlr_layer::Anchor,
 };
@@ -35,19 +34,38 @@ impl State {
         self.wayland
             .app_icons_state
             .icons_of(&app_id)
-            .find_map(|(surface, placement)| icon_on(output, &surface, placement))
+            .find_map(|icon| icon_on(output, icon))
     }
 
-    /// Where an icon drawn at `placement` on `surface` is on screen now, and
-    /// which output it is on.
-    pub fn icon_at(
-        &self,
-        surface: &WlSurface,
-        placement: IconPlacement,
-    ) -> Option<(OutputId, IconOrigin)> {
+    /// Where `icon` is on screen now, and which output it is on.
+    pub fn icon_at(&self, icon: &PlacedIcon) -> Option<(OutputId, IconOrigin)> {
         self.shell.monitors().iter().find_map(|monitor| {
-            icon_on(monitor.output(), surface, placement).map(|icon| (monitor.id(), icon))
+            icon_on(monitor.output(), icon.clone()).map(|origin| (monitor.id(), origin))
         })
+    }
+
+    /// Tells launchers how many windows each application has, and lifts the
+    /// icons windows' motions carry out of them.
+    pub fn refresh_app_icons(&mut self) {
+        let focused = self.shell.focused_window_id();
+        let mut apps = Vec::new();
+        for tile in self.shell.tiles() {
+            if surface::has_parent(tile.surface()) {
+                continue;
+            }
+            surface::with_app_id(tile.surface(), |app_id| {
+                if !app_id.is_empty() {
+                    AppWindows::count_into(&mut apps, app_id, Some(tile.id()) == focused);
+                }
+            });
+        }
+        let carried = match self.config.current.appearance.minimize_effect {
+            MinimizeAnimation::Liquid => self.shell.carried_icons(),
+            MinimizeAnimation::Genie | MinimizeAnimation::Scale => Vec::new(),
+        };
+        let icons = &mut self.wayland.app_icons_state;
+        icons.publish_windows(apps);
+        icons.carry(&carried);
     }
 
     /// Where a window minimizes into: its icon, or where a dock would be.
@@ -149,15 +167,19 @@ impl State {
     }
 }
 
-/// `placement` on `surface`, if `surface` is a layer on `output`.
-fn icon_on(output: &Output, surface: &WlSurface, placement: IconPlacement) -> Option<IconOrigin> {
+/// `icon`, if the surface it is drawn on is a layer on `output`.
+fn icon_on(output: &Output, icon: PlacedIcon) -> Option<IconOrigin> {
     let layers = layer_map_for_output(output);
-    let layer = layers.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)?;
+    let layer = layers.layer_for_surface(&icon.surface, WindowSurfaceType::TOPLEVEL)?;
+    let placement = icon.placement;
     let loc = layers.layer_geometry(layer)?.loc + placement.rect.loc;
+    let edge = dock_edge(layer.cached_state().anchor);
+    drop(layers);
     Some(IconOrigin {
         rect: Rectangle::new(loc.to_f64(), placement.rect.size.to_f64()),
         radius: placement.corner_radius,
-        edge: dock_edge(layer.cached_state().anchor),
+        edge,
+        carrier: Some(icon),
     })
 }
 

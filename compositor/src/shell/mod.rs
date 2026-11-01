@@ -44,7 +44,7 @@ use smithay::{
 
 use config::{Config, ResolvedRule};
 
-use protocols::crownos_surface_animation::SurfaceAnimations;
+use protocols::{crownos_app_icons::IconRef, crownos_surface_animation::SurfaceAnimations};
 use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
@@ -60,7 +60,7 @@ use crate::{
         monitor::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
         },
-        morph::IconOrigin,
+        morph::{Choreography, IconOrigin},
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
         tile::{Chrome, Tile, WindowState},
@@ -263,6 +263,8 @@ pub struct Shell {
     /// The feel every monitor's viewport is given, kept here so a monitor
     /// plugged in later gets the same one. `None` disables motion.
     animation: Option<SpringProfile>,
+    /// How windows move between their icons and their places.
+    choreography: Choreography,
     unmapped: Vec<UnmappedWindow>,
     /// Grouped configures still waiting on their acks.
     transactions: Vec<Transaction>,
@@ -308,6 +310,7 @@ impl Shell {
                 outer: config.appearance.gaps_outer.into(),
             },
             animation: SpringProfile::from_config(config.appearance.animations),
+            choreography: Choreography::of(config.appearance.minimize_effect),
             unmapped: Vec::new(),
             transactions: Vec::new(),
             cascade: 0,
@@ -742,6 +745,24 @@ impl Shell {
                 workspace.dirty.layout = true;
             }
         }
+    }
+
+    /// How windows move between their icons and their places.
+    pub fn set_choreography(&mut self, choreography: Choreography) {
+        self.choreography = choreography;
+    }
+
+    /// The icons windows' motions hold lifted out of their launchers.
+    pub fn carried_icons(&self) -> Vec<IconRef> {
+        self.monitors
+            .iter()
+            .flat_map(|monitor| monitor.workspaces())
+            .flat_map(|workspace| {
+                let closing = workspace.closing().iter().map(ClosingWindow::tile);
+                workspace.tiles().iter().chain(closing)
+            })
+            .filter_map(|tile| tile.morph()?.carried().cloned())
+            .collect()
     }
 
     /// The feel every viewport animates with. `None` switches motion off.
@@ -1684,11 +1705,11 @@ impl Shell {
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().step(dt);
-                    tile.step_morph(dt);
+                    tile.step_morph(dt, &self.choreography);
                 }
                 workspace
                     .closing_mut()
-                    .retain_mut(|closing| closing.step(dt));
+                    .retain_mut(|closing| closing.step(dt, &self.choreography));
             }
         }
     }

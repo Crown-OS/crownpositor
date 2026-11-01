@@ -63,6 +63,7 @@ use crate::{
         decoration::{Control, Insets, TitleBarLayout},
         gaming,
         monitor::Monitor,
+        morph::Morph,
         tile::{Tile, WindowState},
         workspace::Workspace,
     },
@@ -211,7 +212,32 @@ where
         renderer,
         decorator,
         scale,
-        &[Layer::Overlay, Layer::Top],
+        &[Layer::Overlay],
+    );
+    // A window lifting its icon out of a dock is drawn over it, so the icon
+    // leaves the dock instead of sliding under its glass.
+    if !monitor.spacecontrol().is_visible() && !monitor.window_control().is_visible() {
+        for (workspace, offset) in monitor.visible_workspaces() {
+            workspace_window_elements(
+                &mut elements,
+                shell,
+                workspace,
+                renderer,
+                decorator,
+                scale,
+                offset,
+                style,
+                Stacking::Lifted,
+            );
+        }
+    }
+    layer_elements(
+        &mut elements,
+        monitor,
+        renderer,
+        decorator,
+        scale,
+        &[Layer::Top],
     );
 
     // An open menu is over everything on its output, panels included from the
@@ -278,6 +304,7 @@ where
             scale,
             offset,
             style,
+            Stacking::BelowPanels,
         );
         covered |= fullscreen && offset.x == 0.0;
     }
@@ -297,11 +324,47 @@ where
     elements
 }
 
-/// One workspace's windows, closing ones included, at `offset` from where
-/// the workspace normally sits. Returns whether a settled fullscreen window
-/// covered the whole page, so nothing below it needs drawing.
+/// Which of a workspace's windows a pass over it draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stacking {
+    /// Every window.
+    All,
+    /// Every window but those lifting an icon out of a launcher.
+    BelowPanels,
+    /// Only the windows lifting an icon out of a launcher, drawn over the
+    /// panels it sits in.
+    Lifted,
+}
+
+impl Stacking {
+    fn draws(self, tile: &Tile, effect: MinimizeAnimation) -> bool {
+        let lifted = effect == MinimizeAnimation::Liquid
+            && tile
+                .morph()
+                .is_some_and(|morph| morph.origin().carrier.is_some());
+        match self {
+            Self::All => true,
+            Self::BelowPanels => !lifted,
+            Self::Lifted => lifted,
+        }
+    }
+}
+
+/// The warp a morphing window is drawn with, if the style bends it at all.
+fn morph_motion<'a>(style: &FrameStyle<'_>, morph: &'a Morph) -> Option<Motion<'a>> {
+    match style.minimize {
+        MinimizeAnimation::Liquid => Some(Motion::Liquid(morph)),
+        MinimizeAnimation::Genie => Some(Motion::Genie(morph)),
+        MinimizeAnimation::Scale => None,
+    }
+}
+
+/// One workspace's windows that `stacking` draws, closing ones included, at
+/// `offset` from where the workspace normally sits. Returns whether a settled
+/// fullscreen window covered the whole page, so nothing below it needs
+/// drawing.
 #[allow(clippy::too_many_arguments)]
-fn workspace_window_elements<R, D>(
+pub(crate) fn workspace_window_elements<R, D>(
     elements: &mut Elements<R, D>,
     shell: &Shell,
     workspace: &Workspace,
@@ -310,6 +373,7 @@ fn workspace_window_elements<R, D>(
     scale: Scale<f64>,
     offset: Point<f64, Logical>,
     style: &mut FrameStyle<'_>,
+    stacking: Stacking,
 ) -> bool
 where
     R: Renderer + ImportAll + ImportMem,
@@ -318,7 +382,12 @@ where
 {
     // Frontmost: a window that just closed shrinks away over everything
     // that was behind it.
-    for closing in workspace.closing() {
+    let effect = style.minimize;
+    for closing in workspace
+        .closing()
+        .iter()
+        .filter(|closing| stacking.draws(closing.tile(), effect))
+    {
         let tile = closing.tile();
         let radius = match tile.state() {
             WindowState::Fullscreen => 0.0,
@@ -339,6 +408,22 @@ where
                 elements.push(CrownElement::Tile(Wrap::from(element)));
             }
         } else if let Some(morph) = tile.morph() {
+            if style.minimize == MinimizeAnimation::Liquid {
+                let request = WarpRequest {
+                    shell,
+                    tile,
+                    content: morph::Content::Snapshot(closing.snapshot()),
+                    motion: Motion::Liquid(morph),
+                    scale,
+                    offset,
+                    radius,
+                    style,
+                };
+                if let Some(element) = decorator.warp(renderer, request) {
+                    elements.push(CrownElement::Tile(Wrap::from(element)));
+                    continue;
+                }
+            }
             morph::morph_elements(
                 elements,
                 shell,
@@ -357,7 +442,7 @@ where
     // A fullscreen window on its way out of or into its icon has the
     // desktop showing round it, so it is drawn like any other.
     let fullscreen = workspace.fullscreen().and_then(|id| workspace.tile(id));
-    match fullscreen.filter(|tile| tile.morph().is_none()) {
+    match fullscreen.filter(|tile| tile.morph().is_none() && stacking.draws(tile, effect)) {
         // A fullscreen window covers its page edge to edge, so rounding it
         // would just cut four notches out of the display — and while it is
         // the only page on screen there is nothing behind it to draw.
@@ -373,6 +458,9 @@ where
         }
         None => {
             for tile in workspace.stacking_order() {
+                if !stacking.draws(tile, effect) {
+                    continue;
+                }
                 let radius = match tile.state() {
                     WindowState::Fullscreen => 0.0,
                     _ => style.radius,
@@ -403,12 +491,12 @@ fn tile_elements<R, D>(
     D: TileDecorator<R>,
 {
     if let Some(morph) = tile.morph() {
-        if style.minimize == MinimizeAnimation::Genie {
+        if let Some(motion) = morph_motion(style, morph) {
             let request = WarpRequest {
                 shell,
                 tile,
                 content: morph::Content::Live,
-                motion: Motion::Genie(morph),
+                motion,
                 scale,
                 offset,
                 radius,

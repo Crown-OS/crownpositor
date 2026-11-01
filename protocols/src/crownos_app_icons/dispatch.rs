@@ -34,14 +34,15 @@ impl<D: AppIconsDispatch> GlobalDispatch<CrownosAppIconManagerV1, AppIconsGlobal
     for AppIconsState
 {
     fn bind(
-        _state: &mut D,
+        state: &mut D,
         _handle: &DisplayHandle,
         _client: &Client,
         resource: New<CrownosAppIconManagerV1>,
         _global_data: &AppIconsGlobalData,
         data_init: &mut DataInit<'_, D>,
     ) {
-        data_init.init(resource, ());
+        let manager = data_init.init(resource, ());
+        state.app_icons_state().add_manager(manager);
     }
 
     fn can_view(client: Client, global_data: &AppIconsGlobalData) -> bool {
@@ -75,6 +76,10 @@ impl<D: AppIconsDispatch> Dispatch<CrownosAppIconManagerV1, (), D> for AppIconsS
             },
         );
         state.app_icons_state().insert(icon);
+    }
+
+    fn destroyed(state: &mut D, _client: ClientId, manager: &CrownosAppIconManagerV1, _data: &()) {
+        state.app_icons_state().remove_manager(manager);
     }
 }
 
@@ -110,11 +115,7 @@ impl<D: AppIconsDispatch> Dispatch<CrownosAppIconV1, AppIconData, D> for AppIcon
                 state.app_icons_state().place(icon, placement);
             }
             crownos_app_icon_v1::Request::Activate => {
-                let placed = data
-                    .surface
-                    .upgrade()
-                    .ok()
-                    .zip(state.app_icons_state().placement(icon));
+                let placed = state.app_icons_state().placed(icon);
                 if !state.activate_app(&data.app_id, placed) {
                     icon.launch();
                 }
