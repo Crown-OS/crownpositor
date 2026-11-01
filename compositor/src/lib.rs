@@ -73,6 +73,7 @@ pub fn run() -> anyhow::Result<()> {
             backend::render_offscreen(state);
             // After rendering, so springs that landed this frame are seen.
             state.refresh_surface_visibility();
+            state.refresh_app_icons();
             let _ = state.common.display_handle.flush_clients();
         })
         .with_context(|| "The event loop stopped unexpectedly")

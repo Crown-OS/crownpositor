@@ -1,5 +1,6 @@
 //! The raw GL programs that draw a window's canvas bent out of shape: poured
-//! into its icon, or crumbled into falling dust.
+//! into its icon, crumbled into falling dust, or stretched into a drop of
+//! liquid glass.
 //!
 //! Like [`KawaseProgram`](crate::shaders::blur::KawaseProgram) they bind no
 //! buffers: every vertex is built from `gl_VertexID`, so a mesh of tens of
@@ -17,9 +18,16 @@ use crate::shaders::program;
 static GENIE_SHADER: &str = include_str!("./genie.vert");
 static DUST_SHADER: &str = include_str!("./dust.vert");
 static WARP_SHADER: &str = include_str!("./warp.frag");
+static LIQUID_VERTEX_SHADER: &str = include_str!("./liquid.vert");
+static LIQUID_FRAGMENT_SHADER: &str = concat!(
+    include_str!("./liquid.frag"),
+    include_str!("../common/rounded_box.glsl"),
+);
 
 /// Vertices in the genie's grid: 16 columns by 64 rows of two triangles.
 pub const GENIE_VERTICES: i32 = 16 * 64 * 6;
+/// Vertices in the liquid shape's grid: 16 by 16 quads of two triangles.
+pub const LIQUID_VERTICES: i32 = 16 * 16 * 6;
 
 type Location = ffi::types::GLint;
 
@@ -34,9 +42,9 @@ struct Common {
 }
 
 impl Common {
-    unsafe fn link(gl: &ffi::Gles2, vertex: &str) -> Result<Self, GlesError> {
+    unsafe fn link(gl: &ffi::Gles2, vertex: &str, fragment: &str) -> Result<Self, GlesError> {
         unsafe {
-            let program = program::link(gl, vertex, WARP_SHADER)?;
+            let program = program::link(gl, vertex, fragment)?;
             Ok(Self {
                 program,
                 projection: location(gl, program, c"projection"),
@@ -65,6 +73,30 @@ pub struct DustProgram {
     seed: Location,
     timing: Location,
     physics: Location,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LiquidProgram {
+    common: Common,
+    icon: Location,
+    corners_top: Location,
+    corners_bottom: Location,
+    content: Location,
+    shape: Location,
+}
+
+/// Everything a liquid frame needs, in output-local physical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiquidUniforms {
+    /// Top left, top right, bottom left, bottom right.
+    pub corners: [[f32; 2]; 4],
+    /// The window within the canvas, in texture coordinates: u, v, width,
+    /// height.
+    pub content: [f32; 4],
+    pub radius: f32,
+    pub softness: f32,
+    pub reveal: f32,
+    pub icon_alpha: f32,
 }
 
 /// Everything a genie frame needs, in output-local physical pixels.
@@ -108,6 +140,7 @@ pub struct WarpDraw<'a> {
 pub struct WarpShaders {
     pub genie: GenieProgram,
     pub dust: DustProgram,
+    pub liquid: LiquidProgram,
 }
 
 impl WarpShaders {
@@ -122,8 +155,9 @@ impl WarpShaders {
             return Ok(());
         }
         let shaders = renderer.with_context(|gl| unsafe {
-            let genie = Common::link(gl, GENIE_SHADER)?;
-            let dust = Common::link(gl, DUST_SHADER)?;
+            let genie = Common::link(gl, GENIE_SHADER, WARP_SHADER)?;
+            let dust = Common::link(gl, DUST_SHADER, WARP_SHADER)?;
+            let liquid = Common::link(gl, LIQUID_VERTEX_SHADER, LIQUID_FRAGMENT_SHADER)?;
             Ok::<_, GlesError>(WarpShaders {
                 genie: GenieProgram {
                     common: genie,
@@ -139,6 +173,14 @@ impl WarpShaders {
                     seed: location(gl, dust.program, c"seed"),
                     timing: location(gl, dust.program, c"timing"),
                     physics: location(gl, dust.program, c"physics"),
+                },
+                liquid: LiquidProgram {
+                    common: liquid,
+                    icon: location(gl, liquid.program, c"icon"),
+                    corners_top: location(gl, liquid.program, c"corners_top"),
+                    corners_bottom: location(gl, liquid.program, c"corners_bottom"),
+                    content: location(gl, liquid.program, c"content"),
+                    shape: location(gl, liquid.program, c"shape"),
                 },
             })
         })??;
@@ -189,6 +231,64 @@ impl DustProgram {
                 gl.Uniform4fv(self.timing, 1, uniforms.timing.as_ptr());
                 gl.Uniform4fv(self.physics, 1, uniforms.physics.as_ptr());
             });
+        }
+    }
+}
+
+impl LiquidProgram {
+    /// Draws the canvas into the liquid shape, with `icon` — the icon the
+    /// shape carries, or `None` when it carries none — fading over it.
+    ///
+    /// # Safety
+    ///
+    /// `gl` must belong to the current frame's context.
+    pub unsafe fn draw(
+        &self,
+        gl: &ffi::Gles2,
+        draw: &WarpDraw<'_>,
+        icon: Option<&GlesTexture>,
+        uniforms: &LiquidUniforms,
+    ) {
+        let [top_left, top_right, bottom_left, bottom_right] = uniforms.corners;
+        let corners_top = [top_left[0], top_left[1], top_right[0], top_right[1]];
+        let corners_bottom = [
+            bottom_left[0],
+            bottom_left[1],
+            bottom_right[0],
+            bottom_right[1],
+        ];
+        let shape = [
+            uniforms.radius,
+            uniforms.softness,
+            uniforms.reveal,
+            icon.map_or(0.0, |_| uniforms.icon_alpha),
+        ];
+        unsafe {
+            run(gl, &self.common, draw, LIQUID_VERTICES, || {
+                // Without an icon the sampler still needs a texture; the
+                // canvas serves, its own filtering left alone.
+                gl.ActiveTexture(ffi::TEXTURE1);
+                gl.BindTexture(ffi::TEXTURE_2D, icon.unwrap_or(draw.texture).tex_id());
+                if icon.is_some() {
+                    for (parameter, value) in [
+                        (ffi::TEXTURE_MIN_FILTER, ffi::LINEAR),
+                        (ffi::TEXTURE_MAG_FILTER, ffi::LINEAR),
+                        (ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE),
+                        (ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE),
+                    ] {
+                        gl.TexParameteri(ffi::TEXTURE_2D, parameter, value as ffi::types::GLint);
+                    }
+                }
+                gl.ActiveTexture(ffi::TEXTURE0);
+                gl.Uniform1i(self.icon, 1);
+                gl.Uniform4fv(self.corners_top, 1, corners_top.as_ptr());
+                gl.Uniform4fv(self.corners_bottom, 1, corners_bottom.as_ptr());
+                gl.Uniform4fv(self.content, 1, uniforms.content.as_ptr());
+                gl.Uniform4fv(self.shape, 1, shape.as_ptr());
+            });
+            gl.ActiveTexture(ffi::TEXTURE1);
+            gl.BindTexture(ffi::TEXTURE_2D, 0);
+            gl.ActiveTexture(ffi::TEXTURE0);
         }
     }
 }

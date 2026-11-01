@@ -5,13 +5,18 @@
 //! the spatial origin of that window's motion. Which applications were just
 //! launched it keeps itself, in [`Launches`], because only it can tell where
 //! on screen a launcher's icon was at the moment it was tapped.
+//!
+//! Since version 2 it also tells launchers how many windows each application
+//! has, and which icons a window's motion is carrying.
 
 mod app_id;
 mod dispatch;
 mod launches;
+mod windows;
 
 use crownos_protocols::app_icons::v1::server::{
-    crownos_app_icon_manager_v1::CrownosAppIconManagerV1, crownos_app_icon_v1::CrownosAppIconV1,
+    crownos_app_icon_manager_v1::{self, CrownosAppIconManagerV1},
+    crownos_app_icon_v1::{self, CrownosAppIconV1},
 };
 use smithay::utils::{Logical, Rectangle};
 use wayland_server::{
@@ -21,9 +26,12 @@ use wayland_server::{
 pub use app_id::same_app;
 pub use dispatch::AppIconsDispatch;
 pub use launches::Launches;
+pub use windows::AppWindows;
+
+use windows::Published;
 
 /// The protocol version this module speaks.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// What the compositor provides for this protocol to be delegated to
 /// [`AppIconsState`].
@@ -34,7 +42,7 @@ pub trait AppIconsHandler {
     /// surface the activated icon is drawn on and where — when it is placed.
     /// Returns `false` when the application has none, which makes the
     /// launcher start it.
-    fn activate_app(&mut self, app_id: &str, icon: Option<(WlSurface, IconPlacement)>) -> bool;
+    fn activate_app(&mut self, app_id: &str, icon: Option<PlacedIcon>) -> bool;
 }
 
 /// Where an icon rests on its surface, in surface-local coordinates.
@@ -42,6 +50,18 @@ pub trait AppIconsHandler {
 pub struct IconPlacement {
     pub rect: Rectangle<i32, Logical>,
     pub corner_radius: f64,
+}
+
+/// One launcher icon, as a window's motion holds on to it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IconRef(CrownosAppIconV1);
+
+/// An icon with a rectangle, and the surface it is drawn on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedIcon {
+    pub icon: IconRef,
+    pub surface: WlSurface,
+    pub placement: IconPlacement,
 }
 
 /// Global data: which clients may see the manager. Activating an icon raises
@@ -60,11 +80,16 @@ pub struct AppIconData {
 struct AppIcon {
     resource: CrownosAppIconV1,
     placement: Option<IconPlacement>,
+    lifted: bool,
 }
 
 impl AppIcon {
     fn data(&self) -> Option<&AppIconData> {
         self.resource.data::<AppIconData>()
+    }
+
+    fn speaks_v2(&self) -> bool {
+        self.resource.version() >= crownos_app_icon_v1::EVT_LIFTED_SINCE
     }
 }
 
@@ -72,6 +97,8 @@ impl AppIcon {
 pub struct AppIconsState {
     global: GlobalId,
     icons: Vec<AppIcon>,
+    managers: Vec<CrownosAppIconManagerV1>,
+    published: Published,
 }
 
 impl AppIconsState {
@@ -86,6 +113,8 @@ impl AppIconsState {
         Self {
             global: display.create_global::<D, CrownosAppIconManagerV1, _>(VERSION, data),
             icons: Vec::new(),
+            managers: Vec::new(),
+            published: Published::default(),
         }
     }
 
@@ -94,31 +123,67 @@ impl AppIconsState {
     }
 
     /// Every placed icon of `app_id`, with the surface it is drawn on.
-    pub fn icons_of<'a>(
-        &'a self,
-        app_id: &'a str,
-    ) -> impl Iterator<Item = (WlSurface, IconPlacement)> + 'a {
-        self.icons.iter().filter_map(move |icon| {
-            let data = icon.data()?;
-            let placement = icon.placement?;
-            if !same_app(&data.app_id, app_id) {
-                return None;
-            }
-            Some((data.surface.upgrade().ok()?, placement))
-        })
+    pub fn icons_of<'a>(&'a self, app_id: &'a str) -> impl Iterator<Item = PlacedIcon> + 'a {
+        self.icons
+            .iter()
+            .filter(move |icon| {
+                icon.data()
+                    .is_some_and(|data| same_app(&data.app_id, app_id))
+            })
+            .filter_map(placed)
     }
 
-    fn placement(&self, resource: &CrownosAppIconV1) -> Option<IconPlacement> {
+    /// Tells launchers how many windows each application has now, if that
+    /// changed since they last heard.
+    pub fn publish_windows(&mut self, apps: Vec<AppWindows>) {
+        for app in self.published.update(apps) {
+            for manager in &self.managers {
+                send_windows(manager, &app);
+            }
+        }
+    }
+
+    /// Lifts every icon `carried` holds out of its launcher and lands every
+    /// other, telling each launcher only about icons whose state changed.
+    pub fn carry(&mut self, carried: &[IconRef]) {
+        for icon in self.icons.iter_mut().filter(|icon| icon.speaks_v2()) {
+            let lifted = carried.iter().any(|carried| carried.0 == icon.resource);
+            if lifted == icon.lifted {
+                continue;
+            }
+            icon.lifted = lifted;
+            match lifted {
+                true => icon.resource.lifted(),
+                false => icon.resource.landed(),
+            }
+        }
+    }
+
+    fn placed(&self, resource: &CrownosAppIconV1) -> Option<PlacedIcon> {
         self.icons
             .iter()
             .find(|icon| icon.resource == *resource)
-            .and_then(|icon| icon.placement)
+            .and_then(placed)
+    }
+
+    fn add_manager(&mut self, manager: CrownosAppIconManagerV1) {
+        if manager.version() >= crownos_app_icon_manager_v1::EVT_APP_WINDOWS_SINCE {
+            for app in self.published.all() {
+                send_windows(&manager, app);
+            }
+            self.managers.push(manager);
+        }
+    }
+
+    fn remove_manager(&mut self, manager: &CrownosAppIconManagerV1) {
+        self.managers.retain(|kept| kept != manager);
     }
 
     fn insert(&mut self, resource: CrownosAppIconV1) {
         self.icons.push(AppIcon {
             resource,
             placement: None,
+            lifted: false,
         });
     }
 
@@ -135,4 +200,16 @@ impl AppIconsState {
     fn remove(&mut self, resource: &CrownosAppIconV1) {
         self.icons.retain(|icon| icon.resource != *resource);
     }
+}
+
+fn placed(icon: &AppIcon) -> Option<PlacedIcon> {
+    Some(PlacedIcon {
+        icon: IconRef(icon.resource.clone()),
+        surface: icon.data()?.surface.upgrade().ok()?,
+        placement: icon.placement?,
+    })
+}
+
+fn send_windows(manager: &CrownosAppIconManagerV1, app: &AppWindows) {
+    manager.app_windows(app.app_id.clone(), app.count, u32::from(app.focused));
 }

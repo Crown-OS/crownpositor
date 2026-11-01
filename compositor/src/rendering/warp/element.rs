@@ -3,7 +3,7 @@
 use smithay::{
     backend::renderer::{
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
-        gles::{GlesError, GlesFrame, GlesRenderer},
+        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
         multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, OpaqueRegions},
     },
@@ -14,16 +14,20 @@ use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
         framebuffer::FramebufferSpace,
-        warp::{canvas::Painted, dust, genie},
+        warp::{canvas::Painted, dust, genie, liquid},
     },
-    shaders::warp::{DustUniforms, GenieUniforms, WarpDraw, WarpShaders},
+    shaders::warp::{DustUniforms, GenieUniforms, LiquidUniforms, WarpDraw, WarpShaders},
     shell::{dust::Dust, morph::Edge},
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Bend {
     Genie(GenieUniforms),
     Dust(DustUniforms),
+    Liquid {
+        uniforms: LiquidUniforms,
+        icon: Option<GlesTexture>,
+    },
 }
 
 #[derive(Debug)]
@@ -64,6 +68,21 @@ impl WarpElement {
         }
     }
 
+    pub(super) fn liquid(
+        shaders: WarpShaders,
+        canvas: Painted,
+        icon: Option<GlesTexture>,
+        uniforms: LiquidUniforms,
+    ) -> Self {
+        Self {
+            shaders,
+            geometry: liquid::bounds(&uniforms),
+            bend: Bend::Liquid { uniforms, icon },
+            canvas,
+            alpha: 1.0,
+        }
+    }
+
     fn draw_gles(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -91,6 +110,9 @@ impl WarpElement {
             match &self.bend {
                 Bend::Genie(uniforms) => self.shaders.genie.draw(gl, &draw, uniforms),
                 Bend::Dust(uniforms) => self.shaders.dust.draw(gl, &draw, uniforms),
+                Bend::Liquid { uniforms, icon } => {
+                    self.shaders.liquid.draw(gl, &draw, icon.as_ref(), uniforms)
+                }
             }
         })
     }

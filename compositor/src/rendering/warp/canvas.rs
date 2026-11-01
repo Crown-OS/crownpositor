@@ -21,7 +21,7 @@ use crate::{
         corners::CornerMemory,
         morph::{Content, morph_elements},
         rounded::GlesDecorator,
-        warp::WarpRequest,
+        warp::{WarpRequest, carried::CarriedIcons},
     },
     shell::morph::Morph,
     utils::id::WindowId,
@@ -32,9 +32,13 @@ use crate::{
 const PAD: i32 = 2;
 const TRANSPARENT: [f32; 4] = [0.0; 4];
 
-/// One output's canvases, kept only while a warp draws from them.
+/// One output's canvases, kept only while a warp draws from them, and the
+/// launcher icons its morphs carry.
 #[derive(Debug, Default)]
-pub struct WarpCanvases(HashMap<WindowId, Canvas>);
+pub struct WarpCanvases {
+    canvases: HashMap<WindowId, Canvas>,
+    pub(super) carried: CarriedIcons,
+}
 
 #[derive(Debug)]
 struct Canvas {
@@ -59,7 +63,9 @@ pub struct Painted {
 impl WarpCanvases {
     /// Lets go of the canvases no warp drew from last frame.
     pub fn begin_frame(&mut self) {
-        self.0.retain(|_, canvas| mem::take(&mut canvas.used));
+        self.canvases
+            .retain(|_, canvas| mem::take(&mut canvas.used));
+        self.carried.begin_frame();
     }
 
     /// The window `request` names, painted as it stands. A live window is
@@ -78,16 +84,16 @@ impl WarpCanvases {
 
         let id = request.tile.id();
         if self
-            .0
+            .canvases
             .get(&id)
             .is_none_or(|canvas| canvas.texture.size() != buffer)
         {
             let texture = gles.create_buffer(Fourcc::Abgr8888, buffer).ok()?;
             let element_id = self
-                .0
+                .canvases
                 .get(&id)
                 .map_or_else(Id::new, |canvas| canvas.id.clone());
-            self.0.insert(
+            self.canvases.insert(
                 id,
                 Canvas {
                     texture,
@@ -98,7 +104,7 @@ impl WarpCanvases {
                 },
             );
         }
-        let canvas = self.0.get_mut(&id)?;
+        let canvas = self.canvases.get_mut(&id)?;
 
         if matches!(request.content, Content::Live) || !canvas.painted {
             render_window(gles, &mut canvas.texture, request, size, animated.loc)?;

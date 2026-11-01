@@ -17,7 +17,7 @@ use crate::{
     layout::{SnapZone, TileInfo, placement},
     shell::{
         decoration::{DecorationCommit, DecorationIds, Insets},
-        morph::{IconOrigin, Morph, MorphEnd},
+        morph::{Choreography, IconOrigin, Morph, MorphEnd},
     },
     utils::id::WindowId,
 };
@@ -502,14 +502,14 @@ impl Tile {
     pub fn grow_from(&mut self, origin: IconOrigin) {
         self.anim.show();
         self.morph
-            .get_or_insert_with(|| Morph::new(origin, MorphEnd::Icon))
+            .get_or_insert_with(|| Morph::new(origin.clone(), MorphEnd::Icon))
             .head_for(MorphEnd::Window, origin);
     }
 
     /// Shrinks the window into `origin`, or turns a grow around.
     pub fn shrink_into(&mut self, origin: IconOrigin) {
         self.morph
-            .get_or_insert_with(|| Morph::new(origin, MorphEnd::Window))
+            .get_or_insert_with(|| Morph::new(origin.clone(), MorphEnd::Window))
             .head_for(MorphEnd::Icon, origin);
     }
 
@@ -528,8 +528,8 @@ impl Tile {
     }
 
     /// Advances the morph; returns where it came to rest, if it did.
-    pub fn step_morph(&mut self, dt: f32) -> Option<MorphEnd> {
-        let end = self.morph.as_mut()?.step(dt)?;
+    pub fn step_morph(&mut self, dt: f32, choreography: &Choreography) -> Option<MorphEnd> {
+        let end = self.morph.as_mut()?.step(dt, choreography)?;
         self.morph = None;
         Some(end)
     }

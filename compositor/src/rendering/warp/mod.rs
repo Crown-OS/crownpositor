@@ -1,5 +1,6 @@
 //! Windows bent out of shape on the GPU: poured through a neck into their icon,
-//! or crumbled into dust that falls away.
+//! crumbled into dust that falls away, or stretched into a drop of liquid
+//! glass that carries their icon.
 //!
 //! A mesh can only bend one texture, so the decorated window is first painted
 //! into a canvas of its own, then drawn through a raw GL program that builds
@@ -7,16 +8,18 @@
 //! `None` and the caller draws the flat morph instead.
 
 mod canvas;
+mod carried;
 mod dust;
 mod element;
 mod genie;
+mod liquid;
 
 pub use canvas::WarpCanvases;
 pub use element::WarpElement;
 
 use smithay::{
     backend::renderer::gles::GlesRenderer,
-    utils::{Logical, Point, Scale},
+    utils::{Logical, Point, Rectangle, Scale},
 };
 
 use crate::{
@@ -30,6 +33,7 @@ use crate::{
 pub enum Motion<'a> {
     Genie(&'a Morph),
     Dust(&'a Dust),
+    Liquid(&'a Morph),
 }
 
 /// One window to draw warped, with everything painting its canvas takes.
@@ -68,5 +72,19 @@ pub fn warp(
             )
         }
         Motion::Dust(dust) => WarpElement::dust(shaders, canvas, dust, request.scale.x),
+        Motion::Liquid(morph) => {
+            let scale = request.scale;
+            let rest = request.tile.render_rect();
+            let window = Rectangle::new(rest.loc + request.offset, rest.size);
+            let radius = f64::from(request.radius) / scale.x;
+            let uniforms = liquid::uniforms(morph, window, radius, canvas.rect, scale);
+            let icon = morph
+                .origin()
+                .carrier
+                .as_ref()
+                .filter(|_| morph.shows_icon())
+                .and_then(|icon| canvases.carried.copy_of(gles, icon, scale));
+            WarpElement::liquid(shaders, canvas, icon, uniforms)
+        }
     })
 }
