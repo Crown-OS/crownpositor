@@ -142,6 +142,7 @@ const fn keysym(key: KeyCode) -> Keysym {
         KeyCode::PageUp => keysyms::KEY_Prior,
         KeyCode::PageDown => keysyms::KEY_Next,
         KeyCode::CapsLock => keysyms::KEY_Caps_Lock,
+        KeyCode::PrintScreen => keysyms::KEY_Print,
 
         KeyCode::ArrowUp => keysyms::KEY_Up,
         KeyCode::ArrowDown => keysyms::KEY_Down,
