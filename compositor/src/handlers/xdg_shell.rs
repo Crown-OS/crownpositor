@@ -17,7 +17,7 @@ use smithay::{
 use super::xdg_decoration::requested_chrome;
 use crate::{
     layout::placement,
-    shell::tile::{Chrome, Tile, WindowState},
+    shell::tile::{Tile, WindowState},
     state::State,
     utils::id::WindowId,
 };
@@ -314,9 +314,7 @@ impl State {
         tile.set_size_hints(min_size, max_size);
         tile.set_chrome(requested_chrome(&toplevel));
         tile.set_dialog(dialog);
-        // A fixed-size window that draws its own frame is an alert or a picker.
-        let alert =
-            min_size != Size::default() && min_size == max_size && tile.chrome() == Chrome::Client;
+        let fixed_size = min_size != Size::default() && min_size == max_size;
         tile.set_title(title.as_deref().unwrap_or_default());
 
         if tile.state().is_floating() {
@@ -325,9 +323,9 @@ impl State {
                 .and_then(|parent| self.shell.window_id(parent))
                 .and_then(|parent| self.shell.tile(parent))
                 .map(Tile::target)
-                // An alert with nothing to sit over belongs in the middle of
-                // the screen, not at the head of the cascade.
-                .or(alert.then_some(area));
+                // A splash, picker or alert with nothing to sit over belongs
+                // in the middle of the screen, not at the head of the cascade.
+                .or((dialog || fixed_size).then_some(area));
             let cascade = self.shell.next_cascade();
             tile.set_floating_rect(placement::initial_rect(
                 unmapped.window.geometry().size,
