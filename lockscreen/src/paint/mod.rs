@@ -151,7 +151,7 @@ impl Painter {
                     &path,
                     Point::from_xy(origin, origin),
                     Point::from_xy(origin + w, origin + h),
-                    *stops,
+                    stops,
                 );
                 self.centred_text(&mut pixmap, initial, scale, sprite.rect.width, pad, h);
             }

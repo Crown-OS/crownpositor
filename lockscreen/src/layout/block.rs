@@ -113,9 +113,9 @@ pub(crate) fn place(shaper: &mut Shaper, mut root: Block, size: [f32; 2]) -> Vec
                                 });
                                 shaper.measure(run, width)
                             }
-                            Some(Content::Glyph(run)) => shaper
-                                .glyph(run)
-                                .map_or([0.0; 2], |shape| shape.size(run.stretch)),
+                            Some(Content::Glyph(run)) => {
+                                shaper.glyph(run).map_or([0.0; 2], |shape| shape.size())
+                            }
                             _ => return Size::ZERO,
                         };
                     Size {

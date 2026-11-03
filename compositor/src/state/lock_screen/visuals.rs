@@ -256,7 +256,7 @@ fn take_unchanged(
 /// A glyph face as the white coverage glass is cut by; anything else as is.
 fn as_coverage(sprite: &Sprite) -> Cow<'_, Sprite> {
     match &sprite.content {
-        Content::Glyph(run) if matches!(run.paint, GlyphPaint::Face { .. }) => {
+        Content::Glyph(run) if run.paint.is_face() => {
             let mut coverage = sprite.clone();
             if let Content::Glyph(run) = &mut coverage.content {
                 run.paint = GlyphPaint::Coverage;
