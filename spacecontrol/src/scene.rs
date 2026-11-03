@@ -173,14 +173,57 @@ pub fn bar(canvas: Canvas, count: usize, metrics: &Metrics, out: &mut Vec<Slot>)
     }
 }
 
-/// The '×' that removes a workspace, tucked into its preview's upper-left
+/// The '+' tile's size as a fraction of a preview's.
+const ADD_TILE_SCALE: f64 = 0.5;
+
+/// Places `count` workspace previews and, after them, the smaller '+' tile
+/// that adds one, the row centred with the tile in.
+pub fn bar_with_add(
+    canvas: Canvas,
+    count: usize,
+    metrics: &Metrics,
+    out: &mut Vec<Slot>,
+) -> Option<Slot> {
+    bar(canvas, count + 1, metrics, out);
+    let full = out.pop()?;
+
+    let size = Size::from((
+        full.thumb.size.w * ADD_TILE_SCALE,
+        full.thumb.size.h * ADD_TILE_SCALE,
+    ));
+    let slack = (full.thumb.size.w - size.w) / 2.0;
+    for slot in out.iter_mut() {
+        slot.thumb.loc.x += slack;
+        slot.label.loc.x += slack;
+    }
+
+    let thumb = Rectangle::new(
+        (
+            full.thumb.loc.x + slack,
+            full.thumb.loc.y + (full.thumb.size.h - size.h) / 2.0,
+        )
+            .into(),
+        size,
+    );
+    let label = Rectangle::new(
+        (thumb.loc.x, full.label.loc.y).into(),
+        (size.w, full.label.size.h).into(),
+    );
+    Some(Slot { thumb, label })
+}
+
+/// The '×' that removes a workspace, tucked into its preview's upper-right
 /// corner: big enough to hit, small enough not to hide the preview, and never
 /// smaller than a fingertip's worth of logical pixels.
 pub fn close_button(thumb: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
     let diameter = (thumb.size.h * 0.22).clamp(14.0, 26.0);
     let inset = diameter * 0.25;
     Rectangle::new(
-        (thumb.loc.x + inset, thumb.loc.y + inset).into(),
+        (
+            thumb.loc.x + thumb.size.w - inset - diameter,
+            thumb.loc.y + inset,
+        )
+            .into(),
         (diameter, diameter).into(),
     )
 }
@@ -525,5 +568,20 @@ mod tests {
                 "{slot:?} runs into the reserved strip"
             );
         }
+    }
+
+    #[test]
+    fn the_add_tile_is_smaller_and_the_row_stays_centred() {
+        let mut previews = Vec::new();
+        let add = bar_with_add(canvas(), 3, &Metrics::default(), &mut previews)
+            .expect("a bar always has an add tile");
+        let preview = previews[0].thumb;
+
+        assert!(add.thumb.size.w < preview.size.w && add.thumb.size.h < preview.size.h);
+        assert_eq!(centre(add.thumb).y, centre(preview).y);
+
+        let left = previews[0].thumb.loc.x;
+        let right = add.thumb.loc.x + add.thumb.size.w;
+        assert!((left + right - 1920.0).abs() < 1e-6);
     }
 }
