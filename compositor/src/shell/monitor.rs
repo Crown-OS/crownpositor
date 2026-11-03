@@ -61,6 +61,16 @@ pub struct OutputDescriptor {
     /// colorimetry and HDR capability that colour management needs, and the
     /// VRR floor below which refresh may not be stretched.
     pub edid: Option<EdidInfo>,
+    pub presence: Presence,
+}
+
+/// Whether the user can reach an output. A hidden one is laid out, rendered
+/// and captured like any other, but the pointer, focus and rescued windows
+/// never go there: it exists for windows nobody is meant to watch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    Shown,
+    Hidden,
 }
 
 /// The live state of one output.
@@ -82,6 +92,7 @@ pub struct OutputConfig {
     /// When the panel may run at a variable refresh rate. Unset in the config
     /// means on demand.
     pub vrr: Vrr,
+    pub presence: Presence,
 }
 
 /// Logical size after scale and transform. The one place this arithmetic
@@ -197,6 +208,10 @@ impl Monitor {
         self.config.logical_geometry()
     }
 
+    pub fn is_hidden(&self) -> bool {
+        self.config.presence == Presence::Hidden
+    }
+
     pub fn usable(&self) -> Rectangle<i32, Logical> {
         self.usable
     }
@@ -243,6 +258,14 @@ impl Monitor {
         self.previous = 0;
         self.switch.snap_to(0);
         std::mem::take(&mut self.workspaces)
+    }
+
+    /// The workspace at `index`, appending fresh ones until it exists.
+    pub fn ensure_workspace(&mut self, index: usize) -> WorkspaceId {
+        while self.workspaces.len() <= index {
+            self.add_workspace();
+        }
+        self.workspaces[index].id()
     }
 
     /// Appends a fresh workspace and returns its index.
@@ -722,6 +745,7 @@ mod tests {
                 default_mode: None,
                 edid: None,
                 vrr: Vrr::OnDemand,
+                presence: Presence::Shown,
             },
             workspaces: Vec::new(),
             active: 0,
@@ -795,6 +819,19 @@ mod tests {
         monitor.normalize();
         assert_eq!(monitor.workspaces().len(), 1);
         assert_invariants(&monitor);
+    }
+
+    #[test]
+    fn ensuring_a_workspace_grows_only_when_missing() {
+        let mut monitor = monitor(2);
+        let second = monitor.workspaces()[1].id();
+        assert_eq!(monitor.ensure_workspace(1), second);
+        assert_eq!(monitor.workspaces().len(), 2);
+
+        let fifth = monitor.ensure_workspace(4);
+        assert_eq!(monitor.workspaces().len(), 5);
+        assert_eq!(monitor.workspaces()[4].id(), fifth);
+        assert_eq!(monitor.active_index(), 0);
     }
 
     #[test]

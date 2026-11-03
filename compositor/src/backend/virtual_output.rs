@@ -22,12 +22,18 @@ use protocols::crownos_virtual_output::{CloseReason, VirtualMode, VirtualOutput,
 
 use crate::{
     backend::present::{self, ReleasedClients},
-    shell::monitor::OutputDescriptor,
+    shell::monitor::{OutputDescriptor, Presence},
     state::State,
 };
 
+/// Who paces a virtual output and decides when it goes away.
+pub(super) enum Owner {
+    Client(VirtualOutput),
+    Compositor,
+}
+
 struct VirtualHead {
-    protocol: VirtualOutput,
+    owner: Owner,
     output: Output,
     frame_requested: bool,
 }
@@ -43,9 +49,24 @@ impl VirtualOutputs {
     }
 
     fn position(&self, protocol: &VirtualOutput) -> Option<usize> {
+        self.heads.iter().position(
+            |head| matches!(&head.owner, Owner::Client(owner) if owner.id() == protocol.id()),
+        )
+    }
+
+    pub(super) fn compositor_owned(&self) -> Option<&Output> {
         self.heads
             .iter()
-            .position(|head| head.protocol.id() == protocol.id())
+            .find(|head| matches!(head.owner, Owner::Compositor))
+            .map(|head| &head.output)
+    }
+
+    pub(super) fn request_compositor_frame(&mut self) {
+        for head in &mut self.heads {
+            if matches!(head.owner, Owner::Compositor) {
+                head.frame_requested = true;
+            }
+        }
     }
 }
 
@@ -56,7 +77,7 @@ fn smithay_mode(mode: VirtualMode) -> Mode {
     }
 }
 
-fn refresh_interval(mode: VirtualMode) -> Duration {
+pub(super) fn refresh_interval(mode: VirtualMode) -> Duration {
     Duration::from_nanos(1_000_000_000_000 / u64::from(mode.refresh_mhz.max(1)))
 }
 
@@ -68,9 +89,27 @@ impl State {
         mode: VirtualMode,
     ) {
         let name = full_name(name);
-        if self.shell.monitor_by_name(&name).is_some() {
+        let owner = Owner::Client(protocol.clone());
+        if self
+            .add_virtual_head(owner, &name, mode, Presence::Shown)
+            .is_none()
+        {
             protocol.closed(CloseReason::NameTaken);
             return;
+        }
+        protocol.created(&name);
+    }
+
+    /// `None` when an output already goes by `name`.
+    pub(super) fn add_virtual_head(
+        &mut self,
+        owner: Owner,
+        name: &str,
+        mode: VirtualMode,
+        presence: Presence,
+    ) -> Option<Output> {
+        if self.shell.monitor_by_name(name).is_some() {
+            return None;
         }
 
         let current = smithay_mode(mode);
@@ -78,13 +117,13 @@ impl State {
             &self.common.display_handle,
             &self.config.current,
             OutputDescriptor {
-                name: name.clone(),
+                name: name.to_owned(),
                 physical: PhysicalProperties {
                     size: (0, 0).into(),
                     subpixel: Subpixel::Unknown,
                     make: "CrownOS".into(),
                     model: "Virtual Output".into(),
-                    serial_number: name.clone(),
+                    serial_number: name.to_owned(),
                 },
                 modes: vec![current],
                 preferred: Some(current),
@@ -93,18 +132,19 @@ impl State {
                 refresh_interval: Some(refresh_interval(mode)),
                 serial: None,
                 edid: None,
+                presence,
             },
         );
         self.apply_virtual_scale(&output, mode);
 
         self.virtual_outputs.heads.push(VirtualHead {
-            protocol: protocol.clone(),
-            output,
+            owner,
+            output: output.clone(),
             frame_requested: true,
         });
         self.refresh_output_heads();
-        protocol.created(&name);
         tracing::info!(output = name, ?mode, "virtual output created");
+        Some(output)
     }
 
     pub fn set_virtual_output_mode(&mut self, protocol: &VirtualOutput, mode: VirtualMode) {
@@ -142,9 +182,23 @@ impl State {
     }
 
     pub fn remove_virtual_output(&mut self, protocol: &VirtualOutput) {
-        let Some(index) = self.virtual_outputs.position(protocol) else {
-            return;
-        };
+        if let Some(index) = self.virtual_outputs.position(protocol) {
+            self.remove_virtual_head(index);
+        }
+    }
+
+    pub(super) fn remove_compositor_owned(&mut self) {
+        if let Some(index) = self
+            .virtual_outputs
+            .heads
+            .iter()
+            .position(|head| matches!(head.owner, Owner::Compositor))
+        {
+            self.remove_virtual_head(index);
+        }
+    }
+
+    fn remove_virtual_head(&mut self, index: usize) {
         let head = self.virtual_outputs.heads.swap_remove(index);
         self.capture.output_removed(&head.output);
         self.shell

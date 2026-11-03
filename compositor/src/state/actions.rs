@@ -20,7 +20,7 @@ use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
     shell::{morph::Choreography, tile::WindowState},
-    state::{State, lock_screen::LockReason},
+    state::{State, launch_target, lock_screen::LockReason},
 };
 
 impl State {
@@ -398,7 +398,8 @@ impl State {
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .env_remove(launch_target::VARIABLE);
 
         // Set per child rather than process-wide, because an inherited
         // `DISPLAY` from a host X session has to be *removed* when we have no

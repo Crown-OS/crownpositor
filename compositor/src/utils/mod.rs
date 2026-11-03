@@ -4,6 +4,7 @@ pub mod edid;
 pub mod id;
 pub mod pixels;
 pub mod privilege;
+pub mod process_env;
 pub mod region;
 pub mod runtime;
 pub mod scale;

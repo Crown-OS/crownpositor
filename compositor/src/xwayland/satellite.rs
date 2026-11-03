@@ -22,6 +22,8 @@ use std::{
 
 use smithay::reexports::rustix::io::{FdFlags, fcntl_setfd};
 
+use crate::state::launch_target;
+
 /// Older releases bind the display themselves and would fight us for the slot.
 const LISTENFD_PROBE: &str = "--test-listenfd-support";
 
@@ -78,6 +80,7 @@ fn command(binary: &OsStr, display: &str, listeners: &[UnixListener]) -> Command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .env_remove(launch_target::VARIABLE)
         // Ours points at the sockets this process is about to serve.
         .env_remove("DISPLAY");
 

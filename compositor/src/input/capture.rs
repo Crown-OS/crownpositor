@@ -139,12 +139,7 @@ impl State {
         };
         let output = monitor.output().clone();
         let geometry = monitor.geometry();
-        let layout: Vec<_> = self
-            .shell
-            .monitors()
-            .iter()
-            .map(Monitor::geometry)
-            .collect();
+        let layout: Vec<_> = self.shell.shown_monitors().map(Monitor::geometry).collect();
         let to = from + delta;
 
         let crossing = self

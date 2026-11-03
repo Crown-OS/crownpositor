@@ -18,7 +18,7 @@ use super::xdg_decoration::requested_chrome;
 use crate::{
     layout::placement,
     shell::tile::{Tile, WindowState},
-    state::State,
+    state::{State, launch_target::LaunchTarget},
     utils::id::WindowId,
 };
 
@@ -269,8 +269,10 @@ impl State {
         unmapped.window.on_commit();
         let (min_size, max_size) = size_hints(surface);
         let carried = self.carried_offset(surface);
+        let target = self.launch_target(surface);
         let location = carried
             .and_then(|_| self.carried_location())
+            .or_else(|| target.and_then(|target| self.launch_location(target)))
             .or_else(|| self.shell.default_location())?;
         let area = self
             .shell
@@ -293,6 +295,12 @@ impl State {
             );
         if dialog {
             rules.floating = Some(true);
+        }
+        // Nobody watches a headless window, so it keeps the size it asks for
+        // and never takes the keyboard from the user.
+        if target == Some(LaunchTarget::Headless) {
+            rules.floating = Some(true);
+            rules.focus = Some(false);
         }
         // A window born mid-drag rides the cursor until it is dropped.
         if carried.is_some() {
@@ -453,7 +461,7 @@ pub fn handle_commit(state: &mut State, surface: &WlSurface) {
             tile.set_size_hints(min, max);
             tile.adopt_client_size()
         });
-        if resized {
+        if state.shell.cap_hidden_size(id) || resized {
             state.shell.mark_dirty(id);
         }
     }
