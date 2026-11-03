@@ -1,11 +1,11 @@
 use tiny_skia::{Pixmap, Point, Transform};
 
 use crate::{
-    layout::{GlyphPaint, GlyphRun, SHADOW_DROP, SHADOW_SPREAD, Shaper},
+    layout::{GLOW_SPREAD, GLOW_SWELL, GlyphPaint, GlyphRun, SHADOW_DROP, SHADOW_SPREAD, Shaper},
     util::blur::box_blur,
 };
 
-use super::shape::{fill, gradient_fill};
+use super::shape::{fill, gradient_fill, stroke};
 
 const WHITE: [f32; 4] = [1.0; 4];
 
@@ -16,12 +16,19 @@ pub(super) fn draw(shaper: &mut Shaper, pixmap: &mut Pixmap, run: &GlyphRun, sca
         return;
     };
     let top = pad;
-    let baseline = top + (shape.cap_height * run.stretch * scale).ceil();
+    let baseline = top + (shape.cap_height * shape.stretch * scale).ceil();
     let drop = match run.paint {
         GlyphPaint::Shadow { .. } => SHADOW_DROP * run.size * scale,
-        GlyphPaint::Face { .. } | GlyphPaint::Coverage => 0.0,
+        _ => 0.0,
     };
-    let place = Transform::from_row(scale, 0.0, 0.0, -scale * run.stretch, pad, baseline + drop);
+    let place = Transform::from_row(
+        scale,
+        0.0,
+        0.0,
+        -scale * shape.stretch,
+        pad,
+        baseline + drop,
+    );
     let Some(path) = shape.path.and_then(|path| path.transform(place)) else {
         return;
     };
@@ -32,12 +39,24 @@ pub(super) fn draw(shaper: &mut Shaper, pixmap: &mut Pixmap, run: &GlyphRun, sca
             &path,
             Point::from_xy(0.0, top),
             Point::from_xy(0.0, baseline),
-            [upper, bottom],
+            &[upper, bottom],
+        ),
+        GlyphPaint::Sheen { base, light } => gradient_fill(
+            pixmap,
+            &path,
+            Point::from_xy(pad, top),
+            Point::from_xy(pad + shape.advance * scale, baseline),
+            &[base, light, base],
         ),
         GlyphPaint::Coverage => fill(pixmap, &path, WHITE),
         GlyphPaint::Shadow { alpha } => {
             fill(pixmap, &path, [0.0, 0.0, 0.0, alpha]);
             box_blur(pixmap, (SHADOW_SPREAD * run.size * scale).round() as usize);
+        }
+        GlyphPaint::Glow { color } => {
+            fill(pixmap, &path, color);
+            stroke(pixmap, &path, GLOW_SWELL * run.size * scale, color);
+            box_blur(pixmap, (GLOW_SPREAD * run.size * scale).round() as usize);
         }
     }
 }

@@ -3,30 +3,36 @@ use cosmic_text::{
 };
 use tiny_skia::{Path, PathBuilder};
 
-use super::{GlyphRun, Shaper, text::family_of};
+use super::{FontFamily, GlyphRun, Shaper, stroked, text::family_of};
 
 /// Of the ascent, the cap height of a font that does not say.
 const CAP_OF_ASCENT: f32 = 0.72;
 const TABULAR_FIGURES: FeatureTag = FeatureTag::new(b"tnum");
 
-/// A glyph's outline at its run's size, y up from its origin on the baseline,
-/// not yet stretched.
+/// A glyph's outline at its run's size, y up from its origin on the baseline.
 pub(crate) struct GlyphShape {
     /// `None` for a glyph that draws nothing, like a space.
     pub path: Option<Path>,
     pub advance: f32,
     pub cap_height: f32,
+    /// How much taller than `path` the glyph is still to be drawn.
+    pub stretch: f32,
 }
 
 impl GlyphShape {
     /// The box the glyph stands in: its advance, and its cap height stretched.
-    pub fn size(&self, stretch: f32) -> [f32; 2] {
-        [self.advance.ceil(), (self.cap_height * stretch).ceil()]
+    pub fn size(&self) -> [f32; 2] {
+        [self.advance.ceil(), (self.cap_height * self.stretch).ceil()]
     }
 }
 
 impl Shaper {
     pub fn glyph(&mut self, run: &GlyphRun) -> Option<GlyphShape> {
+        if let FontFamily::Stroked(font) = run.family
+            && let Some(shape) = stroked::glyph(font, run)
+        {
+            return Some(shape);
+        }
         let mut features = FontFeatures::new();
         features.enable(TABULAR_FIGURES);
         let attrs = Attrs::new()
@@ -66,6 +72,7 @@ impl Shaper {
             path,
             advance: glyph.w,
             cap_height,
+            stretch: run.stretch,
         })
     }
 }

@@ -2,22 +2,30 @@
 //! the hours and minutes can move apart, and every glyph can stand taller
 //! than its font draws it.
 
-use crownos_config::schema::{ClockArrangement, ClockFrame, ClockLook, ClockStyle};
+use crownos_config::schema::{
+    ClockArrangement, ClockFont, ClockFrame, ClockLighting, ClockLook, ClockStyle,
+};
 use taffy::{
     AlignItems, Display, FlexDirection, Line, Size, Style,
     prelude::{auto, length, line},
 };
 
 use super::{
-    ClockGroup, Content, Context, FontFamily, GlyphPaint, GlyphRun, Part, block::Block,
-    node::Inherited,
+    ClockGroup, Content, Context, FontFamily, GlyphPaint, GlyphRun, Part, StrokedFont,
+    block::Block, node::Inherited,
 };
-use crate::clock::GLASS_TINT;
+use crate::{clock::GLASS_TINT, palette::Rgba};
 
 /// Of the size: the space between stacked hours and minutes.
 const STACK_GAP: f32 = 0.08;
 /// The darkest the shadow gets, at full strength.
 const SHADOW_ALPHA: f32 = 0.55;
+/// How strongly the halo of glowing digits shows.
+const GLOW_ALPHA: f32 = 0.75;
+/// How much of a sheened digit's own colour shows away from the light, and
+/// how far its light runs toward white.
+const SHEEN_SHADE: f32 = 0.55;
+const SHEEN_WHITENESS: f32 = 0.7;
 const SEPARATOR: char = ':';
 
 /// Size and weight of each clock style.
@@ -46,13 +54,17 @@ pub(super) fn block(cx: &Context<'_>, inherited: &Inherited) -> Block {
                 .weight
                 .unwrap_or(weight)
                 .clamp(ClockLook::MIN_WEIGHT, ClockLook::MAX_WEIGHT),
-            family: FontFamily::Sans(cx.family.to_owned()),
+            family: family(cx, look.font),
             stretch: look
                 .stretch
                 .clamp(ClockLook::MIN_STRETCH, ClockLook::MAX_STRETCH),
-            paint: face(cx, inherited, look.glass),
+            paint: face(cx, inherited, look),
         },
         shadow: look.shadow.clamp(0.0, 1.0) * SHADOW_ALPHA,
+        glow: (look.lighting == ClockLighting::Glow).then(|| {
+            let [r, g, b, a] = inherited.tint(cx.palette.color("text.primary"));
+            [r, g, b, a * GLOW_ALPHA]
+        }),
     };
 
     let (hours, minutes) = cx.live.face.groups();
@@ -78,14 +90,26 @@ pub(super) fn block(cx: &Context<'_>, inherited: &Inherited) -> Block {
     clock
 }
 
+fn family(cx: &Context<'_>, font: ClockFont) -> FontFamily {
+    match font {
+        ClockFont::Theme => FontFamily::Sans(cx.family.to_owned()),
+        ClockFont::Tall => FontFamily::Stroked(StrokedFont::Tall),
+        ClockFont::Narrow => FontFamily::Stroked(StrokedFont::Narrow),
+        ClockFont::Serif => FontFamily::Stroked(StrokedFont::Serif),
+    }
+}
+
 /// Glass digits preview as a white wash, clearer at the top; the host that
 /// can blur the background through them draws the real thing.
-fn face(cx: &Context<'_>, inherited: &Inherited, glass: bool) -> GlyphPaint {
+fn face(cx: &Context<'_>, inherited: &Inherited, look: &ClockLook) -> GlyphPaint {
     let color = inherited.tint(cx.palette.color("text.primary"));
-    if !glass {
-        return GlyphPaint::Face {
-            top: color,
-            bottom: color,
+    if !look.glass {
+        return match look.lighting {
+            ClockLighting::Sheen => sheen(color),
+            ClockLighting::None | ClockLighting::Glow => GlyphPaint::Face {
+                top: color,
+                bottom: color,
+            },
         };
     }
     let [r, g, b, a] = color;
@@ -96,9 +120,18 @@ fn face(cx: &Context<'_>, inherited: &Inherited, glass: bool) -> GlyphPaint {
     }
 }
 
+fn sheen([r, g, b, a]: Rgba) -> GlyphPaint {
+    let toward_white = |channel: f32| channel + (1.0 - channel) * SHEEN_WHITENESS;
+    GlyphPaint::Sheen {
+        base: [r, g, b, a * SHEEN_SHADE],
+        light: [toward_white(r), toward_white(g), toward_white(b), a],
+    }
+}
+
 struct Cells {
     template: GlyphRun,
     shadow: f32,
+    glow: Option<Rgba>,
 }
 
 impl Cells {
@@ -109,7 +142,7 @@ impl Cells {
         row
     }
 
-    /// A character's face over its shadow, the two sharing one box.
+    /// A character's face over its glow and shadow, all sharing one box.
     fn cell(&self, ch: char, group: ClockGroup) -> Block {
         let glyph = |paint| {
             let mut block = Block::new(Style {
@@ -131,8 +164,13 @@ impl Cells {
             block.part = Some(Part::ClockGlyph(group));
             block
         };
-        let shadow = (self.shadow > 0.0 && !ch.is_whitespace())
-            .then(|| glyph(GlyphPaint::Shadow { alpha: self.shadow }));
+        let inked = !ch.is_whitespace();
+        let shadow =
+            (self.shadow > 0.0 && inked).then(|| glyph(GlyphPaint::Shadow { alpha: self.shadow }));
+        let glow = self
+            .glow
+            .filter(|_| inked)
+            .map(|color| glyph(GlyphPaint::Glow { color }));
         Block::new(Style {
             display: Display::Grid,
             ..Style::default()
@@ -140,6 +178,7 @@ impl Cells {
         .with_children(
             shadow
                 .into_iter()
+                .chain(glow)
                 .chain([glyph(self.template.paint)])
                 .collect(),
         )

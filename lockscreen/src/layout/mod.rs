@@ -12,6 +12,7 @@ mod live;
 mod node;
 mod outline;
 mod stock;
+mod stroked;
 mod text;
 
 use lockscene::{AssetId, LockScene, Placeholder};
@@ -20,7 +21,8 @@ use tiny_skia::Pixmap;
 use crate::{clock::ClockFace, palette::Palette, user::User};
 
 pub use content::{Content, FontFamily, GlyphPaint, GlyphRun, TextRun};
-pub(crate) use content::{SHADOW_DROP, SHADOW_SPREAD};
+pub(crate) use content::{GLOW_SPREAD, GLOW_SWELL, SHADOW_DROP, SHADOW_SPREAD};
+pub use stroked::StrokedFont;
 pub(crate) use text::Shaper;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

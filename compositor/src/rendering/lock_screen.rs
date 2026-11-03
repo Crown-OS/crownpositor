@@ -399,7 +399,7 @@ where
 }
 
 fn is_face(sprite: &PreparedSprite) -> bool {
-    matches!(&sprite.content, Content::Glyph(run) if matches!(run.paint, GlyphPaint::Face { .. }))
+    matches!(&sprite.content, Content::Glyph(run) if run.paint.is_face())
 }
 
 /// Where `style` puts `rect`, scaled about `pivot`, in logical pixels.

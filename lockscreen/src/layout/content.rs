@@ -1,11 +1,15 @@
 use lockscene::AssetId;
 
+use super::stroked::StrokedFont;
 use crate::palette::Rgba;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FontFamily {
     Sans(String),
     Mono(String),
+    /// Digits drawn by the lock screen itself; anything else falls back to
+    /// the system's sans.
+    Stroked(StrokedFont),
 }
 
 /// One run of text, laid out within its sprite's width.
@@ -41,6 +45,10 @@ const OVERSHOOT: f32 = 0.04;
 /// Of the size: how far the shadow drops, and how wide it spreads.
 pub(crate) const SHADOW_DROP: f32 = 0.02;
 pub(crate) const SHADOW_SPREAD: f32 = 0.035;
+/// Of the size: how wide a glow spreads, and how much it thickens the glyph
+/// before spreading so thin digits still cast one.
+pub(crate) const GLOW_SPREAD: f32 = 0.05;
+pub(crate) const GLOW_SWELL: f32 = 0.03;
 /// Three box-blur passes spread a shadow this many radii.
 const BLUR_PASSES: f32 = 3.0;
 
@@ -52,7 +60,10 @@ impl GlyphRun {
             GlyphPaint::Shadow { .. } => {
                 overshoot + (SHADOW_DROP + BLUR_PASSES * SHADOW_SPREAD) * self.size
             }
-            GlyphPaint::Face { .. } | GlyphPaint::Coverage => overshoot,
+            GlyphPaint::Glow { .. } => {
+                overshoot + (GLOW_SWELL + BLUR_PASSES * GLOW_SPREAD) * self.size
+            }
+            GlyphPaint::Face { .. } | GlyphPaint::Sheen { .. } | GlyphPaint::Coverage => overshoot,
         }
     }
 }
@@ -61,10 +72,21 @@ impl GlyphRun {
 pub enum GlyphPaint {
     /// Fades from `top` at the cap height to `bottom` on the baseline.
     Face { top: Rgba, bottom: Rgba },
+    /// `base`, crossed from corner to corner by a band of `light`.
+    Sheen { base: Rgba, light: Rgba },
     /// Plain white coverage, for a host that fills the glyph itself.
     Coverage,
     /// Black at `alpha`, dropped and blurred.
     Shadow { alpha: f32 },
+    /// `color`, swollen and blurred into a halo behind the face.
+    Glow { color: Rgba },
+}
+
+impl GlyphPaint {
+    /// The glyph itself, as opposed to what is drawn under it.
+    pub fn is_face(&self) -> bool {
+        matches!(self, Self::Face { .. } | Self::Sheen { .. })
+    }
 }
 
 /// What one sprite shows.

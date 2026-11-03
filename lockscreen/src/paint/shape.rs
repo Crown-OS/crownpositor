@@ -60,15 +60,17 @@ pub(super) fn gradient_fill(
     path: &Path,
     from: Point,
     to: Point,
-    stops: [Rgba; 2],
+    stops: &[Rgba],
 ) {
+    let last = stops.len().saturating_sub(1).max(1) as f32;
     let Some(shader) = LinearGradient::new(
         from,
         to,
-        vec![
-            GradientStop::new(0.0, colour(stops[0])),
-            GradientStop::new(1.0, colour(stops[1])),
-        ],
+        stops
+            .iter()
+            .enumerate()
+            .map(|(index, stop)| GradientStop::new(index as f32 / last, colour(*stop)))
+            .collect(),
         SpreadMode::Pad,
         Transform::identity(),
     ) else {
