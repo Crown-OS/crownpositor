@@ -124,6 +124,10 @@ pub struct Tile {
     /// Floated by the compositor's own judgement rather than by a rule: a
     /// picker or an alert, which wants no titlebar of ours.
     dialog: bool,
+    /// Keeps its centre while the client resizes itself, until the user takes
+    /// hold of it: a dialog that maps small and grows would otherwise slide
+    /// down and to the right.
+    centered: bool,
 
     anim: TileAnim,
     /// Turning into its application's icon, or back out of it.
@@ -200,6 +204,7 @@ impl Tile {
             titlebar_height,
             chrome: Chrome::Compositor,
             dialog: false,
+            centered: false,
             anim: TileAnim::new(Rectangle::default()),
             morph: None,
             minimized: false,
@@ -324,6 +329,10 @@ impl Tile {
         self.dialog = dialog;
     }
 
+    pub fn set_centered(&mut self, centered: bool) {
+        self.centered = centered;
+    }
+
     pub fn set_titlebar_height(&mut self, height: i32) {
         self.titlebar_height = height.max(0);
     }
@@ -419,6 +428,7 @@ impl Tile {
     /// Hands the window's geometry to a drag in progress.
     pub fn follow_pointer(&mut self) {
         self.geometry_authority = GeometryAuthority::Pointer;
+        self.centered = false;
     }
 
     /// Gives it back to the layout. Called before the drag's final rect is
@@ -457,6 +467,10 @@ impl Tile {
         let frame = self.insets().frame_size(requested);
         if frame == self.floating_rect.size {
             return false;
+        }
+        if self.centered {
+            let shrink = self.floating_rect.size.to_point() - frame.to_point();
+            self.floating_rect.loc += Point::from((shrink.x / 2, shrink.y / 2));
         }
         self.floating_rect.size = frame;
         true

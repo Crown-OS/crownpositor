@@ -17,7 +17,7 @@ use smithay::{
 use super::xdg_decoration::requested_chrome;
 use crate::{
     layout::placement,
-    shell::tile::{Tile, WindowState},
+    shell::tile::{Chrome, Tile, WindowState},
     state::{State, launch_target::LaunchTarget},
     utils::id::WindowId,
 };
@@ -285,14 +285,15 @@ impl State {
                 .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         // Structural heuristics apply only where the config is silent, so a rule
         // can always force a dialog back into the tiling.
+        let chrome = requested_chrome(&toplevel);
         let dialog = rules.floating.is_none()
-            && auto_float(
+            && (auto_float(
                 app_id.as_deref(),
                 parent.is_some(),
                 min_size,
                 max_size,
                 area.size,
-            );
+            ) || is_splash(title.as_deref(), chrome));
         if dialog {
             rules.floating = Some(true);
         }
@@ -320,26 +321,22 @@ impl State {
             self.config.current.appearance.titlebar_height.into(),
         );
         tile.set_size_hints(min_size, max_size);
-        tile.set_chrome(requested_chrome(&toplevel));
+        tile.set_chrome(chrome);
         tile.set_dialog(dialog);
         let fixed_size = min_size != Size::default() && min_size == max_size;
         tile.set_title(title.as_deref().unwrap_or_default());
 
         if tile.state().is_floating() {
-            let parent_rect = parent
-                .as_ref()
-                .and_then(|parent| self.shell.window_id(parent))
-                .and_then(|parent| self.shell.tile(parent))
-                .map(Tile::target)
-                // A splash, picker or alert with nothing to sit over belongs
-                // in the middle of the screen, not at the head of the cascade.
-                .or((dialog || fixed_size).then_some(area));
+            // Every pop-up opens in the middle of the screen, whatever opened
+            // it; only ordinary floating windows cascade.
+            let centered = dialog || fixed_size || parent.is_some();
+            tile.set_centered(centered);
             let cascade = self.shell.next_cascade();
             tile.set_floating_rect(placement::initial_rect(
                 unmapped.window.geometry().size,
                 tile.insets().top,
                 area,
-                parent_rect,
+                centered.then_some(area),
                 cascade,
             ));
         }
@@ -390,6 +387,10 @@ impl State {
 const PORTAL_APP_ID_PREFIXES: [&str; 2] =
     ["xdg-desktop-portal", "org.freedesktop.impl.portal.desktop."];
 
+/// What the polkit agents in the wild put in their app id: gnome, kde, mate,
+/// xfce, hyprpolkitagent, lxqt-policykit-agent and soteria.
+const AUTH_AGENT_APP_ID_MARKERS: [&str; 3] = ["polkit", "policykit", "soteria"];
+
 /// Structural reasons a toplevel should float, ahead of any config rule.
 fn auto_float(
     app_id: Option<&str>,
@@ -407,6 +408,15 @@ fn auto_float(
     }) {
         return true;
     }
+    // A password prompt has no parent and often lets itself be resized, yet
+    // tiling it would shove the user's windows aside to ask one question.
+    if app_id.is_some_and(|app_id| {
+        AUTH_AGENT_APP_ID_MARKERS
+            .iter()
+            .any(|marker| app_id.contains(marker))
+    }) {
+        return true;
+    }
     // A transient toplevel: Blender's Preferences window, GIMP's dialogs, every
     // "Save As" that is a toplevel rather than a popup.
     if has_parent {
@@ -418,6 +428,12 @@ fn auto_float(
     }
     // A max size small in both axes is a dialog by any other name.
     max.w > 0 && max.h > 0 && max.w * 2 < area.w && max.h * 2 < area.h
+}
+
+/// A frameless window with no title, like DaVinci Resolve's loading screen:
+/// there is nothing to call it in a switcher and nothing to drag it by.
+fn is_splash(title: Option<&str>, chrome: Chrome) -> bool {
+    chrome == Chrome::Client && title.is_none_or(str::is_empty)
 }
 
 fn size_hints(surface: &WlSurface) -> (Size<i32, Logical>, Size<i32, Logical>) {
@@ -508,6 +524,27 @@ mod tests {
             unset(),
             area()
         ));
+    }
+
+    #[test]
+    fn a_polkit_prompt_floats() {
+        for app_id in [
+            "polkit-gnome-authentication-agent-1",
+            "org.kde.polkit-kde-authentication-agent-1",
+            "hyprpolkitagent",
+            "lxqt-policykit-agent",
+            "gay.vaskel.soteria",
+        ] {
+            assert!(auto_float(Some(app_id), false, unset(), unset(), area()));
+        }
+    }
+
+    #[test]
+    fn an_untitled_frameless_window_is_a_splash() {
+        assert!(is_splash(None, Chrome::Client));
+        assert!(is_splash(Some(""), Chrome::Client));
+        assert!(!is_splash(Some("davinci-resolve"), Chrome::Client));
+        assert!(!is_splash(None, Chrome::Compositor));
     }
 
     #[test]
