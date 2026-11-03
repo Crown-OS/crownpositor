@@ -59,9 +59,15 @@ mod tests {
     }
 
     #[test]
-    fn a_window_breaks_into_grains_of_four_logical_pixels() {
+    fn a_small_window_breaks_into_grains_of_one_logical_pixel() {
+        let dust = uniforms(window(300.0, 200.0), &Dust::new(1), 1.0);
+        assert_eq!(dust.cells, [300, 200]);
+    }
+
+    #[test]
+    fn a_window_past_the_particle_budget_gets_coarser_grains() {
         let dust = uniforms(window(800.0, 600.0), &Dust::new(1), 1.0);
-        assert_eq!(dust.cells, [200, 150]);
+        assert_eq!(dust.cells, [400, 300]);
     }
 
     #[test]
