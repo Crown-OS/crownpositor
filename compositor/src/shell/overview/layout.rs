@@ -113,15 +113,12 @@ impl SpaceControl {
             scene::grid(self.canvas, &self.sizes, &self.metrics, &mut page.grid);
         }
 
-        // One slot more than there are workspaces: the '+' tile, laid out with
-        // the previews so the bar stays centred with it in.
-        scene::bar(
+        self.add = scene::bar_with_add(
             self.canvas,
-            monitor.workspaces().len() + 1,
+            monitor.workspaces().len(),
             &self.metrics,
             &mut self.bar,
         );
-        self.add = self.bar.pop();
         self.ids.ensure(self.bar.len());
         self.windows_hover.resize(self.grid().len());
         self.workspaces_hover.resize(self.bar.len() + 1);
