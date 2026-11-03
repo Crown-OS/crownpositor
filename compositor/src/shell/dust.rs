@@ -20,7 +20,7 @@ pub const SPREAD: f32 = 110.0;
 /// Largest upward launch speed, logical pixels per second.
 pub const KICK: f32 = 150.0;
 /// Side of a particle, logical pixels.
-pub const GRAIN: f64 = 4.0;
+pub const GRAIN: f64 = 1.0;
 
 /// How far past the window a particle can get, logical pixels: the bound of
 /// the closed form over a particle's life.
