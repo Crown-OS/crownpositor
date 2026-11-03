@@ -280,6 +280,13 @@ mod tests {
     }
 
     #[test]
+    fn a_parentless_dialog_centers_on_the_screen() {
+        let screen = area(1920, 1080);
+        let rect = initial_rect((600, 400).into(), 36, screen, Some(screen), 3);
+        assert_eq!(rect.loc, (660, 322).into());
+    }
+
+    #[test]
     fn parentless_windows_cascade() {
         let first = place((400, 300).into(), area(1920, 1080), None, 0);
         let second = place((400, 300).into(), area(1920, 1080), None, 1);
