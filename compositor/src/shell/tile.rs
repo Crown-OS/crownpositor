@@ -403,6 +403,19 @@ impl Tile {
         self.size_authority = SizeAuthority::Compositor;
     }
 
+    /// Shrinks a floating frame that outgrew `limit`, taking the size away
+    /// from the client so it is told what it got.
+    pub fn cap_size(&mut self, limit: Size<i32, Logical>) -> bool {
+        let size = self.floating_rect.size;
+        let capped = Size::from((size.w.min(limit.w), size.h.min(limit.h)));
+        if capped == size {
+            return false;
+        }
+        self.floating_rect.size = capped;
+        self.claim_size();
+        true
+    }
+
     /// Hands the window's geometry to a drag in progress.
     pub fn follow_pointer(&mut self) {
         self.geometry_authority = GeometryAuthority::Pointer;

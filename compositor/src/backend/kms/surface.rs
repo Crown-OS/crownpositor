@@ -71,7 +71,10 @@ use crate::{
         blur::{BlurCache, BlurConfig, BlurSession},
         rounded::MultiDecorator,
     },
-    shell::{gaming, monitor::OutputDescriptor},
+    shell::{
+        gaming,
+        monitor::{OutputDescriptor, Presence},
+    },
     state::State,
 };
 
@@ -288,6 +291,7 @@ pub fn enable_head(
             refresh_interval,
             serial: head.edid.as_ref().and_then(|edid| edid.serial.clone()),
             edid: head.edid.clone(),
+            presence: Presence::Shown,
         },
     );
 

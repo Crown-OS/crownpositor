@@ -9,6 +9,7 @@ mod cursor;
 mod display;
 mod idle;
 mod input;
+pub mod launch_target;
 pub mod lock_screen;
 pub mod outputs;
 mod overview;

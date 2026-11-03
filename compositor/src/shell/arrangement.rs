@@ -11,6 +11,8 @@ use smithay::utils::{Logical, Point, Rectangle};
 
 use crate::{layout::Direction, shell::Shell, shell::monitor::Monitor};
 
+const HIDDEN_GAP: i32 = 1024;
+
 impl Shell {
     /// Places every monitor and re-establishes the ordering invariants.
     ///
@@ -29,15 +31,14 @@ impl Shell {
         // Start packing past the rightmost pinned output, so an auto-placed
         // output cannot land on top of one the user placed deliberately.
         let mut x = self
-            .monitors
-            .iter()
+            .shown_monitors()
             .filter(|monitor| monitor.fixed_position().is_some())
             .map(|monitor| monitor.geometry().loc.x + monitor.geometry().size.w)
             .max()
             .unwrap_or(0);
 
         for monitor in &mut self.monitors {
-            if monitor.fixed_position().is_some() {
+            if monitor.fixed_position().is_some() || monitor.is_hidden() {
                 continue;
             }
             monitor.set_position((x, 0).into());
@@ -45,7 +46,27 @@ impl Shell {
         }
 
         self.normalize_positions();
+        self.park_hidden();
         self.sort_monitors();
+    }
+
+    /// Hidden monitors go past the right edge with a gap, so no surface
+    /// straddles one of them and a shown one, and they never move the origin.
+    fn park_hidden(&mut self) {
+        let mut x = self
+            .shown_monitors()
+            .map(|monitor| monitor.geometry().loc.x + monitor.geometry().size.w)
+            .max()
+            .unwrap_or(0)
+            + HIDDEN_GAP;
+        for monitor in self
+            .monitors
+            .iter_mut()
+            .filter(|monitor| monitor.is_hidden())
+        {
+            monitor.set_position((x, 0).into());
+            x += monitor.config().logical_size().w + HIDDEN_GAP;
+        }
     }
 
     /// Shifts the whole layout so the union of every output starts at `(0, 0)`.
@@ -55,8 +76,7 @@ impl Shell {
     /// same place, so rewriting it would only add a second source of truth.
     fn normalize_positions(&mut self) {
         let Some(origin) = self
-            .monitors
-            .iter()
+            .shown_monitors()
             .map(|monitor| monitor.geometry().loc)
             .reduce(|acc, loc| Point::from((acc.x.min(loc.x), acc.y.min(loc.y))))
             .filter(|origin| origin.x != 0 || origin.y != 0)
@@ -64,7 +84,11 @@ impl Shell {
             return;
         };
 
-        for monitor in &mut self.monitors {
+        for monitor in self
+            .monitors
+            .iter_mut()
+            .filter(|monitor| !monitor.is_hidden())
+        {
             let moved = monitor.config().position - origin;
             monitor.set_position(moved);
         }
@@ -98,7 +122,7 @@ impl Shell {
             .monitors
             .iter()
             .enumerate()
-            .filter(|(index, _)| *index != from)
+            .filter(|(index, monitor)| *index != from && !monitor.is_hidden())
             .map(|(index, monitor)| (index, monitor.geometry()));
 
         nearest_in_direction(source, candidates, dir)

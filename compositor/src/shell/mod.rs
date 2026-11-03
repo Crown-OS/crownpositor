@@ -58,7 +58,8 @@ use crate::{
         grab::{moves_left, moves_top},
         lock_screen::LockScreen,
         monitor::{
-            ConnectorId, Monitor, OutputConfig, OutputDescriptor, output_from_descriptor, output_id,
+            ConnectorId, Monitor, OutputConfig, OutputDescriptor, Presence, output_from_descriptor,
+            output_id,
         },
         morph::{Choreography, IconOrigin},
         session_lock::SessionLock,
@@ -364,6 +365,17 @@ impl Shell {
             .find(|monitor| monitor.config().name == name)
     }
 
+    /// Every monitor the user can reach.
+    pub fn shown_monitors(&self) -> impl Iterator<Item = &Monitor> {
+        self.monitors.iter().filter(|monitor| !monitor.is_hidden())
+    }
+
+    fn first_shown(&self) -> Option<usize> {
+        self.monitors
+            .iter()
+            .position(|monitor| !monitor.is_hidden())
+    }
+
     pub fn monitor_by_id(&self, id: OutputId) -> Option<&Monitor> {
         self.monitors.iter().find(|monitor| monitor.id() == id)
     }
@@ -390,8 +402,7 @@ impl Shell {
 
     /// The monitor containing a global logical point.
     pub fn monitor_at(&self, location: Point<f64, Logical>) -> Option<&Monitor> {
-        self.monitors
-            .iter()
+        self.shown_monitors()
             .find(|monitor| monitor.geometry().to_f64().contains(location))
     }
 
@@ -426,6 +437,7 @@ impl Shell {
             default_mode: None,
             edid: descriptor.edid.clone(),
             vrr: config::Vrr::OnDemand,
+            presence: descriptor.presence,
         };
 
         // `enabled` is deliberately not read here: a `Monitor` in the shell is
@@ -447,7 +459,9 @@ impl Shell {
         self.monitors.push(monitor);
 
         self.reclaim_migrated(&connector, id);
-        self.adopt_headless(id);
+        if descriptor.presence == Presence::Shown {
+            self.adopt_headless(id);
+        }
         self.apply_output_settings(config);
         self.arrange_outputs();
         self.refresh_usable(&output);
@@ -478,7 +492,7 @@ impl Shell {
             .retain(|_, owner| *owner != output_id(output));
 
         let survivor = (0..self.monitors.len())
-            .find(|candidate| *candidate != index)
+            .find(|candidate| *candidate != index && !self.monitors[*candidate].is_hidden())
             .map(|candidate| self.monitors[candidate].id());
 
         let mut monitor = self.monitors.remove(index);
@@ -509,6 +523,9 @@ impl Shell {
         self.focused_output = self
             .focused_output
             .min(self.monitors.len().saturating_sub(1));
+        if self.focused_monitor().is_some_and(Monitor::is_hidden) {
+            self.focused_output = self.first_shown().unwrap_or(0);
+        }
 
         self.arrange_outputs();
         self.normalize_all();
@@ -936,7 +953,7 @@ impl Shell {
         if let Some(index) = self
             .monitors
             .iter()
-            .position(|monitor| monitor.id() == location.output)
+            .position(|monitor| monitor.id() == location.output && !monitor.is_hidden())
         {
             self.focused_output = index;
         }
@@ -953,6 +970,25 @@ impl Shell {
         let monitor = self.focused_monitor()?;
         let workspace = monitor.active();
         workspace.tile(workspace.focus()?).map(Tile::window)
+    }
+
+    /// Holds a window on a hidden monitor to the monitor's size: with nobody
+    /// watching, nothing else stops a client asking for an absurd one.
+    pub fn cap_hidden_size(&mut self, id: WindowId) -> bool {
+        let Some(location) = self.location(id) else {
+            return false;
+        };
+        if !self
+            .monitor_by_id(location.output)
+            .is_some_and(Monitor::is_hidden)
+        {
+            return false;
+        }
+        let Some(area) = self.workspace(location).map(Workspace::area) else {
+            return false;
+        };
+        self.tile_mut(id)
+            .is_some_and(|tile| tile.state().is_floating() && tile.cap_size(area.size))
     }
 
     /// Where a new window should go.

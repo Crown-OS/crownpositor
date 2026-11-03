@@ -23,7 +23,7 @@ use crate::{
         blur::{BlurCache, BlurConfig, BlurSession},
         rounded::GlesDecorator,
     },
-    shell::monitor::OutputDescriptor,
+    shell::monitor::{OutputDescriptor, Presence},
     state::{BackendState, State},
 };
 
@@ -75,6 +75,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
             )),
             serial: None,
             edid: None,
+            presence: Presence::Shown,
         },
     );
 

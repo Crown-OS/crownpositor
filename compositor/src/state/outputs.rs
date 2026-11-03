@@ -154,8 +154,7 @@ impl State {
     pub fn output_head_snapshots(&self) -> Vec<HeadSnapshot> {
         let mut heads: Vec<HeadSnapshot> = self
             .shell
-            .monitors()
-            .iter()
+            .shown_monitors()
             .map(|monitor| {
                 let output = monitor.output();
                 let adaptive_sync = if self.backend.vrr_enabled(output) {

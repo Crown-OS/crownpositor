@@ -156,7 +156,7 @@ impl State {
     pub(crate) fn clamp_to_outputs(&self, location: Point<f64, Logical>) -> Point<f64, Logical> {
         let mut nearest: Option<(f64, Point<f64, Logical>)> = None;
 
-        for geometry in self.shell.monitors().iter().map(Monitor::geometry) {
+        for geometry in self.shell.shown_monitors().map(Monitor::geometry) {
             let clamped = clamp_to_rectangle(location, geometry);
             if clamped == location {
                 return location;
