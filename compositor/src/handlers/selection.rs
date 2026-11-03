@@ -23,6 +23,7 @@ use smithay::{
 };
 
 use crate::{
+    rendering::cursor::drag_icon::DragIcon,
     shell::toplevel_drag::{CarriedSource, DragEnd},
     state::State,
 };
@@ -46,7 +47,7 @@ impl WaylandDndGrabHandler for State {
     fn dnd_requested<S: Source>(
         &mut self,
         source: S,
-        _icon: Option<WlSurface>,
+        icon: Option<WlSurface>,
         seat: Seat<Self>,
         serial: Serial,
         grab_type: GrabType,
@@ -61,6 +62,7 @@ impl WaylandDndGrabHandler for State {
             source.cancel();
             return;
         };
+        self.input.cursor.drag_icon = icon.map(DragIcon::new);
         let toplevel_drag = (&source as &dyn Any)
             .downcast_ref::<WlDataSource>()
             .and_then(|data_source| {
@@ -96,6 +98,7 @@ impl DndGrabHandler for State {
         _seat: Seat<Self>,
         _location: Point<f64, Logical>,
     ) {
+        self.drop_drag_icon();
         self.end_toplevel_drag(if validated {
             DragEnd::Accepted
         } else {
@@ -104,7 +107,16 @@ impl DndGrabHandler for State {
     }
 
     fn cancelled(&mut self, _seat: Seat<Self>, _location: Point<f64, Logical>) {
+        self.drop_drag_icon();
         self.end_toplevel_drag(DragEnd::Aborted);
+    }
+}
+
+impl State {
+    fn drop_drag_icon(&mut self) {
+        if self.input.cursor.drag_icon.take().is_some() {
+            self.queue_pointer_redraw();
+        }
     }
 }
 

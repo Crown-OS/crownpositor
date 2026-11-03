@@ -19,6 +19,7 @@
 //! built-in arrow last.
 
 pub mod builtin;
+pub mod drag_icon;
 pub mod hyprcursor;
 pub mod source;
 pub mod xcursor;
@@ -48,6 +49,7 @@ use smithay::{
 use crate::rendering::{
     cursor::{
         builtin::BuiltinSource,
+        drag_icon::DragIcon,
         hyprcursor::HyprcursorSource,
         source::{CursorSource, RawFrame, RawImage, RawShape},
         xcursor::XCursorSource,
@@ -77,6 +79,8 @@ pub struct Cursor {
     pub status: CursorImageStatus,
     /// Nothing is drawn while set: a locked pointer points at nothing.
     pub suppressed: bool,
+    /// What the drag in progress carries under the pointer.
+    pub drag_icon: Option<DragIcon>,
     animation: Animation,
 }
 
@@ -130,6 +134,7 @@ impl Cursor {
             cache: HashMap::new(),
             status: CursorImageStatus::default_named(),
             suppressed: false,
+            drag_icon: None,
             animation: Animation::idle(),
         }
     }
@@ -164,6 +169,7 @@ impl Cursor {
         let mut fresh = Self::new(theme);
         fresh.status = std::mem::replace(&mut self.status, CursorImageStatus::Hidden);
         fresh.suppressed = self.suppressed;
+        fresh.drag_icon = self.drag_icon.take();
         fresh.animation.wake = self.animation.wake.take();
         *self = fresh;
         true
@@ -194,6 +200,28 @@ impl Cursor {
             && !surface.alive()
         {
             self.status = CursorImageStatus::default_named();
+        }
+        self.drag_icon.take_if(|icon| !icon.surface.alive());
+    }
+
+    /// Whether `surface` is drawn with the pointer: the cursor's own surface
+    /// or a drag's icon.
+    pub fn shows(&self, surface: &WlSurface) -> bool {
+        matches!(&self.status, CursorImageStatus::Surface(cursor) if cursor == surface)
+            || self
+                .drag_icon
+                .as_ref()
+                .is_some_and(|icon| icon.surface == *surface)
+    }
+
+    /// Applies a commit to the drag icon, if `surface` is it.
+    pub fn commit(&mut self, surface: &WlSurface) {
+        if let Some(icon) = self
+            .drag_icon
+            .as_mut()
+            .filter(|icon| icon.surface == *surface)
+        {
+            icon.commit();
         }
     }
 
@@ -266,7 +294,8 @@ impl Cursor {
             .map(RawShape::into_first)
     }
 
-    /// Pushes the cursor's elements for one output, front of everything.
+    /// Pushes the cursor's elements for one output, front of everything, and
+    /// the icon of a drag in progress just behind them.
     ///
     /// `pointer` is global logical; `monitor` is the output being drawn and its
     /// origin is what makes the result output-local. Nothing is pushed when the
@@ -288,7 +317,32 @@ impl Cursor {
             return;
         }
         let local = pointer - output_location.to_f64();
+        self.render_pointer(elements, renderer, local, scale);
+        if let Some(icon) = &self.drag_icon {
+            let location = (local + icon.offset.to_f64()).to_physical_precise_round(scale);
+            let surfaces = surface_elements(
+                renderer,
+                &icon.surface,
+                location,
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
+            elements.extend(surfaces.into_iter().map(E::from));
+        }
+    }
 
+    fn render_pointer<R, E>(
+        &mut self,
+        elements: &mut Vec<E>,
+        renderer: &mut R,
+        local: Point<f64, Logical>,
+        scale: Scale<f64>,
+    ) where
+        R: Renderer + ImportAll + ImportMem,
+        R::TextureId: Send + Clone + 'static,
+        E: From<SurfaceElement<R>> + From<Unstretched<MemoryRenderBufferRenderElement<R>>>,
+    {
         // Cloned so the `Surface` arm's borrow does not outlive the `Named`
         // arm's need for `&mut self`. A `WlSurface` clone is a refcount bump.
         match self.status.clone() {
@@ -333,16 +387,16 @@ impl Cursor {
         }
     }
 
-    /// Lets an animated client cursor draw its next frame. A cursor surface is
-    /// not in the shell model, so the backends' window and layer passes never
-    /// reach it.
+    /// Lets an animated client cursor or drag icon draw its next frame.
+    /// Neither surface is in the shell model, so the backends' window and
+    /// layer passes never reach them.
     pub fn send_frame(
         &self,
         output: &Output,
         time: std::time::Duration,
         throttle: Option<std::time::Duration>,
     ) {
-        if let CursorImageStatus::Surface(surface) = &self.status {
+        for surface in self.surfaces() {
             smithay::desktop::utils::send_frames_surface_tree(
                 surface,
                 output,
@@ -351,6 +405,17 @@ impl Cursor {
                 |_, _| Some(output.clone()),
             );
         }
+    }
+
+    /// The client surfaces drawn with the pointer.
+    pub fn surfaces(&self) -> impl Iterator<Item = &WlSurface> {
+        let cursor = match &self.status {
+            CursorImageStatus::Surface(surface) => Some(surface),
+            _ => None,
+        };
+        cursor
+            .into_iter()
+            .chain(self.drag_icon.as_ref().map(|icon| &icon.surface))
     }
 }
 

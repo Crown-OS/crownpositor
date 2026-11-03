@@ -97,8 +97,7 @@ impl State {
     /// A surface the shell cannot place repaints everything.
     pub fn queue_redraw_for_surface(&mut self, surface: &WlSurface) {
         let root = root_surface(surface);
-        if matches!(&self.input.cursor.status, CursorImageStatus::Surface(cursor) if *cursor == root)
-        {
+        if self.input.cursor.shows(&root) {
             self.queue_pointer_redraw();
             return;
         }

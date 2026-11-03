@@ -17,7 +17,6 @@ use smithay::{
             with_surfaces_surface_tree,
         },
     },
-    input::pointer::CursorImageStatus,
     output::Output,
     reexports::wayland_server::{
         Client, Resource, backend::ClientId, protocol::wl_surface::WlSurface,
@@ -85,7 +84,7 @@ fn for_each_surface(
     if let Some(lock) = shell.session_lock.surface_on(output) {
         with_surfaces_surface_tree(lock.wl_surface(), &mut processor);
     }
-    if let CursorImageStatus::Surface(surface) = &cursor.status {
+    for surface in cursor.surfaces() {
         with_surfaces_surface_tree(surface, &mut processor);
     }
 }
