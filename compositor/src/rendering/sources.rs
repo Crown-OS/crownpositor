@@ -24,14 +24,25 @@ pub struct CursorOverlay<'a> {
 }
 
 impl CursorOverlay<'_> {
-    fn render<R, D>(self, elements: &mut Elements<R, D>, renderer: &mut R, scale: Scale<f64>)
-    where
+    fn render<R, D>(
+        self,
+        elements: &mut Elements<R, D>,
+        renderer: &mut R,
+        decorator: &mut D,
+        scale: Scale<f64>,
+    ) where
         R: Renderer + ImportAll + ImportMem,
         R::TextureId: Send + Clone + 'static,
         D: TileDecorator<R>,
     {
-        self.cursor
-            .render(elements, renderer, self.origin, self.pointer, scale);
+        self.cursor.render(
+            elements,
+            renderer,
+            decorator,
+            self.origin,
+            self.pointer,
+            scale,
+        );
     }
 }
 
@@ -53,7 +64,7 @@ where
 {
     let mut elements = Elements::<R, D>::new();
     if let Some(cursor) = cursor {
-        cursor.render::<R, D>(&mut elements, renderer, scale);
+        cursor.render(&mut elements, renderer, decorator, scale);
     }
     let offset = Point::default() - tile.render_rect().loc;
     tile_elements(
@@ -90,7 +101,7 @@ where
 {
     let mut elements = Elements::<R, D>::new();
     if let Some(cursor) = cursor {
-        cursor.render::<R, D>(&mut elements, renderer, scale);
+        cursor.render(&mut elements, renderer, decorator, scale);
     }
     let covered = workspace_window_elements(
         &mut elements,

@@ -5,7 +5,7 @@ use smithay::{
     input::{
         Seat,
         dnd::{DnDGrab, DndGrabHandler, DndTarget, GrabType, Source},
-        pointer::Focus,
+        pointer::{CursorIcon, CursorImageStatus, Focus},
     },
     reexports::wayland_server::protocol::{wl_data_source::WlDataSource, wl_surface::WlSurface},
     utils::{Logical, Point, Serial},
@@ -62,7 +62,10 @@ impl WaylandDndGrabHandler for State {
             source.cancel();
             return;
         };
-        self.input.cursor.drag_icon = icon.map(DragIcon::new);
+        let pointer_location = self.input.pointer_location;
+        let animations = self.config.current.appearance.animations;
+        self.input.cursor.drag_icon =
+            icon.map(|icon| DragIcon::new(icon, pointer_location, animations));
         let toplevel_drag = (&source as &dyn Any)
             .downcast_ref::<WlDataSource>()
             .and_then(|data_source| {
@@ -82,6 +85,9 @@ impl WaylandDndGrabHandler for State {
                 pointer.set_grab(self, grab, serial, Focus::Keep);
             }
         }
+        // The client under the pointer gets a leave and no say over the
+        // cursor until the drop hands focus back.
+        self.show_cursor(CursorIcon::Grabbing);
         // smithay only offers the drag on the first motion, and Chromium
         // cancels one released before its first `enter`: a motion in place
         // offers it to the surface under the cursor straight away.
@@ -98,7 +104,7 @@ impl DndGrabHandler for State {
         _seat: Seat<Self>,
         _location: Point<f64, Logical>,
     ) {
-        self.drop_drag_icon();
+        self.end_drag_visuals();
         self.end_toplevel_drag(if validated {
             DragEnd::Accepted
         } else {
@@ -107,15 +113,20 @@ impl DndGrabHandler for State {
     }
 
     fn cancelled(&mut self, _seat: Seat<Self>, _location: Point<f64, Logical>) {
-        self.drop_drag_icon();
+        self.end_drag_visuals();
         self.end_toplevel_drag(DragEnd::Aborted);
     }
 }
 
 impl State {
-    fn drop_drag_icon(&mut self) {
+    /// Lets go of the icon and the grabbing hand. smithay calls this before it
+    /// hands the pointer back, so the client under it then sets its own cursor.
+    fn end_drag_visuals(&mut self) {
         if self.input.cursor.drag_icon.take().is_some() {
             self.queue_pointer_redraw();
+        }
+        if self.input.cursor.status == CursorImageStatus::Named(CursorIcon::Grabbing) {
+            self.show_cursor(CursorIcon::Default);
         }
     }
 }

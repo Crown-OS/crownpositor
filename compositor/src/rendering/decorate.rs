@@ -11,7 +11,7 @@ use crate::rendering::{
     decoration::{Border, TitleBarParams},
     snapshot::SnapshotElement,
     surface_tree::TransformedSurface,
-    warp::WarpRequest,
+    warp::{SwingRequest, WarpRequest},
 };
 
 use smithay::{
@@ -174,6 +174,13 @@ where
     /// `None` — the default — makes the caller draw the flat morph, or let a
     /// crumbling window go.
     fn warp(&mut self, renderer: &mut R, request: WarpRequest<'_, '_>) -> Option<Self::Element> {
+        let _ = (renderer, request);
+        None
+    }
+
+    /// A drag's icon turned as it swings from the pointer. `None` — the
+    /// default — makes the caller draw it upright.
+    fn swing(&mut self, renderer: &mut R, request: SwingRequest<'_>) -> Option<Self::Element> {
         let _ = (renderer, request);
         None
     }
