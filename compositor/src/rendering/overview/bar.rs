@@ -105,19 +105,9 @@ where
             });
         }
 
-        // Concentric with the windows inside: their corners, pushed out by
-        // the gap they keep from the edge.
-        let shrink = rect.size.w / f64::from(area.size.w.max(1));
-        let inset = (f64::from(monitor.gaps().outer) * self.scale.x) as f32;
         self.card(
             ids,
-            Card {
-                rect,
-                radius: (self.radius + inset) * shrink as f32,
-                shrink,
-                alpha: reveal as f32,
-                ring: active.then_some(ACTIVE_RING),
-            },
+            self.workspace_card(monitor, rect, reveal, active.then_some(ACTIVE_RING)),
         );
 
         let label = scene::centre(slot.label) + Point::from((0.0, climb));
@@ -147,16 +137,28 @@ where
         let ids = &space.ids().add;
         let rect = scene::shown(thumb, climb, space.add_lift(), space.metrics());
         self.plus(ids, rect, reveal as f32);
-        self.card(
-            ids,
-            Card {
-                rect,
-                radius: self.radius * 0.5,
-                shrink: rect.size.w / f64::from(space.canvas().usable.size.w.max(1)),
-                alpha: reveal as f32,
-                ring: None,
-            },
-        );
+        self.card(ids, self.workspace_card(monitor, rect, reveal, None));
+    }
+
+    /// A card shaped like a workspace shrunk into `rect`: concentric with the
+    /// windows inside, their corners pushed out by the gap they keep from the
+    /// edge.
+    fn workspace_card(
+        &self,
+        monitor: &Monitor,
+        rect: Rectangle<f64, Logical>,
+        reveal: f64,
+        ring: Option<[f32; 4]>,
+    ) -> Card {
+        let shrink = rect.size.w / f64::from(monitor.usable().size.w.max(1));
+        let inset = (f64::from(monitor.gaps().outer) * self.scale.x) as f32;
+        Card {
+            rect,
+            radius: (self.radius + inset) * shrink as f32,
+            shrink,
+            alpha: reveal as f32,
+            ring,
+        }
     }
 
     /// The '+' on the add tile: two bars, crisp at any size.
