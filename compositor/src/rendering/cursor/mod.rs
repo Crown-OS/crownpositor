@@ -21,6 +21,7 @@
 pub mod builtin;
 pub mod drag_icon;
 pub mod hyprcursor;
+mod pendulum;
 pub mod source;
 pub mod xcursor;
 
@@ -47,6 +48,7 @@ use smithay::{
 };
 
 use crate::rendering::{
+    Elements,
     cursor::{
         builtin::BuiltinSource,
         drag_icon::DragIcon,
@@ -54,6 +56,7 @@ use crate::rendering::{
         source::{CursorSource, RawFrame, RawImage, RawShape},
         xcursor::XCursorSource,
     },
+    decorate::TileDecorator,
     surface_tree::{SurfaceElement, surface_elements},
     unstretched::Unstretched,
 };
@@ -300,17 +303,19 @@ impl Cursor {
     /// `pointer` is global logical; `monitor` is the output being drawn and its
     /// origin is what makes the result output-local. Nothing is pushed when the
     /// pointer is on another output or a client asked for no cursor at all.
-    pub fn render<R, E>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn render<R, D>(
         &mut self,
-        elements: &mut Vec<E>,
+        elements: &mut Elements<R, D>,
         renderer: &mut R,
+        decorator: &mut D,
         output_location: Point<i32, Logical>,
         pointer: Point<f64, Logical>,
         scale: Scale<f64>,
     ) where
         R: Renderer + ImportAll + ImportMem,
         R::TextureId: Send + Clone + 'static,
-        E: From<SurfaceElement<R>> + From<Unstretched<MemoryRenderBufferRenderElement<R>>>,
+        D: TileDecorator<R>,
     {
         self.refresh();
         if self.suppressed {
@@ -318,18 +323,7 @@ impl Cursor {
         }
         let local = pointer - output_location.to_f64();
         self.render_pointer(elements, renderer, local, scale);
-        if let Some(icon) = &self.drag_icon {
-            let location = (local + icon.offset.to_f64()).to_physical_precise_round(scale);
-            let surfaces = surface_elements(
-                renderer,
-                &icon.surface,
-                location,
-                scale,
-                1.0,
-                Kind::Unspecified,
-            );
-            elements.extend(surfaces.into_iter().map(E::from));
-        }
+        self.render_drag_icon(elements, renderer, decorator, local, pointer, scale);
     }
 
     fn render_pointer<R, E>(

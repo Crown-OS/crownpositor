@@ -34,6 +34,8 @@ crownos-config = { workspace = true }
 crownos-protocols = { workspace = true, features = ["server"] }
 anyhow = { workspace = true }
 getrandom = "0.3"
+# The matrix type smithay's `GlesFrame::render_texture` takes.
+glam = { version = "0.33.2", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 calloop = { workspace = true }
 parking_lot = { workspace = true }

@@ -1,20 +1,22 @@
 //! A warped canvas in the scene graph.
 
+use glam::{Mat3, Vec2};
 use smithay::{
     backend::renderer::{
+        Texture,
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
-        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
+        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, ffi},
         multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, OpaqueRegions},
     },
-    utils::{Buffer as BufferCoords, Physical, Rectangle, Scale, user_data::UserDataMap},
+    utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, user_data::UserDataMap},
 };
 
 use crate::{
     backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
         framebuffer::FramebufferSpace,
-        warp::{canvas::Painted, dust, genie, liquid},
+        warp::{canvas::Painted, dust, genie, liquid, swing},
     },
     shaders::warp::{DustUniforms, GenieUniforms, LiquidUniforms, WarpDraw, WarpShaders},
     shell::{dust::Dust, morph::Edge},
@@ -27,6 +29,11 @@ enum Bend {
     Liquid {
         uniforms: LiquidUniforms,
         icon: Option<GlesTexture>,
+    },
+    /// Turned clockwise by `angle` radians about `pivot`, output-local.
+    Swing {
+        pivot: Point<f64, Physical>,
+        angle: f64,
     },
 }
 
@@ -83,6 +90,21 @@ impl WarpElement {
         }
     }
 
+    pub(super) fn swing(
+        shaders: WarpShaders,
+        canvas: Painted,
+        pivot: Point<f64, Physical>,
+        angle: f64,
+    ) -> Self {
+        Self {
+            shaders,
+            geometry: swing::bounds(canvas.rect, pivot, angle),
+            bend: Bend::Swing { pivot, angle },
+            canvas,
+            alpha: 1.0,
+        }
+    }
+
     fn draw_gles(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -94,6 +116,10 @@ impl WarpElement {
             .iter()
             .map(|rect| space.rect(Rectangle::new(rect.loc + dst.loc, rect.size)))
             .collect();
+        if let Bend::Swing { pivot, angle } = self.bend {
+            let shift = (dst.loc - self.geometry.loc).to_f64();
+            return self.draw_turned(frame, pivot + shift, angle, shift, &scissors);
+        }
         let draw = WarpDraw {
             texture: &self.canvas.texture,
             projection: *frame.projection(),
@@ -113,8 +139,61 @@ impl WarpElement {
                 Bend::Liquid { uniforms, icon } => {
                     self.shaders.liquid.draw(gl, &draw, icon.as_ref(), uniforms)
                 }
+                Bend::Swing { .. } => {}
             }
         })
+    }
+
+    /// The canvas as a quad turned about `pivot`, through smithay's own
+    /// texture program, clipped to each of `scissors` in turn.
+    fn draw_turned(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        pivot: Point<f64, Physical>,
+        angle: f64,
+        shift: Point<f64, Physical>,
+        scissors: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        let vector = |point: Point<f64, Physical>| Vec2::new(point.x as f32, point.y as f32);
+        let pivot = vector(pivot);
+        let matrix = Mat3::from_translation(pivot)
+            * Mat3::from_angle(angle as f32)
+            * Mat3::from_translation(vector(self.canvas.rect.loc + shift) - pivot);
+        let texture = &self.canvas.texture;
+        let size = texture.size();
+        let mut tex_matrix = Mat3::from_scale(Vec2::new(1.0 / size.w as f32, 1.0 / size.h as f32));
+        if texture.is_y_inverted() {
+            tex_matrix = Mat3::from_scale(Vec2::new(1.0, -1.0)) * tex_matrix;
+        }
+        let quad = [0.0, 0.0, size.w as f32, size.h as f32];
+
+        let mut viewport = [0; 4];
+        let scissored = frame.with_context(|gl| unsafe {
+            gl.GetIntegerv(ffi::VIEWPORT, viewport.as_mut_ptr());
+            gl.IsEnabled(ffi::SCISSOR_TEST) == ffi::TRUE
+        })?;
+        let drawn = scissors.iter().try_for_each(|rect| {
+            frame.with_context(|gl| unsafe {
+                gl.Enable(ffi::SCISSOR_TEST);
+                gl.Scissor(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h);
+            })?;
+            frame.render_texture(
+                texture,
+                tex_matrix,
+                matrix,
+                Some(quad),
+                self.alpha,
+                None,
+                &[],
+            )
+        });
+        frame.with_context(|gl| unsafe {
+            gl.Scissor(viewport[0], viewport[1], viewport[2], viewport[3]);
+            if !scissored {
+                gl.Disable(ffi::SCISSOR_TEST);
+            }
+        })?;
+        drawn
     }
 }
 

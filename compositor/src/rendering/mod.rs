@@ -164,6 +164,7 @@ where
     cursor.render(
         &mut elements,
         renderer,
+        decorator,
         monitor.geometry().loc,
         pointer,
         scale,

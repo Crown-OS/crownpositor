@@ -41,7 +41,7 @@ use crate::{
         framebuffer::FramebufferSpace,
         shaded_sprite::ShadedSprite,
         snapshot::SnapshotElement,
-        warp::{self, WarpCanvases, WarpElement, WarpRequest},
+        warp::{self, SwingRequest, WarpCanvases, WarpElement, WarpRequest},
     },
     shaders::{
         lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader,
@@ -704,6 +704,14 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
         warp::warp(renderer, self.canvases, request).map(Decorated::Warp)
     }
 
+    fn swing(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        request: SwingRequest<'_>,
+    ) -> Option<Self::Element> {
+        warp::swing(renderer, self.canvases, request).map(Decorated::Warp)
+    }
+
     fn blurred_sprite(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -841,6 +849,14 @@ impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
         request: WarpRequest<'_, '_>,
     ) -> Option<Self::Element> {
         warp::warp(renderer.as_mut(), self.canvases, request).map(Decorated::Warp)
+    }
+
+    fn swing(
+        &mut self,
+        renderer: &mut KmsRenderer<'render>,
+        request: SwingRequest<'_>,
+    ) -> Option<Self::Element> {
+        warp::swing(renderer.as_mut(), self.canvases, request).map(Decorated::Warp)
     }
 
     fn blurred_sprite(
