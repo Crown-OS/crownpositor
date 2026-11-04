@@ -16,7 +16,7 @@ use crate::{
     shell::monitor::Monitor,
 };
 
-impl<R, D> Painter<'_, R, D>
+impl<R, D> Painter<'_, '_, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
@@ -31,7 +31,7 @@ where
             return;
         };
         self.thumbnail(Thumbnail {
-            window: tile.window(),
+            tile,
             rect,
             clip: None,
             alpha: tile.render_alpha(),
@@ -75,7 +75,7 @@ where
                 let lift = space.metrics().hover * space.window_lift(index, slot) * progress;
                 let rect = scene::between(tile.render_rect(), scene::lift(cell, lift), progress);
                 self.thumbnail(Thumbnail {
-                    window: tile.window(),
+                    tile,
                     rect: Rectangle::new(rect.loc + offset, rect.size),
                     clip: None,
                     alpha: tile.render_alpha(),

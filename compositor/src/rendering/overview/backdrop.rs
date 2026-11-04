@@ -21,7 +21,7 @@ use crate::{
     shell::monitor::Monitor,
 };
 
-impl<R, D> Painter<'_, R, D>
+impl<R, D> Painter<'_, '_, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,

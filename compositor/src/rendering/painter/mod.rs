@@ -22,12 +22,11 @@ use crate::rendering::{
     Elements, FrameStyle,
     blur::GlassKind,
     decorate::{Backdrop, TileDecorator},
-    decoration::TextRenderer,
     element::CrownElement,
     unstretched::Unstretched,
 };
 
-pub(in crate::rendering) struct Painter<'a, R, D>
+pub(in crate::rendering) struct Painter<'a, 's, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
     D: TileDecorator<R>,
@@ -35,13 +34,13 @@ where
     pub elements: &'a mut Elements<R, D>,
     pub renderer: &'a mut R,
     pub decorator: &'a mut D,
-    pub text: &'a mut TextRenderer,
+    pub style: &'a mut FrameStyle<'s>,
     pub scale: Scale<f64>,
     /// A window's corner radius at its own size, in physical pixels.
     pub radius: f32,
 }
 
-impl<'a, R, D> Painter<'a, R, D>
+impl<'a, 's, R, D> Painter<'a, 's, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
@@ -52,15 +51,15 @@ where
         renderer: &'a mut R,
         decorator: &'a mut D,
         scale: Scale<f64>,
-        style: &'a mut FrameStyle<'_>,
+        style: &'a mut FrameStyle<'s>,
     ) -> Self {
         Self {
             elements,
             renderer,
             decorator,
-            text: &mut *style.text,
-            scale,
             radius: style.radius,
+            style,
+            scale,
         }
     }
 
@@ -117,7 +116,7 @@ where
         colour: [f32; 4],
         alpha: f32,
     ) {
-        let Some(label) = self.text.label(text, self.scale.x, colour, true) else {
+        let Some(label) = self.style.text.label(text, self.scale.x, colour, true) else {
             return;
         };
         let (buffer, size) = (label.buffer.clone(), label.size);

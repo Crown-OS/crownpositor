@@ -1073,11 +1073,20 @@ impl Shell {
                             return Some(hit(tile, WindowPart::TitleBar));
                         }
 
+                        // The rim is the frame's edge from the inside, and
+                        // grabs it just as the band outside does.
                         let content = tile.content_rect();
-                        let inside = content.to_f64().contains(local)
-                            && tile
-                                .window()
-                                .is_in_input_region(&(local - content.loc.to_f64()));
+                        if !content.to_f64().contains(local) {
+                            let edge = tile
+                                .has_resize_band()
+                                .then(|| resize_edge(content, local))
+                                .flatten();
+                            let part = edge.map_or(WindowPart::TitleBar, WindowPart::Edge);
+                            return (!tile.insets().is_empty()).then(|| hit(tile, part));
+                        }
+                        let inside = tile
+                            .window()
+                            .is_in_input_region(&(local - content.loc.to_f64()));
                         inside.then(|| hit(tile, WindowPart::Content))
                     })
             })

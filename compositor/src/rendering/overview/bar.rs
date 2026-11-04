@@ -44,7 +44,7 @@ struct Card {
     ring: Option<[f32; 4]>,
 }
 
-impl<R, D> Painter<'_, R, D>
+impl<R, D> Painter<'_, '_, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
@@ -96,7 +96,7 @@ where
         let clip = self.physical(rect);
         for tile in workspace.stacking_order() {
             self.thumbnail(Thumbnail {
-                window: tile.window(),
+                tile,
                 rect: scene::inside(tile.target(), area, rect),
                 clip: Some(clip),
                 alpha: reveal as f32,

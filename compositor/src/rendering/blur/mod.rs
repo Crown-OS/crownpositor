@@ -275,6 +275,14 @@ pub struct Glass {
     pub shading: Shading,
 }
 
+impl Glass {
+    /// Without a rim of its own: glass inside a shape whose edge is lit
+    /// already, like a client's blur inside its frame.
+    pub fn flat(self) -> Self {
+        Self { rim: 0.0, ..self }
+    }
+}
+
 impl Default for Glass {
     /// Plain glass: the compositor's own sheen and vibrancy, with no rim. What
     /// a decorator that has no blur pipeline would draw with if it drew

@@ -1,6 +1,9 @@
 use smithay::backend::renderer::{
     ImportAll, ImportMem,
-    element::{Wrap, memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement},
+    element::{
+        Wrap, memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement,
+        utils::RescaleRenderElement,
+    },
 };
 
 use crate::rendering::{
@@ -30,6 +33,9 @@ smithay::backend::renderer::element::render_elements! {
     /// title — drawn one pixel per pixel. `ImportMem` above is what this
     /// variant costs.
     Pixels = Unstretched<MemoryRenderBufferRenderElement<R>>,
+    /// Those pixels shrunk with what they belong to: a window's title in a
+    /// thumbnail.
+    Zoomed = RescaleRenderElement<Unstretched<MemoryRenderBufferRenderElement<R>>>,
     /// A surface drawn at a size other than its own, with nothing added: the
     /// wallpaper as the overview zooms it.
     Scaled = Cropped<R>,
