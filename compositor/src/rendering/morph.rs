@@ -24,7 +24,8 @@ use crate::{
         blur::{self, GlassKind},
         decorate::{Outline, TileDecorator},
         element::CrownElement,
-        frame_backing, frame_overlay,
+        frame::Frame,
+        menu_row_elements,
         snapshot::{Snapshot, SnapshotElement},
     },
     shell::{Shell, morph::Morph, tile::Tile},
@@ -51,6 +52,8 @@ struct Placement {
     content: Rectangle<f64, Physical>,
     /// How much of the titlebar is inside `frame`.
     inset: i32,
+    /// The rim at the zoom, physical.
+    rim: f32,
     zoom: f64,
     radius: f32,
 }
@@ -70,10 +73,15 @@ impl Placement {
 
         let zoomed = window.size.upscale(zoom);
         let zoomed_loc = shown.loc + (shown.size.to_point() - zoomed.to_point()).downscale(2.0);
-        let titlebar = f64::from(tile.insets().top) * zoom;
+        let insets = tile.insets();
+        let titlebar = f64::from(insets.top) * zoom;
+        let rim = f64::from(insets.rim) * zoom;
         let content = Rectangle::new(
-            zoomed_loc + Point::from((0.0, titlebar)),
-            Size::from((zoomed.w, (zoomed.h - titlebar).max(1.0))),
+            zoomed_loc + Point::from((rim, titlebar)),
+            Size::from((
+                (zoomed.w - 2.0 * rim).max(1.0),
+                (zoomed.h - titlebar - rim).max(1.0),
+            )),
         );
 
         let frame = Rectangle::new(
@@ -86,23 +94,23 @@ impl Placement {
             frame,
             content: content.to_physical(scale),
             inset,
+            rim: (rim * scale.x) as f32,
             zoom,
             radius: (morph.radius(f64::from(radius) / scale.x) * scale.x) as f32,
         }
     }
 
-    /// Where the client draws: the frame below the titlebar.
+    /// Where the client draws: its content, as much of it as the frame shows.
     fn clip(&self) -> Rectangle<i32, Physical> {
-        Rectangle::new(
-            self.frame.loc + Point::from((0, self.inset)),
-            Size::from((self.frame.size.w, (self.frame.size.h - self.inset).max(1))),
-        )
+        let content = self.content.to_i32_round();
+        content
+            .intersection(self.frame)
+            .unwrap_or_else(|| Rectangle::new(content.loc, Size::from((1, 1))))
     }
 
-    /// Square on top where the titlebar covers the corners.
+    /// Concentric with the frame inside its rim.
     fn radii(&self) -> [f32; 4] {
-        let top = if self.inset > 0 { 0.0 } else { self.radius };
-        [self.radius, top, self.radius, top]
+        [(self.radius - self.rim).max(0.0); 4]
     }
 }
 
@@ -130,21 +138,12 @@ pub(crate) fn morph_elements<R, D>(
     let alpha = tile.render_alpha() * morph.alpha();
     let (frame, inset, corner) = (placement.frame, placement.inset, placement.radius);
 
-    if inset > 0 {
+    let framed = (inset > 0).then(|| Frame::desktop(tile, frame, inset, corner));
+    if let Some(framed) = &framed {
         let marks = ((placement.zoom - MARKS_FADE_FROM) / (1.0 - MARKS_FADE_FROM)).clamp(0.0, 1.0);
-        frame_overlay(
-            elements,
-            shell,
-            tile,
-            renderer,
-            decorator,
-            frame,
-            inset,
-            corner,
-            scale,
-            style,
-            alpha * marks as f32,
-        );
+        let marks = alpha * marks as f32;
+        framed.overlay(elements, renderer, decorator, style, marks);
+        menu_row_elements::<R, D>(elements, shell, tile.id(), renderer, scale, style, marks);
     }
 
     match content {
@@ -162,10 +161,8 @@ pub(crate) fn morph_elements<R, D>(
         }
     }
 
-    if inset > 0 {
-        frame_backing(
-            elements, tile, renderer, decorator, frame, inset, corner, style, alpha,
-        );
+    if let Some(framed) = framed {
+        framed.backing(elements, renderer, decorator, style, alpha);
     }
 }
 
@@ -213,6 +210,11 @@ fn live_elements<R, D>(
     let origin = content_origin
         - Point::<f64, Physical>::from((offset.x * shrink.x, offset.y * shrink.y)).to_i32_round();
     let strength = decorator.blur_strength_for(zoom);
+    let glass = decorator.glass(shrink.x, GlassKind::Window);
+    let glass = match placement.inset > 0 {
+        true => glass.flat(),
+        false => glass,
+    };
     backdrop_elements(
         &mut |element| elements.push(CrownElement::Tile(Wrap::from(element))),
         renderer,
@@ -223,10 +225,10 @@ fn live_elements<R, D>(
         clip,
         Outline {
             rect: clip,
-            radius: placement.radius,
+            radius: radii[0],
         },
         alpha,
-        GlassKind::Window,
+        glass,
         strength,
     );
 }

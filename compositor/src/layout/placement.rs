@@ -6,6 +6,8 @@
 
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
+use crate::shell::decoration::Insets;
+
 /// Offset between successive cascaded windows.
 const CASCADE_STEP: i32 = 32;
 /// How far a cascade walks before returning to the top left.
@@ -25,19 +27,13 @@ const REACHABLE: i32 = 64;
 /// looks exactly like a window that asked to be one titlebar tall.
 pub fn initial_rect(
     content: Size<i32, Logical>,
-    decoration: i32,
+    decoration: Insets,
     area: Rectangle<i32, Logical>,
     parent: Option<Rectangle<i32, Logical>>,
     cascade: usize,
 ) -> Rectangle<i32, Logical> {
-    let available = Size::from((area.size.w, (area.size.h - decoration).max(1)));
-    let content = honour(content, available);
-    place(
-        Size::from((content.w, content.h + decoration)),
-        area,
-        parent,
-        cascade,
-    )
+    let content = honour(content, decoration.content_size(area.size));
+    place(decoration.frame_size(content), area, parent, cascade)
 }
 
 /// Where a floating window of `size` goes.
@@ -236,25 +232,31 @@ mod tests {
 
     #[test]
     fn a_window_opens_at_the_size_it_asked_for() {
-        let rect = initial_rect((640, 480).into(), 0, area(1920, 1080), None, 0);
+        let rect = initial_rect((640, 480).into(), Insets::NONE, area(1920, 1080), None, 0);
         assert_eq!(rect.size, (640, 480).into());
     }
 
     #[test]
     fn a_client_that_names_no_size_gets_a_fraction_of_the_area() {
-        let rect = initial_rect((0, 0).into(), 0, area(1000, 1000), None, 0);
+        let rect = initial_rect((0, 0).into(), Insets::NONE, area(1000, 1000), None, 0);
         assert_eq!(rect.size, (600, 600).into());
     }
 
     #[test]
     fn one_unset_axis_does_not_discard_the_other() {
-        let rect = initial_rect((800, 0).into(), 0, area(1000, 1000), None, 0);
+        let rect = initial_rect((800, 0).into(), Insets::NONE, area(1000, 1000), None, 0);
         assert_eq!(rect.size, (800, 600).into());
     }
 
     #[test]
     fn a_decorated_window_grows_by_its_titlebar() {
-        let rect = initial_rect((640, 480).into(), 36, area(1920, 1080), None, 0);
+        let rect = initial_rect(
+            (640, 480).into(),
+            Insets::top(36),
+            area(1920, 1080),
+            None,
+            0,
+        );
         assert_eq!(rect.size, (640, 516).into());
     }
 
@@ -263,7 +265,7 @@ mod tests {
     /// window at exactly one titlebar tall.
     #[test]
     fn an_unset_size_is_resolved_before_the_titlebar_is_added() {
-        let rect = initial_rect((0, 0).into(), 36, area(1000, 1000), None, 0);
+        let rect = initial_rect((0, 0).into(), Insets::top(36), area(1000, 1000), None, 0);
         assert!(
             rect.size.h > 36 * 2,
             "opened {}px tall, which is a titlebar and nothing else",
@@ -282,7 +284,7 @@ mod tests {
     #[test]
     fn a_parentless_dialog_centers_on_the_screen() {
         let screen = area(1920, 1080);
-        let rect = initial_rect((600, 400).into(), 36, screen, Some(screen), 3);
+        let rect = initial_rect((600, 400).into(), Insets::top(36), screen, Some(screen), 3);
         assert_eq!(rect.loc, (660, 322).into());
     }
 

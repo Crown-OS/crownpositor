@@ -334,7 +334,7 @@ impl State {
             let cascade = self.shell.next_cascade();
             tile.set_floating_rect(placement::initial_rect(
                 unmapped.window.geometry().size,
-                tile.insets().top,
+                tile.insets(),
                 area,
                 centered.then_some(area),
                 cascade,

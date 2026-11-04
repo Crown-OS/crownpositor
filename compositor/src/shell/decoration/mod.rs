@@ -1,7 +1,7 @@
 //! Where a window's frame sits relative to the window itself.
 //!
 //! The frame is *outside* the client area, the way macOS and Windows draw one:
-//! a decorated window's rect is the titlebar plus the surface, and the client is
+//! a decorated window's rect is the titlebar and rim plus the surface, and the client is
 //! configured with what is left. Two rects therefore exist for every tile, and
 //! confusing them is the whole bug surface of server-side decoration — so the
 //! conversion lives here, in one place, with no renderer and no `WlSurface`
@@ -199,26 +199,41 @@ impl TitleBarLayout {
     }
 }
 
-/// The band the decoration occupies along each edge of a window.
-///
-/// Only the top is non-zero today. It is still a struct rather than a bare
-/// `i32` because a future bottom bar belongs here, and every call site already
-/// asks the same two questions of it. The resize band does not: it lies
-/// outside the frame, so it changes neither rect — see [`resize_edge`].
+/// The frame's band round the client on its left, right and bottom, so the
+/// client sits inside the frame's glass with its corners concentric to it.
+pub const FRAME_RIM: i32 = 4;
+
+/// The band the decoration occupies along each edge of a window: the titlebar
+/// on top and the rim on the other three. The resize band lies outside the
+/// frame, so it changes neither rect — see [`resize_edge`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Insets {
     pub top: i32,
+    /// Left, right and bottom alike.
+    pub rim: i32,
 }
 
 impl Insets {
-    pub const NONE: Self = Self { top: 0 };
+    pub const NONE: Self = Self { top: 0, rim: 0 };
 
     pub fn top(height: i32) -> Self {
-        Self { top: height.max(0) }
+        Self::framed(height, 0)
+    }
+
+    pub fn framed(top: i32, rim: i32) -> Self {
+        Self {
+            top: top.max(0),
+            rim: rim.max(0),
+        }
     }
 
     pub fn is_empty(self) -> bool {
-        self.top == 0
+        self.top == 0 && self.rim == 0
+    }
+
+    /// Where the client area starts inside a frame.
+    pub fn content_offset(self) -> Point<i32, Logical> {
+        Point::from((self.rim, self.top))
     }
 
     /// The client area inside a frame.
@@ -228,37 +243,40 @@ impl Insets {
     /// and the renderer must never be given.
     pub fn content(self, frame: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
         Rectangle::new(
-            Point::from((frame.loc.x, frame.loc.y + self.top)),
-            Size::from((frame.size.w.max(1), (frame.size.h - self.top).max(1))),
+            frame.loc + self.content_offset(),
+            self.content_size(frame.size),
         )
     }
 
     /// The frame around a client area — the inverse of [`content`].
     ///
     /// This is the direction a client-driven size travels: the client says how
-    /// big it wants to be, and the frame is that plus the titlebar.
+    /// big it wants to be, and the frame is that plus the decoration.
     ///
     /// [`content`]: Self::content
     pub fn frame(self, content: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
         Rectangle::new(
-            Point::from((content.loc.x, content.loc.y - self.top)),
-            Size::from((content.size.w, content.size.h + self.top)),
+            content.loc - self.content_offset(),
+            self.frame_size(content.size),
         )
     }
 
     /// The client size a frame of this size leaves room for.
     pub fn content_size(self, frame: Size<i32, Logical>) -> Size<i32, Logical> {
-        Size::from((frame.w.max(1), (frame.h - self.top).max(1)))
+        Size::from((
+            (frame.w - 2 * self.rim).max(1),
+            (frame.h - self.top - self.rim).max(1),
+        ))
     }
 
     /// The frame size a client of this size needs.
     pub fn frame_size(self, content: Size<i32, Logical>) -> Size<i32, Logical> {
-        Size::from((content.w, content.h + self.top))
+        Size::from((content.w + 2 * self.rim, content.h + self.top + self.rim))
     }
 
-    /// Whether an output-local point is in the decoration band of `frame`.
+    /// Whether an output-local point is in the titlebar band of `frame`.
     pub fn contains(self, frame: Rectangle<i32, Logical>, point: Point<f64, Logical>) -> bool {
-        !self.is_empty()
+        self.top > 0
             && Rectangle::new(frame.loc, Size::from((frame.size.w, self.top)))
                 .to_f64()
                 .contains(point)
@@ -396,6 +414,17 @@ mod tests {
     fn the_content_never_collapses_to_nothing() {
         let content = Insets::top(36).content(rect(0, 0, 100, 10));
         assert!(content.size.w >= 1 && content.size.h >= 1);
+    }
+
+    #[test]
+    fn a_rim_insets_the_content_on_three_sides() {
+        let insets = Insets::framed(36, 4);
+        assert_eq!(
+            insets.content(rect(10, 20, 800, 600)),
+            rect(14, 56, 792, 560)
+        );
+        let frame = rect(10, 20, 800, 600);
+        assert_eq!(insets.frame(insets.content(frame)), frame);
     }
 
     #[test]

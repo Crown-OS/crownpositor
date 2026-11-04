@@ -60,7 +60,7 @@ struct Card<'a> {
     depth: f64,
 }
 
-impl<R, D> Painter<'_, R, D>
+impl<R, D> Painter<'_, '_, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
@@ -113,7 +113,7 @@ where
             self.card_chrome(control, card);
         }
         self.thumbnail(Thumbnail {
-            window: card.tile.window(),
+            tile: card.tile,
             rect: card.rect,
             clip: None,
             alpha: card.alpha as f32,
@@ -154,7 +154,7 @@ where
 
         let title = shortened(card.tile.title());
         let width = match card.focus > VISIBLE {
-            true => f64::from(self.text.measure(&title, self.scale.x, TITLE, true)),
+            true => f64::from(self.style.text.measure(&title, self.scale.x, TITLE, true)),
             false => 0.0,
         };
         let middle = scene::centre(rect).x;

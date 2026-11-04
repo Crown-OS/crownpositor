@@ -169,8 +169,11 @@ impl State {
         let Some(frame) = self.begin_drag(id, self.input.pointer_location) else {
             return;
         };
-        let titlebar = self.shell.tile(id).map_or(0, |tile| tile.insets().top);
-        let grip = attachment.offset + Point::from((0, titlebar));
+        let content = self
+            .shell
+            .tile(id)
+            .map_or_else(Point::default, |tile| tile.insets().content_offset());
+        let grip = attachment.offset + content;
         let grip = Point::from((grip.x.clamp(0, frame.size.w), grip.y.clamp(0, frame.size.h)));
         self.carry(id, grip.to_f64());
     }
@@ -194,8 +197,11 @@ impl State {
     /// Picks up a window that has just mapped floating, under the cursor, at
     /// the offset its client attached it with.
     pub fn carry_mapped(&mut self, id: WindowId, offset: Point<i32, Logical>) {
-        let titlebar = self.shell.tile(id).map_or(0, |tile| tile.insets().top);
-        self.carry(id, (offset + Point::from((0, titlebar))).to_f64());
+        let content = self
+            .shell
+            .tile(id)
+            .map_or_else(Point::default, |tile| tile.insets().content_offset());
+        self.carry(id, (offset + content).to_f64());
     }
 
     fn carry(&mut self, id: WindowId, grip: Point<f64, Logical>) {

@@ -12,7 +12,7 @@ use crate::{
     shell::monitor::Monitor,
 };
 
-impl<R, D> Painter<'_, R, D>
+impl<R, D> Painter<'_, '_, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
@@ -30,7 +30,7 @@ where
             let alpha = tile.render_alpha() * (1.0 - control.focus_of(tile.id())) as f32;
             if alpha > 0.0 {
                 self.thumbnail(Thumbnail {
-                    window: tile.window(),
+                    tile,
                     rect: tile.render_rect(),
                     clip: None,
                     alpha,

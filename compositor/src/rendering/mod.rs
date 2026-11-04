@@ -16,6 +16,7 @@ pub mod cursor;
 pub mod decorate;
 pub mod decoration;
 pub mod element;
+mod frame;
 pub mod framebuffer;
 pub mod fullscreen;
 pub mod glazed;
@@ -48,7 +49,7 @@ use smithay::{
     },
     desktop::layer_map_for_output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{Logical, Physical, Point, Rectangle, Scale, Size},
+    utils::{Logical, Physical, Point, Rectangle, Scale},
     wayland::shell::wlr_layer::Layer,
 };
 
@@ -59,14 +60,15 @@ use crate::{
         blur::{Glass, GlassKind},
         cursor::Cursor,
         decorate::{Backdrop, Glaze, Glazing, Outline, Shadow, TileDecorator},
-        decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
+        decoration::{Border, FramePalette, TextRenderer},
         element::CrownElement,
+        frame::{Frame, client_area},
         unstretched::Unstretched,
         warp::{Motion, WarpRequest},
     },
     shell::{
         Shell,
-        decoration::{Control, Insets, TitleBarLayout},
+        decoration::Control,
         gaming,
         monitor::Monitor,
         morph::Morph,
@@ -134,13 +136,6 @@ impl<'a> FrameStyle<'a> {
         self.hovered
             .and_then(|(window, control)| (window == id).then_some(control))
     }
-}
-
-/// What a frame's *pixels* depend on, packed so the commit counter can tell in
-/// one comparison whether they changed.
-fn appearance_key(focused: bool, hovered: Option<Control>, dark: bool) -> u64 {
-    let hover = hovered.map_or(u64::from(u8::MAX), |control| control.index() as u64);
-    (u64::from(focused) << 16) | (u64::from(dark) << 8) | hover
 }
 
 /// One output's scene graph, for a given renderer and decorator.
@@ -564,22 +559,21 @@ fn tile_elements<R, D>(
     let Placed {
         frame,
         inset,
+        rim,
         clip,
         surface_origin,
     } = Placed::new(tile, offset, scale);
     let reveal = tile.titlebar_reveal();
     let alpha = tile.render_alpha();
 
-    if inset > 0 {
-        frame_overlay(
+    let framed = (inset > 0).then(|| Frame::desktop(tile, frame, inset, radius));
+    if let Some(framed) = &framed {
+        framed.overlay(elements, renderer, decorator, style, alpha * reveal);
+        menu_row_elements::<R, D>(
             elements,
             shell,
-            tile,
+            tile.id(),
             renderer,
-            decorator,
-            frame,
-            inset,
-            radius,
             scale,
             style,
             alpha * reveal,
@@ -596,11 +590,9 @@ fn tile_elements<R, D>(
         .as_ref()
         .and_then(|surface| blur::surface_corner_radius(surface, scale.x));
 
-    // Square where the titlebar covers them, so the two do not each round the
-    // same corner and leave a notch between them.
     let radii = match client_radius {
         Some(radius) => [radius; 4],
-        None => corner_radii(radius, reveal),
+        None => content_radii(radius, rim as f32),
     };
 
     let surfaces = surface_tree::transformed_surface_elements(
@@ -628,16 +620,18 @@ fn tile_elements<R, D>(
     // The blurred glass goes in *after* the window's surfaces — later in the
     // list is further from the eye, so it sits directly behind them. The
     // surface origin is the space the client expressed its blur region in, and
-    // `clip` bounds it. On a framed window that glass is one part of the
-    // frame's, so it is cut from and lit as the whole frame: the rim runs on
-    // round the titlebar rather than across the window just under it.
+    // it is cut to the client's own shape. Inside a frame it is flat: the
+    // frame's sheet lights the window's edge, and a second lit edge round the
+    // client would read as a seam.
     if let Some(surface) = surface {
-        let outline = match client_radius {
-            None if inset > 0 => frame_sheet(frame, radius, style.scale),
-            _ => Outline {
-                rect: clip,
-                radius: client_radius.unwrap_or(radius),
-            },
+        let outline = Outline {
+            rect: clip,
+            radius: radii[0],
+        };
+        let glass = decorator.glass(scale.x, GlassKind::Window);
+        let glass = match framed {
+            Some(_) => glass.flat(),
+            None => glass,
         };
         backdrop_elements(
             &mut |element| elements.push(CrownElement::Tile(Wrap::from(element))),
@@ -649,7 +643,7 @@ fn tile_elements<R, D>(
             clip,
             outline,
             alpha,
-            GlassKind::Window,
+            glass,
             1.0,
         );
     }
@@ -658,18 +652,8 @@ fn tile_elements<R, D>(
     // overlay: the frame's material has to show through every part of the
     // window that is not the client — the titlebar, the corner notches the
     // client's rounding cuts away, and the ring.
-    if inset > 0 {
-        frame_backing(
-            elements,
-            tile,
-            renderer,
-            decorator,
-            frame,
-            inset,
-            radius,
-            style,
-            alpha * reveal,
-        );
+    if let Some(framed) = framed {
+        framed.backing(elements, renderer, decorator, style, alpha * reveal);
     }
 }
 
@@ -684,6 +668,8 @@ pub(crate) struct Placed {
     pub frame: Rectangle<i32, Physical>,
     /// How much of the frame's top the titlebar takes.
     pub inset: i32,
+    /// How much of its other three sides the rim takes.
+    pub rim: i32,
     /// Where the client actually draws. Equal to the frame when undecorated,
     /// so the undecorated path costs nothing extra.
     pub clip: Rectangle<i32, Physical>,
@@ -700,10 +686,8 @@ impl Placed {
             (animated.loc + offset).to_physical_precise_round(scale);
         let frame = Rectangle::new(frame_loc, animated.size.to_physical_precise_round(scale));
         let inset = (tile.render_titlebar() * scale.y).round() as i32;
-        let clip = Rectangle::new(
-            frame_loc + Point::from((0, inset)),
-            Size::from((frame.size.w, (frame.size.h - inset).max(1))),
-        );
+        let rim = (tile.render_rim() * scale.x).round() as i32;
+        let clip = client_area(frame, inset, rim);
         let surface_origin = clip.loc
             - tile
                 .window()
@@ -713,244 +697,16 @@ impl Placed {
         Self {
             frame,
             inset,
+            rim,
             clip,
             surface_origin,
         }
     }
 }
 
-/// What a decorated window draws *over* itself: its title, its menu row and
-/// its outline.
-///
-/// The material all three sit on is [`frame_backing`]'s, pushed behind the
-/// client — so these are only the marks laid on top of it.
-#[allow(clippy::too_many_arguments)]
-fn frame_overlay<R, D>(
-    elements: &mut Elements<R, D>,
-    shell: &Shell,
-    tile: &Tile,
-    renderer: &mut R,
-    decorator: &mut D,
-    frame: Rectangle<i32, Physical>,
-    inset: i32,
-    radius: f32,
-    scale: Scale<f64>,
-    style: &mut FrameStyle<'_>,
-    alpha: f32,
-) where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Send + Clone + 'static,
-    D: TileDecorator<R>,
-{
-    let focused = style.focused == Some(tile.id());
-    let palette = style.palette(focused);
-    let commit = tile.decoration_commit(appearance_key(
-        focused,
-        style.hover_on(tile.id()),
-        style.dark,
-    ));
-
-    // Copied out, so the closure below does not hold a borrow on `style` —
-    // which the menu row needs mutably to shape its labels.
-    let output_scale = style.scale;
-    let physical = |value: i32| (value as f64 * output_scale) as f32;
-    let layout = frame_layout(frame, inset, output_scale);
-
-    // The title. Rasterised at the output's scale and cached, so this is a hash
-    // lookup on every frame but the one where the title changed.
-    let label_area = layout.label();
-    if label_area.size.w > 0
-        && let Some(label) = style
-            .text
-            .label(tile.title(), style.scale, palette.label, true)
-    {
-        // Clipped rather than elided: a title too long for its window loses its
-        // tail, which is what every titlebar has always done.
-        let visible = Size::from((
-            label.size.w.min(physical(label_area.size.w) as i32),
-            label.size.h.min(inset),
-        ));
-        let location = Point::<i32, Physical>::from((
-            frame.loc.x + physical(label_area.loc.x) as i32,
-            frame.loc.y + (inset - visible.h) / 2,
-        ));
-        let crop = Rectangle::new(
-            Point::from((0.0, ((label.size.h - visible.h) / 2) as f64)),
-            visible.to_f64(),
-        );
-
-        // Rasterised at this output's scale, so drawn one pixel per pixel:
-        // smithay would size it in logical pixels and stretch it by the scale.
-        if visible.w > 0
-            && visible.h > 0
-            && let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
-                renderer,
-                location.to_f64(),
-                &label.buffer,
-                Some(alpha),
-                Some(crop),
-                Some(visible),
-                Kind::Unspecified,
-            )
-        {
-            elements.push(Unstretched::at_own_size(element, scale).into());
-        }
-    }
-
-    menu_row_elements::<R, D>(elements, shell, tile.id(), renderer, scale, style, alpha);
-
-    // The hairline. Grown outward from the window, so it eats into the gap
-    // rather than into the client area, and translucent — the glass behind it
-    // is what it is lit by.
-    if let Some(border) = decorator.border(
-        renderer,
-        Border {
-            id: tile.decoration_ids().border.clone(),
-            commit,
-            window: frame,
-            thickness: style.scale as f32,
-            radius,
-            color: palette.border,
-            alpha,
-        },
-    ) {
-        elements.push(CrownElement::Tile(Wrap::from(border)));
-    }
-}
-
-/// Where a frame's pieces sit, laid out against its *animated* size.
-///
-/// The window is mid-resize on every frame of a transition, and controls
-/// positioned from the settled width would drift outside it while it grows.
-/// Measured at the origin, so every rect that comes back is already an offset
-/// into the frame.
-fn frame_layout(frame: Rectangle<i32, Physical>, inset: i32, scale: f64) -> TitleBarLayout {
-    let logical = |value: i32| (value as f64 / scale).round() as i32;
-    TitleBarLayout::new(
-        Rectangle::from_size(Size::from((logical(frame.size.w), logical(frame.size.h)))),
-        Insets::top(logical(inset)),
-    )
-}
-
-/// The whole of a decorated window as one shape, out to the ring's outer edge
-/// where its glass stops — the same arithmetic the ring is drawn with, because
-/// a sheet that disagreed with it by a pixel would show as a seam.
-fn frame_sheet(frame: Rectangle<i32, Physical>, radius: f32, scale: f64) -> Outline {
-    window::outline(frame, scale as f32, radius).map_or(
-        Outline {
-            rect: frame,
-            radius,
-        },
-        |(rect, _, radius)| Outline { rect, radius },
-    )
-}
-
-/// What a decorated window sits on: a sheet of tinted glass behind the client,
-/// and the titlebar's controls over it.
-///
-/// The tint is part of the glass rather than a sheet laid over it, so the lit
-/// rim lands on top of the tint and runs unbroken round the titlebar, curving
-/// with the window's corners. The glass is cut from [`frame_sheet`], reaching
-/// past the window to the ring's outer edge, because the ring is translucent
-/// and a sheet that stopped short would leave it the one unlit part of the
-/// frame — and the tint stops at the window, so the ring stays clear glass and
-/// outlines the frame in the colours behind it.
-///
-/// Without a blur pipeline the panel carries the tint itself, over the whole
-/// window, so the titlebar and the notches the client's corners cut away
-/// still read as one material.
-///
-/// Both are furthest from the eye of everything a window draws, which is what
-/// lets the client cover their middles: one quad each behind the window, rather
-/// than a strip per uncovered edge, which costs more draw calls than the
-/// covered pixels save.
-#[allow(clippy::too_many_arguments)]
-fn frame_backing<R, D>(
-    elements: &mut Elements<R, D>,
-    tile: &Tile,
-    renderer: &mut R,
-    decorator: &mut D,
-    frame: Rectangle<i32, Physical>,
-    inset: i32,
-    radius: f32,
-    style: &FrameStyle<'_>,
-    alpha: f32,
-) where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Clone + 'static,
-    D: TileDecorator<R>,
-{
-    let focused = style.focused == Some(tile.id());
-    let hovered = style.hover_on(tile.id());
-    let ids = tile.decoration_ids();
-    let commit = tile.decoration_commit(appearance_key(focused, hovered, style.dark));
-    let palette = style.palette(focused);
-
-    let glass = decorator.blur_fingerprint().and_then(|_| {
-        let sheet = frame_sheet(frame, radius, style.scale);
-        let ring = (frame.loc.y - sheet.rect.loc.y) as f32;
-        decorator.backdrop(
-            renderer,
-            Backdrop {
-                id: ids.glass.clone(),
-                commit,
-                geometry: sheet.rect,
-                mask: sheet.rect,
-                radius: sheet.radius,
-                glass: Glass {
-                    tint: palette.sheet,
-                    tint_inset: ring,
-                    ..decorator.glass(style.scale, GlassKind::Window)
-                },
-                alpha,
-                strength: 1.0,
-            },
-        )
-    });
-
-    let (geometry, palette) = match glass {
-        Some(_) => (
-            Rectangle::new(frame.loc, Size::from((frame.size.w, inset))),
-            palette.over_glass(),
-        ),
-        None => (frame, palette),
-    };
-
-    let layout = frame_layout(frame, inset, style.scale);
-    let physical = |value: i32| (value as f64 * style.scale) as f32;
-    let first = layout.first_control_centre();
-
-    if let Some(panel) = decorator.title_bar(
-        renderer,
-        TitleBarParams {
-            id: ids.panel.clone(),
-            commit,
-            geometry,
-            frame,
-            radius,
-            bar_height: inset as f32,
-            first_control: (
-                frame.loc.x as f32 + physical(first.x),
-                frame.loc.y as f32 + physical(first.y),
-            ),
-            control_pitch: physical(layout.control_pitch()),
-            control_radius: physical(layout.control_radius()),
-            hovered,
-            palette,
-            alpha,
-        },
-    ) {
-        elements.push(CrownElement::Tile(Wrap::from(panel)));
-    }
-
-    if let Some(glass) = glass {
-        elements.push(CrownElement::Tile(Wrap::from(glass)));
-    }
-}
-
 /// The menu row's labels along a titlebar.
 ///
-/// Pushed by [`frame_overlay`] for the window that owns them, from the layout
+/// Pushed by [`tile_elements`] for the window that owns them, from the layout
 /// [`State::layout_menus`](crate::state::State::layout_menus) recorded before
 /// the frame — so what is drawn is exactly what a click will find.
 fn menu_row_elements<R, D>(
@@ -1233,15 +989,10 @@ fn snap_preview_elements<R, D>(
     }
 }
 
-/// Which corners of the client area round.
-///
-/// A decorated window's top pair are square: the titlebar sits over them and
-/// rounds them itself, and two shapes each rounding the same corner leaves a
-/// notch between them. They round back in as the titlebar slides away. The order is the one the shader reads: right-bottom,
-/// right-top, left-bottom, left-top.
-fn corner_radii(radius: f32, titlebar_reveal: f32) -> [f32; 4] {
-    let top = radius * (1.0 - titlebar_reveal);
-    [radius, top, radius, top]
+/// The client's corners inside a frame `rim` wide: concentric with the
+/// frame's own, so the band between them is even all the way round.
+fn content_radii(radius: f32, rim: f32) -> [f32; 4] {
+    [(radius - rim).max(0.0); 4]
 }
 
 /// Pushes everything a surface asked the compositor to draw for it: the glass
@@ -1272,7 +1023,7 @@ pub(crate) fn backdrop_elements<R, D>(
     clip: Rectangle<i32, Physical>,
     outline: Outline,
     alpha: f32,
-    kind: GlassKind,
+    glass: Glass,
     strength: f32,
 ) where
     R: Renderer + ImportAll + ImportMem,
@@ -1285,7 +1036,6 @@ pub(crate) fn backdrop_elements<R, D>(
         return;
     };
 
-    let glass = decorator.glass(scale.x, kind);
     if let Some(effects) = blur::place_surface_effects(surface, origin, scale, clip, glass.shading)
     {
         surface_effect_elements(
@@ -1565,7 +1315,7 @@ pub(crate) fn layer_elements<R, D>(
                         radius: radius.unwrap_or(0.0),
                     },
                     1.0,
-                    GlassKind::Panel,
+                    decorator.glass(scale.x, GlassKind::Panel),
                     1.0,
                 ),
             }

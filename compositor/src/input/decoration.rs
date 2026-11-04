@@ -74,7 +74,17 @@ impl State {
         if self.input.hovered_control == hovered {
             return;
         }
+        let was = self.input.hovered_control.map(|(window, _)| window);
+        let now = hovered.map(|(window, _)| window);
         self.input.hovered_control = hovered;
+        if was != now {
+            if let Some(tile) = was.and_then(|id| self.shell.tile_mut(id)) {
+                tile.anim_mut().hide_glyphs();
+            }
+            if let Some(tile) = now.and_then(|id| self.shell.tile_mut(id)) {
+                tile.anim_mut().show_glyphs();
+            }
+        }
         self.queue_pointer_redraw();
     }
 

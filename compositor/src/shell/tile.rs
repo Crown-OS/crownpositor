@@ -16,7 +16,7 @@ use spacecontrol::animations::spring::{Spring, SpringProfile};
 use crate::{
     layout::{SnapZone, TileInfo, placement},
     shell::{
-        decoration::{DecorationCommit, DecorationIds, Insets},
+        decoration::{DecorationCommit, DecorationIds, FRAME_RIM, Insets},
         morph::{Choreography, IconOrigin, Morph, MorphEnd},
     },
     utils::id::WindowId,
@@ -112,6 +112,10 @@ pub struct Tile {
     size_authority: SizeAuthority,
     geometry_authority: GeometryAuthority,
     decoration_ids: DecorationIds,
+    /// For the copy of the frame a preview draws while the window itself is
+    /// on screen too: one id in two places on one frame confuses the damage
+    /// tracker.
+    preview_decoration_ids: DecorationIds,
     decoration_commit: DecorationCommit,
     /// The window's title, cached so the render path does not lock the client's
     /// xdg state once per frame.
@@ -199,6 +203,7 @@ impl Tile {
             },
             geometry_authority: GeometryAuthority::Layout,
             decoration_ids: DecorationIds::default(),
+            preview_decoration_ids: DecorationIds::default(),
             decoration_commit: DecorationCommit::default(),
             title: String::new(),
             titlebar_height,
@@ -311,7 +316,7 @@ impl Tile {
 
     pub fn insets(&self) -> Insets {
         if self.is_decorated() {
-            Insets::top(self.titlebar_height)
+            Insets::framed(self.titlebar_height, FRAME_RIM)
         } else {
             Insets::NONE
         }
@@ -339,6 +344,10 @@ impl Tile {
 
     pub fn decoration_ids(&self) -> &DecorationIds {
         &self.decoration_ids
+    }
+
+    pub fn preview_decoration_ids(&self) -> &DecorationIds {
+        &self.preview_decoration_ids
     }
 
     /// The commit counter for a frame drawn with this appearance. Changes only
@@ -575,6 +584,11 @@ impl Tile {
         self.anim.titlebar()
     }
 
+    /// The rim's width this frame, easing in and out with the titlebar.
+    pub fn render_rim(&self) -> f64 {
+        f64::from(FRAME_RIM) * f64::from(self.titlebar_reveal())
+    }
+
     /// How much of the titlebar is showing, from 0 (none) to 1 (all of it).
     pub fn titlebar_reveal(&self) -> f32 {
         (self.anim.titlebar() as f32 / self.titlebar_height.max(1) as f32).min(1.0)
@@ -641,7 +655,7 @@ impl Tile {
         self.floating_rect = if self.floating_rect.is_empty() {
             placement::initial_rect(
                 self.window.geometry().size,
-                self.insets().top,
+                self.insets(),
                 area,
                 None,
                 cascade,
@@ -670,7 +684,8 @@ impl Tile {
     }
 }
 
-/// Six springs: x, y, w, h, alpha and the titlebar's height.
+/// Seven springs: x, y, w, h, alpha, the titlebar's height and how much its
+/// controls' glyphs show.
 ///
 /// These animate *rendering only*. `set_target` emits one configure at the final
 /// size — sending each intermediate spring value would be ~60 configures per
@@ -685,6 +700,8 @@ pub struct TileAnim {
     /// 0 -> 1 on map.
     alpha: Spring,
     titlebar: Spring,
+    /// 0 -> 1 while the pointer is over the window's controls.
+    glyphs: Spring,
 }
 
 impl TileAnim {
@@ -698,10 +715,11 @@ impl TileAnim {
             h: Spring::with_profile(rect.size.h as f32, SpringProfile::SNAPPY),
             alpha: Spring::with_profile(0.0, SpringProfile::SNAPPY),
             titlebar: Spring::with_profile(0.0, SpringProfile::SNAPPY),
+            glyphs: Spring::with_profile(0.0, SpringProfile::SMOOTH),
         }
     }
 
-    fn springs_mut(&mut self) -> [&mut Spring; 6] {
+    fn springs_mut(&mut self) -> [&mut Spring; 7] {
         [
             &mut self.x,
             &mut self.y,
@@ -709,6 +727,7 @@ impl TileAnim {
             &mut self.h,
             &mut self.alpha,
             &mut self.titlebar,
+            &mut self.glyphs,
         ]
     }
 
@@ -737,6 +756,14 @@ impl TileAnim {
     /// in or out instead of popping.
     pub fn set_titlebar(&mut self, height: i32) {
         self.titlebar.set_target(height as f32);
+    }
+
+    pub fn show_glyphs(&mut self) {
+        self.glyphs.set_target(1.0);
+    }
+
+    pub fn hide_glyphs(&mut self) {
+        self.glyphs.set_target(0.0);
     }
 
     pub fn fade_in(&mut self) {
@@ -782,6 +809,7 @@ impl TileAnim {
             && self.h.at_rest()
             && self.alpha.at_rest()
             && self.titlebar.at_rest()
+            && self.glyphs.at_rest()
     }
 
     /// Lands the final frame on exact integers, so nothing rests half a pixel off.
@@ -808,6 +836,10 @@ impl TileAnim {
 
     pub fn titlebar(&self) -> f64 {
         (self.titlebar.position as f64).max(0.0)
+    }
+
+    pub fn glyphs(&self) -> f32 {
+        self.glyphs.position.clamp(0.0, 1.0)
     }
 }
 
