@@ -1,13 +1,12 @@
 //! One rectangle of blurred glass, blurred out of the live framebuffer.
 
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use smithay::{
     backend::renderer::{
         Texture as _,
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
         gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform, ffi},
-        multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
@@ -16,17 +15,18 @@ use smithay::{
 };
 
 use crate::{
-    backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
         blur::{
             BlurConfig, Glass,
-            cache::{BlurSession, Halo},
+            cache::BlurSession,
             content::ContentDamage,
+            lifted::{GlassHandoff, LiftedGlass},
             scene::{BlurScene, grow},
             stack::GlassStack,
         },
         decorate::Backdrop,
         framebuffer::FramebufferSpace,
+        gles::GlesBacked,
     },
     shaders::{
         blur::{BlurShaders, KawaseProgram},
@@ -57,9 +57,11 @@ pub struct BlurBackdrop {
     /// the frame is the surface's own contents, unblurred.
     occluders: Vec<Rectangle<i32, Physical>>,
     scene: Rc<BlurScene>,
-    halo: Rc<RefCell<Halo>>,
     content: ContentDamage,
     shaders: BlurShaders,
+    /// The surface laid on this glass, when it is drawn there rather than
+    /// here — see [`lifting_for`](Self::lifting_for).
+    handoff: Option<GlassHandoff>,
 }
 
 impl BlurBackdrop {
@@ -125,8 +127,7 @@ impl BlurBackdrop {
             .ok()?;
         scene.stand(geometry);
         let occluders = occlude(session.cache.stack(), &params, geometry);
-        let halo = session.cache.halo(&params.id);
-        let content = session.cache.content();
+        let content = session.cache.register(&params.id);
 
         Some(Self {
             id: params.id,
@@ -139,10 +140,21 @@ impl BlurBackdrop {
             config,
             occluders,
             scene,
-            halo,
             content,
             shaders,
+            handoff: None,
         })
+    }
+
+    /// The backdrop of a surface laid on its own glass: it lifts and blurs
+    /// what is under it as it always does, in the same place in the frame and
+    /// owing the same damage, and hands the result to that surface instead of
+    /// drawing it.
+    pub fn lifting_for(self, handoff: GlassHandoff) -> Self {
+        Self {
+            handoff: Some(handoff),
+            ..self
+        }
     }
 
     fn draw_gles(
@@ -165,7 +177,13 @@ impl BlurBackdrop {
             return Ok(());
         };
 
-        self.owe_halo(dst, damage);
+        if let Some(handoff) = &self.handoff {
+            handoff.hand_over(LiftedGlass {
+                texture: top.tex_id(),
+                uniforms,
+            });
+            return Ok(());
+        }
 
         frame.render_texture_from_to(
             top,
@@ -178,6 +196,12 @@ impl BlurBackdrop {
             Some(&self.shaders.finish),
             &uniforms,
         )
+    }
+
+    /// Where opaque glass in front stands over this one, output-local. This
+    /// backdrop gives those pixels up, and so does a surface laid on it.
+    pub fn occluders(&self) -> &[Rectangle<i32, Physical>] {
+        &self.occluders
     }
 
     /// Lifts and blurs what lies under `dst` without drawing it, for glass of
@@ -196,7 +220,6 @@ impl BlurBackdrop {
         let blurred = frame
             .with_context(|gl| unsafe { self.blur(gl, projection, dst, damage) })?
             .is_some();
-        self.owe_halo(dst, damage);
         let scene = self.scene.scene.size();
         Ok(blurred.then(|| {
             let frost = Frost {
@@ -229,26 +252,6 @@ impl BlurBackdrop {
     /// that far inwards.
     fn reach(&self) -> i32 {
         self.config.radius() + self.glass.rim.max(0.0).ceil() as i32
-    }
-
-    /// Records the band this draw leaves stale: a changed pixel spreads
-    /// `radius` beyond the rectangle it arrived in, and the tracker has already
-    /// closed this frame's damage, so the ring is offered at the start of the
-    /// next one. Rectangles the tracker is repainting anyway are not owed
-    /// twice.
-    fn owe_halo(&self, dst: Rectangle<i32, Physical>, damage: &[Rectangle<i32, Physical>]) {
-        let mut halo = self.halo.borrow_mut();
-        halo.reported.clear();
-        let fresh = self.content.changed(damage, dst.loc);
-
-        let bounds = Rectangle::from_size(dst.size);
-        let radius = self.reach();
-        halo.pending = region::subtract(
-            fresh
-                .iter()
-                .filter_map(|rect| grow(*rect, radius).intersection(bounds)),
-            damage.iter().copied(),
-        );
     }
 
     /// Lifts the part of the frame this backdrop is about to cover into the
@@ -497,26 +500,33 @@ impl Element for BlurBackdrop {
         Transform::Normal
     }
 
-    /// Almost nothing of its own: a backdrop's pixels follow whatever is drawn
-    /// under it, which already damages this area, and the commit only moves
-    /// when the blur settings or the client's region do. What it does claim is
-    /// the band the last draw left stale around that damage.
+    /// Whatever changed beneath this glass, grown by the blur's reach: a
+    /// blurred pixel depends on every pixel within reach of it, so a change
+    /// the tracker already repaints spreads a band further into the glass
+    /// than the rectangle it arrived in. Claimed now, from the content tracker
+    /// that ran before the frame, rather than owed to the next one. The commit
+    /// only moves when the blur settings or the client's region do.
     fn damage_since(
         &self,
         _scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        let mut halo = self.halo.borrow_mut();
+        let whole = || DamageSet::from_slice(&[Rectangle::from_size(self.geometry.size)]);
         if commit != Some(self.commit) {
-            halo.reported.clear();
-            return DamageSet::from_slice(&[Rectangle::from_size(self.geometry.size)]);
+            return whole();
         }
-
-        DamageSet::from_slice(&halo.reported)
+        match self.content.changed_near(self.geometry, self.reach()) {
+            Some(bands) => DamageSet::from_slice(&bands),
+            None => whole(),
+        }
     }
 
-    /// Empty even though the blur itself is opaque: the corners are cut away,
-    /// and the backdrop fades with its window during animations.
+    /// Empty, although the glass draws opaque: a backdrop *reads* the frame
+    /// beneath it, so everything under it has to be drawn for it to lift. Were
+    /// it opaque, the tracker would skip the wallpaper under it and the lift
+    /// would find the glass's own last output there — and blur it into itself,
+    /// frame after frame. The glass in front of other glass is still spared by
+    /// [`GlassStack`], which cuts the overlap out of what the lower piece draws.
     fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         OpaqueRegions::default()
     }
@@ -530,45 +540,22 @@ impl Element for BlurBackdrop {
     }
 }
 
-impl RenderElement<GlesRenderer> for BlurBackdrop {
+impl<R: GlesBacked> RenderElement<R> for BlurBackdrop {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        self.draw_gles(frame, src, dst, damage, opaque_regions)
+    ) -> Result<(), R::Error> {
+        self.draw_gles(R::gles_frame(frame), src, dst, damage, opaque_regions)
+            .map_err(R::lift)
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         // Never a plane candidate: the pixels only exist through the shader.
-        None
-    }
-}
-
-impl<'render> RenderElement<KmsRenderer<'render>> for BlurBackdrop {
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        // The pyramid lives on the render device's GLES context — the same one
-        // `frame.as_mut()` exposes — so this never crosses GPUs.
-        self.draw_gles(frame.as_mut(), src, dst, damage, opaque_regions)
-            .map_err(MultiError::Render)
-    }
-
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

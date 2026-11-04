@@ -5,17 +5,16 @@ use smithay::{
     backend::renderer::{
         Texture,
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
-        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, ffi},
-        multigpu::{Error as MultiError, MultiFrame},
+        gles::{GlesError, GlesFrame, GlesTexture, ffi},
         utils::{CommitCounter, OpaqueRegions},
     },
     utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, user_data::UserDataMap},
 };
 
 use crate::{
-    backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
         framebuffer::FramebufferSpace,
+        gles::GlesBacked,
         warp::{canvas::Painted, dust, genie, liquid, swing},
     },
     shaders::warp::{DustUniforms, GenieUniforms, LiquidUniforms, WarpDraw, WarpShaders},
@@ -227,44 +226,23 @@ impl Element for WarpElement {
     }
 }
 
-impl RenderElement<GlesRenderer> for WarpElement {
+impl<R: GlesBacked> RenderElement<R> for WarpElement {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         _src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        self.draw_gles(frame, dst, damage)
+    ) -> Result<(), R::Error> {
+        // Painted on the GLES context every renderer here draws through, so
+        // the canvas never crosses GPUs.
+        self.draw_gles(R::gles_frame(frame), dst, damage)
+            .map_err(R::lift)
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
-        None
-    }
-}
-
-impl<'render> RenderElement<KmsRenderer<'render>> for WarpElement {
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        _src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        // Painted on the render device, the GLES context under the multi
-        // frame, so the canvas never crosses GPUs.
-        self.draw_gles(frame.as_mut(), dst, damage)
-            .map_err(MultiError::Render)
-    }
-
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

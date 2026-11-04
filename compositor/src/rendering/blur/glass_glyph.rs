@@ -6,8 +6,7 @@ use std::hash::{Hash, Hasher};
 use smithay::{
     backend::renderer::{
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
-        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, ffi},
-        multigpu::{Error as MultiError, MultiFrame},
+        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
@@ -17,12 +16,12 @@ use smithay::{
 };
 
 use crate::{
-    backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
-        blur::{BlurBackdrop, Glass, cache::BlurSession},
+        blur::{BlurBackdrop, Glass, cache::BlurSession, lifted::bind_scene},
         decorate::{Backdrop, GlyphDraw},
+        gles::GlesBacked,
     },
-    shaders::lock_glyph::{LockGlyphShader, SCENE_UNIT},
+    shaders::lock_glyph::LockGlyphShader,
 };
 
 #[derive(Debug)]
@@ -100,28 +99,9 @@ impl<S> GlassGlyph<S> {
     }
 }
 
-/// Binds `texture` on the unit glass glyphs read the scene from, filtered,
-/// and leaves unit 0 active for the renderer.
-///
-/// # Safety
-///
-/// `gl` must belong to the frame's context.
-unsafe fn bind_scene(gl: &ffi::Gles2, texture: ffi::types::GLuint) {
-    unsafe {
-        gl.ActiveTexture(ffi::TEXTURE0 + SCENE_UNIT as u32);
-        gl.BindTexture(ffi::TEXTURE_2D, texture);
-        if texture != 0 {
-            let linear = ffi::LINEAR as i32;
-            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, linear);
-            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, linear);
-        }
-        gl.ActiveTexture(ffi::TEXTURE0);
-    }
-}
-
 impl<S: Element> Element for GlassGlyph<S> {
-    /// The glass id, steady for the sprite's life, so the blur's halos and
-    /// its content tracking know this glyph for glass.
+    /// The glass id, steady for the sprite's life, so the blur's content
+    /// tracking knows this glyph for glass.
     fn id(&self) -> &Id {
         self.backdrop.id()
     }
@@ -147,7 +127,7 @@ impl<S: Element> Element for GlassGlyph<S> {
     }
 
     /// The whole glyph when it changed, and otherwise the band its blur
-    /// still owes.
+    /// reaches into around whatever changed beneath it.
     fn damage_since(
         &self,
         scale: Scale<f64>,
@@ -169,61 +149,30 @@ impl<S: Element> Element for GlassGlyph<S> {
     }
 }
 
-impl<S: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for GlassGlyph<S> {
+impl<R: GlesBacked, S: RenderElement<R>> RenderElement<R> for GlassGlyph<S> {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        if !self.bind(frame, dst, damage)? {
-            return Ok(());
-        }
-        let result = self
-            .inner
-            .draw(frame, src, dst, damage, opaque_regions, cache);
-        Self::unbind(frame)?;
-        result
-    }
-
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
-        None
-    }
-}
-
-impl<'render, S> RenderElement<KmsRenderer<'render>> for GlassGlyph<S>
-where
-    S: RenderElement<KmsRenderer<'render>>,
-{
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-        cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
+    ) -> Result<(), R::Error> {
         if !self
-            .bind(frame.as_mut(), dst, damage)
-            .map_err(MultiError::Render)?
+            .bind(R::gles_frame(frame), dst, damage)
+            .map_err(R::lift)?
         {
             return Ok(());
         }
         let result = self
             .inner
             .draw(frame, src, dst, damage, opaque_regions, cache);
-        Self::unbind(frame.as_mut()).map_err(MultiError::Render)?;
+        Self::unbind(R::gles_frame(frame)).map_err(R::lift)?;
         result
     }
 
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

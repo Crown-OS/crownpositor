@@ -5,10 +5,7 @@
 //! room its gaussian needs to fall off in.
 //!
 //! Like [`WindowDecoration`] this is a pixel shader: a shadow has no buffer to
-//! sample, it generates every pixel it draws. And like it, the element cannot
-//! be generic over the renderer — a generic `R::Frame` offers no way to bind a
-//! GLES program — so the two impls below name their renderers and the
-//! multi-GPU one forwards to the GLES frame underneath it.
+//! sample, it generates every pixel it draws, through [`GlesBacked`].
 //!
 //! [`WindowDecoration`]: crate::rendering::decoration::window::WindowDecoration
 
@@ -16,7 +13,6 @@ use smithay::{
     backend::renderer::{
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
         gles::{GlesError, GlesFrame, GlesPixelProgram, GlesRenderer},
-        multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
@@ -25,8 +21,7 @@ use smithay::{
 };
 
 use crate::{
-    backend::render::{GbmGlesApi, KmsRenderer},
-    rendering::{blur::ShadowPiece, decorate::Shadow},
+    rendering::{blur::ShadowPiece, decorate::Shadow, gles::GlesBacked},
     shaders::shadow::ShadowShader,
 };
 
@@ -159,45 +154,22 @@ impl Element for GlassShadow {
     }
 }
 
-impl RenderElement<GlesRenderer> for GlassShadow {
+impl<R: GlesBacked> RenderElement<R> for GlassShadow {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        self.draw_gles(frame, src, dst, damage)
+    ) -> Result<(), R::Error> {
+        self.draw_gles(R::gles_frame(frame), src, dst, damage)
+            .map_err(R::lift)
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         // Never a plane candidate: the pixels only exist through the shader.
-        None
-    }
-}
-
-impl<'render> RenderElement<KmsRenderer<'render>> for GlassShadow {
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        // The program lives on the render device's GLES context — the same one
-        // `frame.as_mut()` exposes — so this never crosses GPUs.
-        self.draw_gles(frame.as_mut(), src, dst, damage)
-            .map_err(MultiError::Render)
-    }
-
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

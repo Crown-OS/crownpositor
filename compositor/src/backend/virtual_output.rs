@@ -218,9 +218,10 @@ impl State {
     }
 }
 
-/// Advances every virtual output a frame was asked for: steps the
-/// animations and marks its capture sessions, which render next. Returns the
-/// outputs whose surfaces are owed frame callbacks once they have.
+/// Advances every virtual output a frame was asked for: lets through the
+/// timed commits due by now, steps the animations and marks its capture
+/// sessions, which render next. Returns the outputs whose surfaces are owed
+/// frame callbacks once they have.
 pub fn begin_frames(state: &mut State) -> Vec<Output> {
     let outputs: Vec<Output> = state
         .virtual_outputs
@@ -233,6 +234,18 @@ pub fn begin_frames(state: &mut State) -> Vec<Output> {
     }
 
     let now: Duration = state.wayland.clock.now().into();
+    let mut released = ReleasedClients::default();
+    for output in &outputs {
+        present::signal_commit_timers(
+            &state.shell,
+            output,
+            &state.input.cursor,
+            now,
+            &mut released,
+        );
+    }
+    state.clear_blockers(released);
+
     let dt = state.clock.tick_to(now);
     state.shell.advance_animations(dt);
     state.shell.surface_animations.advance(now);

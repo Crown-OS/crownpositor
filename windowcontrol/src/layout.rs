@@ -1,10 +1,10 @@
-//! Where the panel and every card in it sit, for one output at one moment.
+//! Where every card sits, for one output at one moment.
 //!
-//! The row is a stack laid on its side: the selected window is the front card
-//! at the row's leading edge, the ones before it are tucked behind it — each a
-//! little smaller and peeking out a little further left — and the ones after it
-//! follow in a line. Advancing slides the next card forward over the stack.
-//! Every card's corners are concentric with the panel's.
+//! The cards are a stack seen from the front. The selected window is the top
+//! card, in the middle of the screen; the windows before it are stacked behind
+//! it to the left and the ones after it to the right, each a little smaller and
+//! peeking out a little further than the card in front of it. Advancing slides
+//! the next card out of the stack and over the rest.
 
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use spacecontrol::scene::Canvas;
@@ -12,30 +12,24 @@ use spacecontrol::scene::Canvas;
 use crate::strip::Strip;
 
 /// Width over height a card may take, whatever shape its window is.
-const ASPECTS: (f64, f64) = (0.6, 2.2);
+const ASPECTS: (f64, f64) = (0.5, 2.4);
 
-/// Proportions of the output height, so the panel looks the same on every
-/// output.
 #[derive(Debug, Clone, Copy)]
 pub struct Metrics {
-    /// The front card's height.
-    pub card: f64,
-    pub gap: f64,
-    /// Between the panel's edge and the cards, all the way round.
-    pub padding: f64,
-    /// Between the panel and the bottom of the usable area.
-    pub margin: f64,
-    /// The panel's corner radius over its height.
+    /// The largest the top card may be, as fractions of the usable width and
+    /// height.
+    pub card: (f64, f64),
+    /// How far below the middle of the usable area the cards sit, over the
+    /// output height: room for the titles above them.
+    pub drop: f64,
+    /// A card's corner radius over the output height.
     pub roundness: f64,
-    /// How much smaller a card is while another is selected, as a fraction.
-    pub recede: f64,
-    /// How much a card fades while another is selected, as a fraction.
-    pub fade: f64,
-    /// How far each card stacked behind the front one peeks out.
+    /// How far each card peeks out past the one in front of it, over the
+    /// output height.
     pub peek: f64,
     /// How much smaller each card further back in the stack is, as a fraction.
     pub stack_shrink: f64,
-    /// How many cards the stack shows; one deeper sinks out of sight.
+    /// How many cards each side of the stack shows; one deeper fades away.
     pub stack_depth: f64,
     /// How much a hovered card grows, as a fraction.
     pub hover: f64,
@@ -44,174 +38,160 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
-            card: 0.16,
-            gap: 0.014,
-            padding: 0.014,
-            margin: 0.03,
-            roundness: 0.24,
-            recede: 0.12,
-            fade: 0.3,
-            peek: 0.012,
-            stack_shrink: 0.06,
+            card: (0.56, 0.62),
+            drop: 0.03,
+            roundness: 0.022,
+            peek: 0.05,
+            stack_shrink: 0.07,
             stack_depth: 3.0,
-            hover: 0.03,
+            hover: 0.02,
         }
     }
 }
 
-/// The glass the cards sit on.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Panel {
-    pub rect: Rectangle<f64, Logical>,
-    pub radius: f64,
-    /// What the cards are cut to: the panel less its padding either side, so
-    /// a card running off the end never crosses the panel's rounded corner.
-    pub row: Rectangle<f64, Logical>,
+impl Metrics {
+    /// A card's scale `depth` places back in the stack.
+    fn shrink(&self, depth: f64) -> f64 {
+        1.0 - self.stack_shrink * depth.min(self.stack_depth + 1.0)
+    }
+
+    /// How opaque a card `depth` places back in the stack is.
+    fn visibility(&self, depth: f64) -> f64 {
+        (self.stack_depth + 1.0 - depth).clamp(0.0, 1.0)
+    }
+
+    fn is_stacked(&self, depth: usize) -> bool {
+        depth as f64 <= self.stack_depth
+    }
 }
 
-/// A card as drawn: where, how opaque and how round.
+/// A card as drawn: where, how opaque, how round and how deep in the stack.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Slot {
     pub rect: Rectangle<f64, Logical>,
     pub alpha: f64,
     pub radius: f64,
+    /// Places behind the top card, negative to its left; 0 is the top card.
+    pub depth: f64,
 }
 
-/// Lays out the panel and one slot per entry, and returns the panel. `reveal`
-/// is the raw rise, so an overshoot lifts the panel past its resting place; at
-/// 0 it sits just below the usable area. Slots come in entry order, which back
-/// to front is also drawing order: the stack deepens towards the first entry.
+/// Lays out one slot per entry, in entry order.
 pub fn arrange<K: Copy + Eq>(
     canvas: Canvas,
     metrics: &Metrics,
-    reveal: f64,
-    strip: &Strip<K>,
-    aspect: impl Fn(K) -> f64,
-    out: &mut Vec<Slot>,
-) -> Panel {
-    let unit = f64::from(canvas.output.size.h);
-    let usable = canvas.usable.to_f64();
-    let padding = unit * metrics.padding;
-    let height = unit * metrics.card + 2.0 * padding;
-    let radius = height * metrics.roundness;
-
-    row(unit, metrics, radius - padding, strip, aspect, out);
-    let (left, right) = extent(out);
-    let widest = (usable.size.w - 2.0 * unit * metrics.margin).max(height);
-    let width = (right - left + 2.0 * padding).clamp(height, widest);
-
-    let bottom = usable.loc.y + usable.size.h;
-    let resting = bottom - unit * metrics.margin - height;
-    let rect = Rectangle::new(
-        (
-            usable.loc.x + (usable.size.w - width) / 2.0,
-            bottom + (resting - bottom) * reveal,
-        )
-            .into(),
-        (width, height).into(),
-    );
-    let row = Rectangle::new(
-        (rect.loc.x + padding, rect.loc.y).into(),
-        (width - 2.0 * padding, height).into(),
-    );
-
-    let origin = Point::from((row.loc.x - left, rect.loc.y + height / 2.0));
-    let end = row.loc.x + row.size.w;
-    for slot in out.iter_mut() {
-        slot.rect.loc += origin;
-        slot.alpha *= ((end - slot.rect.loc.x) / slot.rect.size.w).clamp(0.0, 1.0);
-    }
-    Panel { rect, radius, row }
-}
-
-/// The cards around a front card whose leading edge is at 0 and whose middle
-/// is on the x axis.
-fn row<K: Copy + Eq>(
-    unit: f64,
-    metrics: &Metrics,
-    radius: f64,
     strip: &Strip<K>,
     aspect: impl Fn(K) -> f64,
     out: &mut Vec<Slot>,
 ) {
     out.clear();
-    let card = unit * metrics.card;
-    let gap = unit * metrics.gap;
+    let entries = strip.entries();
+    let Some(last) = entries.len().checked_sub(1) else {
+        return;
+    };
+    let unit = f64::from(canvas.output.size.h);
+    let usable = canvas.usable.to_f64();
+    let bounds = Size::from((
+        usable.size.w * metrics.card.0,
+        usable.size.h * metrics.card.1,
+    ));
+    let natural = |index: usize| fit(bounds, aspect(entries[index].key));
     let position = strip.position();
 
-    let mut x = 0.0;
-    let mut anchors = (0.0, 0.0);
-    for (index, entry) in strip.entries().iter().enumerate() {
-        let presence = entry.presence();
-        let background = 1.0 - entry.focus();
+    out.extend(entries.iter().enumerate().map(|(index, entry)| {
+        let depth = index as f64 - position;
         let scale =
-            presence * (1.0 - metrics.recede * background) * (1.0 + metrics.hover * entry.lift());
-        let size = Size::from((
-            card * aspect(entry.key).clamp(ASPECTS.0, ASPECTS.1) * scale,
-            card * scale,
-        ));
-        if index == position.floor() as usize {
-            anchors.0 = x;
+            entry.presence() * metrics.shrink(depth.abs()) * (1.0 + metrics.hover * entry.lift());
+        Slot {
+            rect: Rectangle::new(Point::default(), natural(index).upscale(scale)),
+            alpha: entry.presence() * metrics.visibility(depth.abs()),
+            radius: unit * metrics.roundness * scale,
+            depth,
         }
-        if index == position.ceil() as usize {
-            anchors.1 = x;
-        }
-        out.push(Slot {
-            rect: Rectangle::new((x, 0.0).into(), size),
-            alpha: presence * (1.0 - metrics.fade * background),
-            radius: radius * scale,
+    }));
+
+    // Between two selections each card is part way between where it rests
+    // for one and where it rests for the other.
+    let below = (position.max(0.0).floor() as usize).min(last);
+    let above = (below + 1).min(last);
+    let blend = (position - below as f64).clamp(0.0, 1.0);
+    for (front, weight) in [(below, 1.0 - blend), (above, blend)] {
+        let width = |index: usize| {
+            natural(index).w
+                * entries[index].presence()
+                * metrics.shrink(index.abs_diff(front) as f64)
+        };
+        let peek = |index: usize| {
+            let stacked = metrics.is_stacked(index.abs_diff(front));
+            unit * metrics.peek * entries[index].presence() * f64::from(u8::from(stacked))
+        };
+        chain(entries.len(), front, width, peek, |index, x| {
+            out[index].rect.loc.x += x * weight;
         });
-        x += size.w + gap * presence;
     }
 
-    let anchor = anchors.0 + (anchors.1 - anchors.0) * position.fract();
-    for (index, slot) in out.iter_mut().enumerate() {
-        let depth = position - index as f64;
-        if depth > 0.0 {
-            tuck(slot, unit, metrics, depth);
-        } else {
-            slot.rect.loc.x -= anchor;
-        }
-        slot.rect.loc.y = -slot.rect.size.h / 2.0;
+    let centre = Point::<f64, Logical>::from((
+        usable.loc.x + usable.size.w / 2.0,
+        usable.loc.y + usable.size.h / 2.0 + unit * metrics.drop,
+    ));
+    for slot in out.iter_mut() {
+        slot.rect.loc =
+            centre + Point::from((slot.rect.loc.x, 0.0)) - slot.rect.size.downscale(2.0).to_point();
     }
 }
 
-/// Moves a card `depth` places back into the stack. The deepest place shown
-/// is as far left as the stack reaches: a card going deeper still shrinks and
-/// fades where it is rather than pushing the panel wider.
-fn tuck(slot: &mut Slot, unit: f64, metrics: &Metrics, depth: f64) {
-    let shrink = (1.0 - metrics.stack_shrink * depth).max(0.0);
-    slot.rect.size = slot.rect.size.upscale(shrink);
-    slot.rect.loc.x = -unit * metrics.peek * depth.min(metrics.stack_depth - 1.0);
-    slot.radius *= shrink;
-    slot.alpha *= (metrics.stack_depth - depth).clamp(0.0, 1.0);
-}
+/// Every card's middle with `front` on top and centred on 0. Out from it the
+/// cards are chained: each peeks `peek` past the cards in front of it on the
+/// outer side, and never out on the inner side, however wide it is.
+fn chain(
+    len: usize,
+    front: usize,
+    width: impl Fn(usize) -> f64,
+    peek: impl Fn(usize) -> f64,
+    mut place: impl FnMut(usize, f64),
+) {
+    let half = width(front) / 2.0;
+    place(front, 0.0);
 
-/// The leftmost and rightmost edges of anything still showing.
-fn extent(slots: &[Slot]) -> (f64, f64) {
-    slots
-        .iter()
-        .filter(|slot| slot.alpha > 0.0)
-        .fold((0.0, 0.0), |(left, right), slot| {
-            (
-                f64::min(left, slot.rect.loc.x),
-                f64::max(right, slot.rect.loc.x + slot.rect.size.w),
-            )
-        })
-}
-
-/// The frontmost card under `at`, if it is inside the panel's row.
-pub fn slot_at(panel: &Panel, slots: &[Slot], at: Point<f64, Logical>) -> Option<usize> {
-    if !panel.row.contains(at) {
-        return None;
+    let (mut left, mut right) = (-half, half);
+    for index in (0..front).rev() {
+        let width = width(index);
+        left = left.min(right - width) - peek(index);
+        right = left + width;
+        place(index, left + width / 2.0);
     }
-    slots
-        .iter()
-        .rposition(|slot| slot.alpha > 0.5 && slot.rect.contains(at))
+
+    let (mut left, mut right) = (-half, half);
+    for index in front + 1..len {
+        let width = width(index);
+        right = right.max(left + width) + peek(index);
+        left = right - width;
+        place(index, right - width / 2.0);
+    }
 }
 
-/// `rect` stepped back towards `point` by `factor`, as the windows behind the
-/// panel are.
+/// The largest size of a window `aspect` wide over high that fits `bounds`.
+fn fit(bounds: Size<f64, Logical>, aspect: f64) -> Size<f64, Logical> {
+    let aspect = aspect.clamp(ASPECTS.0, ASPECTS.1);
+    let width = bounds.w.min(bounds.h * aspect);
+    Size::from((width, width / aspect))
+}
+
+/// Slot indices from the top card back, the order they are drawn and hit in.
+pub fn front_to_back(slots: &[Slot], out: &mut Vec<usize>) {
+    out.clear();
+    out.extend(0..slots.len());
+    out.sort_by(|&a, &b| slots[a].depth.abs().total_cmp(&slots[b].depth.abs()));
+}
+
+/// The frontmost card under `at`; `order` is [`front_to_back`]'s.
+pub fn slot_at(slots: &[Slot], order: &[usize], at: Point<f64, Logical>) -> Option<usize> {
+    order.iter().copied().find(|&index| {
+        let slot = &slots[index];
+        slot.alpha > 0.5 && slot.rect.contains(at)
+    })
+}
+
+/// `rect` stepped back towards `point` by `factor`.
 pub fn recede(
     rect: Rectangle<f64, Logical>,
     point: Point<f64, Logical>,
@@ -232,99 +212,79 @@ mod tests {
     use super::*;
     use crate::strip::Direction;
 
+    const WIDE: f64 = 16.0 / 10.0;
+
     fn canvas() -> Canvas {
         Canvas::whole(Rectangle::new((0, 0).into(), (1920, 1080).into()))
     }
 
-    fn laid_out(keys: &[u32], direction: Direction, reveal: f64) -> (Panel, Vec<Slot>) {
+    fn laid_out(keys: &[u32], direction: Direction, aspect: impl Fn(u32) -> f64) -> Vec<Slot> {
         let mut strip = Strip::default();
         strip.reset(keys.iter().copied(), direction);
         let mut out = Vec::new();
-        let panel = arrange(
-            canvas(),
-            &Metrics::default(),
-            reveal,
-            &strip,
-            |_| 16.0 / 10.0,
-            &mut out,
-        );
-        (panel, out)
+        arrange(canvas(), &Metrics::default(), &strip, aspect, &mut out);
+        out
+    }
+
+    fn right(rect: Rectangle<f64, Logical>) -> f64 {
+        rect.loc.x + rect.size.w
     }
 
     #[test]
-    fn the_hidden_panel_sits_below_the_usable_area() {
-        let (panel, _) = laid_out(&[1, 2], Direction::Forward, 0.0);
-        assert_eq!(panel.rect.loc.y, 1080.0);
-    }
-
-    #[test]
-    fn the_risen_panel_rests_on_the_bottom_of_the_screen() {
-        let (panel, _) = laid_out(&[1, 2], Direction::Forward, 1.0);
-        assert!(panel.rect.loc.y + panel.rect.size.h < 1080.0);
-        assert!(panel.rect.loc.y > 1080.0 * 0.7);
-    }
-
-    #[test]
-    fn the_selected_card_is_in_front_and_largest() {
-        let (_, slots) = laid_out(&[1, 2, 3], Direction::Forward, 1.0);
+    fn the_selected_card_is_centred_and_largest() {
+        let slots = laid_out(&[1, 2, 3], Direction::Forward, |_| WIDE);
         let front = slots[1].rect;
+        assert!((spacecontrol::scene::centre(front).x - 960.0).abs() < 1e-6);
         assert!(slots.iter().all(|slot| slot.rect.size.h <= front.size.h));
-        assert!(slots[1].alpha > slots[2].alpha);
+        assert_eq!(slots[1].depth, 0.0);
     }
 
     #[test]
-    fn earlier_cards_are_tucked_behind_and_peek_out_left() {
-        let (_, slots) = laid_out(&[1, 2, 3], Direction::Backward, 1.0);
-        let (deepest, behind, front) = (slots[0].rect, slots[1].rect, slots[2].rect);
-        assert!(deepest.loc.x < behind.loc.x && behind.loc.x < front.loc.x);
-        assert!(deepest.size.h < behind.size.h && behind.size.h < front.size.h);
-        assert!(behind.overlaps(front));
+    fn earlier_cards_stack_left_and_later_ones_right() {
+        let slots = laid_out(&[1, 2, 3, 4, 5], Direction::Forward, |_| WIDE);
+        let peek = 1080.0 * Metrics::default().peek;
+        let (left, front, next, after) =
+            (slots[0].rect, slots[1].rect, slots[2].rect, slots[3].rect);
+
+        assert!((front.loc.x - left.loc.x - peek).abs() < 1e-6);
+        assert!(right(left) <= right(front));
+        assert!((right(next) - right(front) - peek).abs() < 1e-6);
+        assert!((right(after) - right(next) - peek).abs() < 1e-6);
+        assert!(next.loc.x >= front.loc.x && after.size.h < next.size.h);
     }
 
     #[test]
-    fn later_cards_follow_in_a_line() {
-        let (_, slots) = laid_out(&[1, 2, 3], Direction::Forward, 1.0);
-        assert!(slots[1].rect.loc.x + slots[1].rect.size.w < slots[2].rect.loc.x);
+    fn a_wide_card_behind_never_peeks_out_on_the_inner_side() {
+        let slots = laid_out(&[1, 2, 3], Direction::Forward, |key| match key {
+            2 => 0.6,
+            _ => 2.2,
+        });
+        let front = slots[1].rect;
+        assert!(right(slots[0].rect) <= right(front) + 1e-6);
+        assert!(slots[2].rect.loc.x >= front.loc.x - 1e-6);
     }
 
     #[test]
-    fn the_front_card_is_concentric_with_the_panel() {
-        let (panel, slots) = laid_out(&[1, 2], Direction::Forward, 1.0);
-        let front = slots[1];
-        let inset = front.rect.loc.y - panel.rect.loc.y;
-        assert!((panel.radius - inset - front.radius).abs() < 1e-6);
-        assert!(
-            (panel.rect.loc.y + panel.rect.size.h - front.rect.loc.y - front.rect.size.h - inset)
-                .abs()
-                < 1e-6
-        );
+    fn cards_past_the_stack_depth_fade_away() {
+        let keys: Vec<_> = (0..12).collect();
+        let slots = laid_out(&keys, Direction::Forward, |_| WIDE);
+        assert_eq!(slots[4].alpha, 1.0);
+        assert_eq!(slots[6].alpha, 0.0);
+        assert!(slots.iter().all(|slot| slot.rect.size.w > 0.0));
     }
 
     #[test]
-    fn the_panel_hugs_a_short_row() {
-        let (panel, slots) = laid_out(&[1, 2], Direction::Backward, 1.0);
-        assert!(panel.rect.size.w < 1000.0, "{}", panel.rect.size.w);
-        for slot in slots {
-            assert!(panel.rect.contains_rect(slot.rect));
-        }
-    }
+    fn the_top_card_is_hit_over_the_stack() {
+        let slots = laid_out(&[1, 2, 3], Direction::Backward, |_| WIDE);
+        let mut order = Vec::new();
+        front_to_back(&slots, &mut order);
+        assert_eq!(order[0], 2);
 
-    #[test]
-    fn a_long_row_fades_out_at_the_usable_width() {
-        let keys: Vec<_> = (0..40).collect();
-        let (panel, slots) = laid_out(&keys, Direction::Forward, 1.0);
-        assert!(panel.rect.size.w < 1920.0);
-        assert_eq!(slots.last().map(|slot| slot.alpha), Some(0.0));
-    }
-
-    #[test]
-    fn a_click_finds_the_front_card_over_the_stack() {
-        let (panel, slots) = laid_out(&[1, 2, 3], Direction::Backward, 1.0);
         let front = spacecontrol::scene::centre(slots[2].rect);
-        assert_eq!(slot_at(&panel, &slots, front), Some(2));
+        assert_eq!(slot_at(&slots, &order, front), Some(2));
         let peek = Point::from((slots[0].rect.loc.x + 1.0, front.y));
-        assert_eq!(slot_at(&panel, &slots, peek), Some(0));
-        assert_eq!(slot_at(&panel, &slots, (0.0, 0.0).into()), None);
+        assert_eq!(slot_at(&slots, &order, peek), Some(0));
+        assert_eq!(slot_at(&slots, &order, (0.0, 0.0).into()), None);
     }
 
     #[test]

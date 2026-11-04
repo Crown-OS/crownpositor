@@ -154,12 +154,14 @@ void main() {
     vec4 r = min(radius, vec4(limit));
     float distance = rounded_box(gl_FragCoord.xy - shape_origin - half_size, half_size, r);
 
+    // The same edge as rounded_corner.frag: one pixel along the gradient, ramped
+    // linearly.
 #if defined(GL_OES_standard_derivatives)
-    float aa = max(fwidth(distance), 0.0001);
+    float aa = max(length(vec2(dFdx(distance), dFdy(distance))), 0.0001);
 #else
     float aa = 1.0;
 #endif
-    float mask = 1.0 - smoothstep(-0.5 * aa, 0.5 * aa, distance);
+    float mask = clamp(0.5 - distance / aa, 0.0, 1.0);
 
     color = color * (alpha * mask);
 

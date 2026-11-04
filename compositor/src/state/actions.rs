@@ -304,10 +304,15 @@ impl State {
         // The corner radius, the rim and the shadow are geometry the renderer
         // draws whether or not the blur pipeline exists, so only the blur
         // itself follows the setting. The rim refracts the blurred backdrop, so
-        // it goes with it.
+        // it goes with it, and so does laying a surface on that backdrop: a
+        // client told the blur is gone paints its own edges again. Without a
+        // pipeline the surface is still cut by its shape, so it never needs
+        // one to be drawn right.
         let mut crownos = CrownosEffectCapability::CornerRadius | CrownosEffectCapability::Shadow;
         crownos.set(
-            CrownosEffectCapability::Blur | CrownosEffectCapability::Border,
+            CrownosEffectCapability::Blur
+                | CrownosEffectCapability::Border
+                | CrownosEffectCapability::CompositedBlur,
             blur,
         );
         self.wayland

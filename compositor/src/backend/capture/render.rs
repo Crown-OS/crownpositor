@@ -35,7 +35,7 @@ use crate::{
         blur::{BlurCache, BlurConfig, BlurSession},
         cursor::Cursor,
         decoration::TextRenderer,
-        rounded::{GlesDecorator, MultiDecorator},
+        rounded::GlesDecorator,
         sources::{CursorOverlay, window_elements, workspace_elements},
     },
     shaders::nv12::Nv12Shader,
@@ -82,8 +82,8 @@ impl<'render> CaptureRenderer for KmsRenderer<'render> {
         blur: Option<BlurSession<'a>>,
         corners: &'a mut CornerMemory,
         canvases: &'a mut WarpCanvases,
-    ) -> MultiDecorator<'a> {
-        MultiDecorator::new(blur, corners, canvases)
+    ) -> GlesDecorator<'a> {
+        GlesDecorator::new(blur, corners, canvases)
     }
 
     fn gles(&mut self) -> &mut GlesRenderer {

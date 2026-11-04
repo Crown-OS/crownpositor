@@ -31,6 +31,7 @@ static UP_SHADER: &str = include_str!("./blur_up.frag");
 static FINISH_SHADER: &str = concat!(
     include_str!("./blur_finish.frag"),
     include_str!("../common/rounded_box.glsl"),
+    include_str!("../common/glass.glsl"),
 );
 
 /// The compiled blur programs for one GL context.
@@ -44,7 +45,7 @@ pub struct BlurShaders {
 }
 
 impl BlurShaders {
-    fn finish_names() -> [UniformName<'static>; 15] {
+    pub(crate) fn finish_names() -> [UniformName<'static>; 15] {
         [
             UniformName::new("scene_size", UniformType::_2f),
             UniformName::new("mask_origin", UniformType::_2f),

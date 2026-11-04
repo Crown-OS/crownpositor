@@ -5,7 +5,7 @@
 // draws. Smithay therefore prepends `#version 100` itself, substitutes no
 // `//_DEFINES_` line, and compiles only two variants — plain and DEBUG_FLAGS.
 
-// Gives us fwidth() for scale-independent edge antialiasing. `enable` rather
+// Gives us dFdx/dFdy for scale-independent edge antialiasing. `enable` rather
 // than `require` so drivers without it fall back to the fixed 1px width below.
 #extension GL_OES_standard_derivatives : enable
 
@@ -54,17 +54,19 @@ void main() {
     float d_in = rounded_box(p, inner_half, r_in);
 
 #if defined(GL_OES_standard_derivatives)
-    // Width of one screen pixel in distance-field units, so both edges stay one
-    // pixel wide however the element is scaled.
-    float aa = max(fwidth(d_out), 0.0001);
+    // Width of one screen pixel along the field's gradient, so both edges stay
+    // one pixel wide however the element is scaled.
+    float aa = max(length(vec2(dFdx(d_out), dFdy(d_out))), 0.0001);
 #else
     float aa = 1.0;
 #endif
 
-    // Inside the outer edge and outside the inner one. Both antialiased, so a
-    // hairline border fades rather than aliasing into a dashed line.
-    float mask = (1.0 - smoothstep(-0.5 * aa, 0.5 * aa, d_out))
-               * smoothstep(-0.5 * aa, 0.5 * aa, d_in);
+    // Inside the outer edge and outside the inner one. Each edge ramps linearly
+    // over the pixel (its area on that side), as the window clip and the glass
+    // do, so a hairline border fades rather than aliasing into a dashed line and
+    // meets the window without a seam.
+    float mask = clamp(0.5 - d_out / aa, 0.0, 1.0)
+               * clamp(0.5 + d_in / aa, 0.0, 1.0);
 
     vec4 result = color * (alpha * mask);
 

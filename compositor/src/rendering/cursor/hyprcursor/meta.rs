@@ -4,6 +4,8 @@
 
 use std::time::Duration;
 
+use crate::utils::raster::FilterQuality;
+
 /// `(key, value)` per entry. Hyprlang repeats a key once per entry, TOML packs
 /// the entries of one key into a single quoted value split by `;`, and both
 /// come out of here the same way. Section headers such as TOML's `[General]`
@@ -61,6 +63,13 @@ pub enum Resize {
 }
 
 impl Resize {
+    pub fn quality(self) -> FilterQuality {
+        match self {
+            Self::Bilinear => FilterQuality::Bilinear,
+            Self::Nearest | Self::None => FilterQuality::Nearest,
+        }
+    }
+
     fn parse(value: &str) -> Self {
         match value {
             "bilinear" => Self::Bilinear,

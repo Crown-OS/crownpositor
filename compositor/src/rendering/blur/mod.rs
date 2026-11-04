@@ -29,10 +29,12 @@
 //! [`GlassStack`]: stack::GlassStack
 //!
 //! A pass spreads a changed pixel further than the rectangle it arrived in, so
-//! a draw leaves a stale band around its own damage. The cache offers that band
-//! back as the next frame's damage, and the backend is asked for that frame
-//! through [`BlurCache::wants_redraw`]. An offer nobody claims — a backdrop the
-//! tracker has since hidden behind an opaque window — expires with the frame.
+//! a backdrop has to repaint a band around every change beneath it. A second
+//! damage tracker over everything that is not glass ([`ContentDamage`]) runs
+//! before the frame is drawn, and each backdrop claims that band as its own
+//! damage for the same frame — never a frame late, and never fed by glass.
+//!
+//! [`ContentDamage`]: content::ContentDamage
 //!
 //! It degrades: no shaders, no blit capability, an allocation failure — the
 //! backdrop element simply isn't emitted and windows draw as before.
@@ -49,6 +51,7 @@ mod cache;
 mod content;
 mod glass_glyph;
 mod glow;
+mod lifted;
 mod scene;
 mod stack;
 
@@ -56,6 +59,7 @@ pub use backdrop::BlurBackdrop;
 pub use cache::{BlurCache, BlurSession};
 pub use glass_glyph::GlassGlyph;
 pub use glow::{GlassKind, Shading};
+pub use lifted::{GlassHandoff, LiftedGlass, bind_scene};
 
 use glow::Rims;
 
@@ -73,6 +77,8 @@ use smithay::{
 };
 
 use config::{Appearance, GlassSettings};
+
+use crate::rendering::decorate::Outline;
 use protocols::{background_effect, crownos_background_effects as crownos};
 
 /// Runtime knobs for the blur pipeline.
@@ -328,6 +334,11 @@ pub struct SurfaceEffects {
     pub strength: f32,
     pub pieces: Vec<GlassPiece>,
     pub shadows: Vec<ShadowPiece>,
+    /// The rounded rectangle, unclipped, that the surface itself is cut by
+    /// together with its glass, when the client asked for that
+    /// (`composited_blur`) with a blur of one primitive. `None` draws the
+    /// glass under the surface, each cut by its own edge.
+    pub glazed: Option<Outline>,
 }
 
 /// How many standard deviations of the gaussian a shadow's element has to hold
@@ -415,16 +426,15 @@ pub fn place_surface_effects(
         shading,
     };
 
-    let pieces = effects
+    let blurred = effects
         .blur
         .as_ref()
-        .map(|blur| {
-            primitives(&blur.shape)
-                .iter()
-                .filter_map(|primitive| place_piece(primitive, origin, scale, bounds, clip))
-                .collect()
-        })
-        .unwrap_or_default();
+        .map_or_else(Vec::new, |blur| primitives(&blur.shape));
+    let pieces = blurred
+        .iter()
+        .filter_map(|primitive| place_piece(primitive, origin, scale, bounds, clip))
+        .collect();
+    let glazed = glazed_outline(effects.composited, &blurred, origin, scale);
 
     let shadows = effects
         .shadow
@@ -447,7 +457,26 @@ pub fn place_surface_effects(
         strength,
         pieces,
         shadows,
+        glazed,
     })
+}
+
+/// The outline a composited blur cuts the surface by: its one primitive,
+/// placed whole. A shape of several primitives is drawn the old way, glass
+/// under the surface, as the protocol says.
+fn glazed_outline(
+    composited: bool,
+    blurred: &[crownos::RoundedRect],
+    origin: Point<i32, Physical>,
+    scale: Scale<f64>,
+) -> Option<Outline> {
+    match blurred {
+        [primitive] if composited => Some(Outline {
+            rect: place(primitive.rect, origin, scale),
+            radius: primitive.clamped_radius() * scale.x as f32,
+        }),
+        _ => None,
+    }
 }
 
 /// Places one primitive of a blur shape. `None` when nothing of it survives the
@@ -831,6 +860,35 @@ mod tests {
 
         assert_eq!(piece.geometry, physical(0, 0, 400, 120));
         assert_eq!(piece.radius, 60.0);
+    }
+
+    #[test]
+    fn a_composited_blur_of_one_primitive_cuts_the_surface_by_it_whole() {
+        let outline = glazed_outline(
+            true,
+            &[primitive(10, 20, 100, 40, 12)],
+            (5, 5).into(),
+            Scale::from(1.5),
+        );
+        assert_eq!(
+            outline,
+            Some(Outline {
+                rect: physical(20, 35, 150, 60),
+                radius: 18.0,
+            })
+        );
+    }
+
+    #[test]
+    fn only_a_composited_blur_of_one_primitive_is_glazed() {
+        let one = [primitive(0, 0, 100, 40, 12)];
+        let two = [primitive(0, 0, 100, 40, 12), primitive(0, 50, 100, 40, 12)];
+        let origin = (0, 0).into();
+        let scale = Scale::from(1.0);
+
+        assert!(glazed_outline(false, &one, origin, scale).is_none());
+        assert!(glazed_outline(true, &two, origin, scale).is_none());
+        assert!(glazed_outline(true, &[], origin, scale).is_none());
     }
 
     #[test]

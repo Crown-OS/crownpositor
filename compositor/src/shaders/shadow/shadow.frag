@@ -12,7 +12,7 @@
 // exactly right, and a rounded corner is close enough that no eye has ever
 // caught the difference.
 
-// fwidth() for the edge of the hole the casting glass leaves in it.
+// dFdx/dFdy for the edge of the hole the casting glass leaves in it.
 #extension GL_OES_standard_derivatives : enable
 
 #if defined(GL_FRAGMENT_PRECISION_HIGH)
@@ -79,12 +79,14 @@ void main() {
         vec2 hole_half = hole_size * 0.5;
         vec2 q = v_coords * size - hole_origin - hole_half;
         float hole = rounded_box(q, hole_half, min(hole_radius, min(hole_half.x, hole_half.y)));
+        // The complement of the glass's own linear edge ramp, so shadow and
+        // glass add up to the whole pixel along the outline they share.
 #if defined(GL_OES_standard_derivatives)
-        float aa = max(fwidth(hole), 0.0001);
+        float aa = max(length(vec2(dFdx(hole), dFdy(hole))), 0.0001);
 #else
         float aa = 1.0;
 #endif
-        coverage *= smoothstep(-0.5 * aa, 0.5 * aa, hole);
+        coverage *= clamp(0.5 + hole / aa, 0.0, 1.0);
     }
 
     vec4 result = color * (alpha * coverage);

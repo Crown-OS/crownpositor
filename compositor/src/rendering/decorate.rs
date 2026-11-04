@@ -76,6 +76,29 @@ pub struct Outline {
     pub radius: f32,
 }
 
+/// A surface to be drawn over its own glass and cut with it once
+/// (`composited_blur`).
+#[derive(Debug, Clone)]
+pub struct Glaze {
+    /// The rounded rectangle the surface and its glass are cut by, whole and
+    /// output-local. The surface is drawn as it is outside it.
+    pub outline: Outline,
+    /// The glass under it, or `None` when this frame has none to draw — the
+    /// surface is then cut all the same, for its client painted it square.
+    pub backdrop: Option<Backdrop>,
+}
+
+/// What [`TileDecorator::glaze`] makes of a surface.
+#[derive(Debug)]
+pub enum Glazing<E> {
+    /// Laid on its glass: the surface, drawn where it stood, and the backdrop
+    /// that lifts its glass, to be placed where the glass would have stood.
+    Glazed { surface: E, lift: Option<E> },
+    /// Decorated as [`TileDecorator::decorate`] does, its glass to be drawn
+    /// under it the old way.
+    Decorated(Option<E>),
+}
+
 /// One blurred silhouette to draw underneath a surface, and the identity the
 /// damage tracker knows it by.
 #[derive(Debug, Clone)]
@@ -183,6 +206,21 @@ where
     fn swing(&mut self, renderer: &mut R, request: SwingRequest<'_>) -> Option<Self::Element> {
         let _ = (renderer, request);
         None
+    }
+
+    /// A surface composited over its own glass and cut with it by one edge,
+    /// as a client that speaks `composited_blur` paints for. The default — and
+    /// the answer of a decorator that cannot — decorates it the old way.
+    fn glaze(
+        &mut self,
+        renderer: &mut R,
+        element: Cropped<R>,
+        shape: Rectangle<i32, Physical>,
+        radius: [f32; 4],
+        glaze: Glaze,
+    ) -> Glazing<Self::Element> {
+        let _ = glaze;
+        Glazing::Decorated(self.decorate(renderer, element, shape, radius))
     }
 
     /// One rectangle of the blurred glass drawn *behind* a surface that

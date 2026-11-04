@@ -6,16 +6,14 @@
 //! drawn underneath it, reusing the blur pipeline's own backdrop rather than
 //! blurring anything a second time.
 //!
-//! Like the other shader elements this cannot be generic over the renderer: a
-//! generic `R::Frame` offers only clears, fills and blits, with no way to bind
-//! a GLES program, so the two impls below name their renderers and the
-//! multi-GPU one forwards to the GLES frame underneath it.
+//! Like the other shader elements it draws through [`GlesBacked`]: a generic
+//! `R::Frame` offers only clears, fills and blits, with no way to bind a GLES
+//! program.
 
 use smithay::{
     backend::renderer::{
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
         gles::{GlesError, GlesFrame, GlesPixelProgram, GlesRenderer},
-        multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
@@ -24,8 +22,7 @@ use smithay::{
 };
 
 use crate::{
-    backend::render::{GbmGlesApi, KmsRenderer},
-    rendering::decoration::palette::FramePalette,
+    rendering::{decoration::palette::FramePalette, gles::GlesBacked},
     shaders::title_bar::{TitleBarShader, TitleBarUniforms},
     shell::decoration::Control,
 };
@@ -207,45 +204,22 @@ impl Element for TitleBar {
     }
 }
 
-impl RenderElement<GlesRenderer> for TitleBar {
+impl<R: GlesBacked> RenderElement<R> for TitleBar {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        self.draw_gles(frame, src, dst, damage)
+    ) -> Result<(), R::Error> {
+        self.draw_gles(R::gles_frame(frame), src, dst, damage)
+            .map_err(R::lift)
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         // Never a plane candidate: the pixels only exist through the shader.
-        None
-    }
-}
-
-impl<'render> RenderElement<KmsRenderer<'render>> for TitleBar {
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        // The program lives on the render device's GLES context — the same one
-        // `frame.as_mut()` exposes — so this never crosses GPUs.
-        self.draw_gles(frame.as_mut(), src, dst, damage)
-            .map_err(MultiError::Render)
-    }
-
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

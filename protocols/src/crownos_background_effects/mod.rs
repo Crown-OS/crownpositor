@@ -41,6 +41,12 @@ pub trait BackgroundEffectsHandler {
     fn background_effects_state(&mut self) -> &mut BackgroundEffectsState;
 }
 
+/// The effect manager's version, which its surface objects share.
+const EFFECTS_VERSION: u32 = 2;
+
+/// `composited_blur`, and the effect objects that ask for it.
+const COMPOSITED_SINCE: u32 = 2;
+
 /// User data of both globals and of every manager bound from them.
 ///
 /// Empty because the capabilities are read from [`BackgroundEffectsState`] on
@@ -71,7 +77,10 @@ impl BackgroundEffectsState {
     ) -> Self {
         Self {
             shapes: display.create_global::<D, CrownosShapeManagerV1, _>(1, GlobalData),
-            effects: display.create_global::<D, CrownosBackgroundEffectManagerV1, _>(1, GlobalData),
+            effects: display.create_global::<D, CrownosBackgroundEffectManagerV1, _>(
+                EFFECTS_VERSION,
+                GlobalData,
+            ),
             capabilities,
             managers: Vec::new(),
         }
@@ -106,7 +115,7 @@ impl BackgroundEffectsState {
         self.capabilities = capabilities;
         for manager in &self.managers {
             if let Ok(manager) = manager.upgrade() {
-                manager.capabilities(capabilities);
+                manager.capabilities(advertised(capabilities, manager.version()));
             }
         }
     }
@@ -114,6 +123,16 @@ impl BackgroundEffectsState {
     fn remember(&mut self, manager: &CrownosBackgroundEffectManagerV1) {
         self.managers.retain(|manager| manager.upgrade().is_ok());
         self.managers.push(manager.downgrade());
+    }
+}
+
+/// What a manager bound at `version` is told: a version 1 client has no use
+/// for `composited_blur`, and must never be told about it.
+fn advertised(capabilities: Capability, version: u32) -> Capability {
+    if version < COMPOSITED_SINCE {
+        capabilities - Capability::CompositedBlur
+    } else {
+        capabilities
     }
 }
 
@@ -145,5 +164,25 @@ impl EffectSurfaceData {
 
     fn wl_surface(&self) -> Option<wayland_server::protocol::wl_surface::WlSurface> {
         self.surface.as_ref()?.upgrade().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_version_1_manager_is_never_told_about_composited_blur() {
+        let everything = Capability::all();
+        assert_eq!(
+            advertised(everything, 1),
+            everything - Capability::CompositedBlur
+        );
+        assert_eq!(advertised(everything, 2), everything);
+        assert_eq!(
+            advertised(Capability::Blur, 2),
+            Capability::Blur,
+            "masking only removes, it never adds"
+        );
     }
 }

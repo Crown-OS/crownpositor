@@ -360,9 +360,8 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
 
     // Winit only redraws on demand. Scheduling only while something is moving is
     // what takes an idle desktop from a permanent 60 Hz loop to ~0% CPU; a client
-    // that damages its surface wakes us through its own commit — except for a
-    // backdrop's owed halo, which nothing else would schedule a frame for.
-    if animating || winit.blur.wants_redraw() || std::env::var_os("CROWN_DEBUG_SPIN").is_some() {
+    // that damages its surface wakes us through its own commit.
+    if animating || std::env::var_os("CROWN_DEBUG_SPIN").is_some() {
         winit.backend.window().request_redraw();
     }
 
