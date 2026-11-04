@@ -1,6 +1,7 @@
 pub mod blur;
 pub mod border;
 pub mod color;
+pub mod glazed;
 pub mod lock_glyph;
 pub mod nv12;
 pub mod program;

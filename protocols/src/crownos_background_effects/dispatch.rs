@@ -24,7 +24,8 @@ use crownos_protocols::background_effects::v1::server::{
 };
 
 use crate::crownos_background_effects::{
-    BackgroundEffectsHandler, BackgroundEffectsState, EffectSurfaceData, GlobalData,
+    BackgroundEffectsHandler, BackgroundEffectsState, COMPOSITED_SINCE, Capability,
+    EffectSurfaceData, GlobalData, advertised,
     color::Argb,
     effects::{Blur, Effects, Shadow, apply_committed},
     shape::{RoundedRect, ShapeData},
@@ -156,7 +157,7 @@ impl<D: BackgroundEffectsData> GlobalDispatch<CrownosBackgroundEffectManagerV1, 
         // "Sent when the manager is bound, and again every time the set
         // changes."
         let state = state.background_effects_state();
-        manager.capabilities(state.capabilities);
+        manager.capabilities(advertised(state.capabilities, manager.version()));
         state.remember(&manager);
     }
 }
@@ -209,8 +210,12 @@ impl<D: BackgroundEffectsData> Dispatch<CrownosBackgroundEffectManagerV1, Global
                     slot.hooked.swap(true, Ordering::AcqRel)
                 });
                 if !hooked {
-                    add_post_commit_hook::<D, _>(&surface, |_state, _dh, surface| {
-                        with_states(surface, apply_committed);
+                    add_post_commit_hook::<D, _>(&surface, |state, _dh, surface| {
+                        let composited = state
+                            .background_effects_state()
+                            .capabilities
+                            .contains(Capability::CompositedBlur);
+                        with_states(surface, |states| apply_committed(states, composited));
                     });
                 }
 
@@ -276,7 +281,9 @@ impl<D: BackgroundEffectsData> Dispatch<CrownosBackgroundEffectSurfaceV1, Effect
                 // Copy semantics: the shape is read out now, so the client can
                 // destroy it or keep adding to it right away.
                 let shape = shape.as_ref().and_then(snapshot);
+                let composited = effect.version() >= COMPOSITED_SINCE;
                 with_pending(&surface, |pending| {
+                    pending.composited = composited;
                     // "A blur_radius of zero turns the blur off, and with it
                     // the rim, the tint and the saturation."
                     pending.blur = (blur_radius > 0).then_some(Blur {

@@ -4,52 +4,79 @@
 //! about tiles; this is where the active workspace is fed into it and where the
 //! geometry the renderer and the pointer need is laid out once per frame.
 
+mod icons;
+
 use std::collections::HashMap;
 
 use smithay::{
-    backend::renderer::element::Id,
-    utils::{Logical, Point, Rectangle},
+    backend::renderer::element::{Id, memory::MemoryRenderBuffer},
+    utils::{Buffer, Logical, Point, Rectangle, Size},
 };
 
 use spacecontrol::{animations::spring::SpringProfile, scene::Canvas};
-use windowcontrol::{Direction, Metrics, Panel, Slot, Switcher, layout};
+use windowcontrol::{Direction, Metrics, Slot, Switcher, layout};
+
+pub use icons::ICON_SIZE;
 
 use crate::{shell::monitor::Monitor, utils::id::WindowId};
 
-/// What the damage tracker knows the strip's own quads by.
+/// What the damage tracker knows a card's own quads by.
 #[derive(Debug)]
-pub struct WindowControlIds {
-    pub panel: Id,
+pub struct CardIds {
+    /// What a see-through window is laid on, so the card behind does not show
+    /// through it.
+    pub base: Id,
     pub shadow: Id,
 }
 
-impl Default for WindowControlIds {
+impl Default for CardIds {
     fn default() -> Self {
         Self {
-            panel: Id::new(),
+            base: Id::new(),
             shadow: Id::new(),
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WindowControl {
     switcher: Switcher<WindowId>,
     metrics: Metrics,
-    ids: WindowControlIds,
+    frost: Id,
+    cards: HashMap<WindowId, CardIds>,
+    icons: icons::CardIcons,
     canvas: Option<Canvas>,
-    panel: Panel,
     slots: Vec<Slot>,
+    /// Indices into `slots`, top card first.
+    order: Vec<usize>,
     /// Width over height of every window seen since opening, so one that has
     /// closed keeps its shape while it collapses.
     aspects: HashMap<WindowId, f64>,
 }
 
+impl Default for WindowControl {
+    fn default() -> Self {
+        Self {
+            switcher: Switcher::default(),
+            metrics: Metrics::default(),
+            frost: Id::new(),
+            cards: HashMap::new(),
+            icons: icons::CardIcons::default(),
+            canvas: None,
+            slots: Vec::new(),
+            order: Vec::new(),
+            aspects: HashMap::new(),
+        }
+    }
+}
+
 impl WindowControl {
-    /// Rises over `monitor`'s active workspace. Returns whether there was
+    /// Comes up over `monitor`'s active workspace. Returns whether there was
     /// anything to show.
     pub fn open(&mut self, monitor: &Monitor, direction: Direction) -> bool {
         self.aspects.clear();
+        self.cards.clear();
+        self.icons.forget_windows();
         let opened = self
             .switcher
             .open(monitor.active().recent_windows(), direction);
@@ -85,15 +112,19 @@ impl WindowControl {
         !self.switcher.strip().at_rest()
     }
 
+    /// Commits the card under `at`; anywhere else dismisses.
     pub fn click(&mut self, at: Point<f64, Logical>) -> Option<WindowId> {
         match self.slot_at(at) {
             Some(index) => self.switcher.commit_at(index),
-            None => None,
+            None => {
+                self.switcher.dismiss();
+                None
+            }
         }
     }
 
     fn slot_at(&self, at: Point<f64, Logical>) -> Option<usize> {
-        layout::slot_at(&self.panel, &self.slots, at)
+        layout::slot_at(&self.slots, &self.order, at)
     }
 
     pub fn step(&mut self, dt: f32) {
@@ -122,6 +153,15 @@ impl WindowControl {
                     .insert(tile.id(), f64::from(size.w) / f64::from(size.h));
             }
         }
+        let entries = self.switcher.strip().entries();
+        for entry in entries {
+            self.cards.entry(entry.key).or_default();
+        }
+        self.icons.update(
+            workspace,
+            entries.iter().map(|entry| entry.key),
+            monitor.output().current_scale().fractional_scale(),
+        );
 
         let canvas = Canvas::new(
             Rectangle::from_size(monitor.geometry().size),
@@ -129,14 +169,14 @@ impl WindowControl {
         );
         self.canvas = Some(canvas);
         let aspects = &self.aspects;
-        self.panel = layout::arrange(
+        layout::arrange(
             canvas,
             &self.metrics,
-            self.switcher.progress(),
             self.switcher.strip(),
             |id| aspects.get(&id).copied().unwrap_or(16.0 / 10.0),
             &mut self.slots,
         );
+        layout::front_to_back(&self.slots, &mut self.order);
     }
 
     pub fn is_open(&self) -> bool {
@@ -155,19 +195,29 @@ impl WindowControl {
         &self.switcher
     }
 
-    pub fn ids(&self) -> &WindowControlIds {
-        &self.ids
+    pub fn frost_id(&self) -> &Id {
+        &self.frost
     }
 
-    pub fn panel(&self) -> &Panel {
-        &self.panel
+    pub fn card_ids(&self, window: WindowId) -> Option<&CardIds> {
+        self.cards.get(&window)
+    }
+
+    /// `window`'s app icon and its size in pixels.
+    pub fn icon(&self, window: WindowId) -> Option<(&MemoryRenderBuffer, Size<i32, Buffer>)> {
+        self.icons.get(window)
     }
 
     pub fn slots(&self) -> &[Slot] {
         &self.slots
     }
 
-    /// How far `window` has come forward as the selection, 0 to 1.
+    /// Indices into [`Self::slots`], top card first.
+    pub fn order(&self) -> &[usize] {
+        &self.order
+    }
+
+    /// How far `window` has come out of the stack to the top, 0 to 1.
     pub fn focus_of(&self, window: WindowId) -> f64 {
         self.switcher
             .strip()
@@ -177,8 +227,8 @@ impl WindowControl {
             .map_or(0.0, |entry| entry.focus())
     }
 
-    /// The point the workspace behind the strip steps back towards.
-    pub fn vanishing_point(&self) -> Point<f64, Logical> {
+    /// The point the stack grows out of as it comes up.
+    pub fn centre(&self) -> Point<f64, Logical> {
         self.canvas.map_or_else(Point::default, |canvas| {
             spacecontrol::scene::centre(canvas.usable.to_f64())
         })

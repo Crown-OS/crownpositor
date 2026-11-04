@@ -18,10 +18,13 @@ pub mod decoration;
 pub mod element;
 pub mod framebuffer;
 pub mod fullscreen;
+pub mod glazed;
+pub mod gles;
 pub mod lock;
 mod lock_glyph;
 pub mod lock_screen;
 mod morph;
+pub mod opaque;
 pub mod overview;
 mod painter;
 pub mod popup;
@@ -37,7 +40,10 @@ mod windowcontrol;
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
-        element::{Kind, Wrap, memory::MemoryRenderBufferRenderElement, utils::CropRenderElement},
+        element::{
+            Element, Id, Kind, Wrap, memory::MemoryRenderBufferRenderElement,
+            utils::CropRenderElement,
+        },
         utils::CommitCounter,
     },
     desktop::layer_map_for_output,
@@ -52,7 +58,7 @@ use crate::{
     rendering::{
         blur::{Glass, GlassKind},
         cursor::Cursor,
-        decorate::{Backdrop, Outline, Shadow, TileDecorator},
+        decorate::{Backdrop, Glaze, Glazing, Outline, Shadow, TileDecorator},
         decoration::{Border, FramePalette, TextRenderer, TitleBarParams, window},
         element::CrownElement,
         unstretched::Unstretched,
@@ -141,6 +147,22 @@ fn appearance_key(focused: bool, hovered: Option<Control>, dark: bool) -> u64 {
 pub type Elements<R, D> = Vec<CrownElement<R, <D as TileDecorator<R>>::Element>>;
 
 /// Front-to-back, the order `OutputDamageTracker::render_output` wants.
+///
+/// The strata, nearest the eye first — and the order the pointer is routed
+/// in, so what answers a click is what is drawn under it:
+///
+/// 1. The cursor and the icon a drag carries.
+/// 2. A lock screen, which hides everything below until it lifts.
+/// 3. The compositor's open menu.
+/// 4. Every window's popups, over every window and panel.
+/// 5. The Overlay layer, a window lifting its icon out of a dock, the Top
+///    layer, and the preview of where a dragged window will land.
+/// 6. The windows: the overview or the Alt+Tab stack standing in for them,
+///    or each visible workspace's stack, closing windows first.
+/// 7. The Bottom and Background layers.
+///
+/// A settled fullscreen window short-circuits to its menu, its popups and
+/// its own surface, so the buffer can go straight to a plane.
 #[allow(clippy::too_many_arguments)]
 pub fn output_elements<R, D>(
     shell: &Shell,
@@ -207,6 +229,34 @@ where
         return elements;
     }
 
+    // Nearest the eye after the cursor: an open menu, then every window's
+    // popups. Both float over the panels — a menu was opened deliberately and
+    // dismisses itself, and a popup is free to hang past the window that
+    // opened it and past whatever panel lies below — and the pointer is
+    // routed in the same order, so what answers a click is what is drawn.
+    menu_elements(
+        &mut elements,
+        shell,
+        monitor,
+        renderer,
+        decorator,
+        scale,
+        style,
+    );
+    let desktop = !monitor.spacecontrol().is_visible() && !monitor.window_control().is_visible();
+    if desktop {
+        for (workspace, offset) in monitor.visible_workspaces() {
+            popup::workspace_popup_elements(
+                &mut elements,
+                workspace,
+                renderer,
+                decorator,
+                scale,
+                offset,
+            );
+        }
+    }
+
     layer_elements(
         &mut elements,
         monitor,
@@ -217,7 +267,7 @@ where
     );
     // A window lifting its icon out of a dock is drawn over it, so the icon
     // leaves the dock instead of sliding under its glass.
-    if !monitor.spacecontrol().is_visible() && !monitor.window_control().is_visible() {
+    if desktop {
         for (workspace, offset) in monitor.visible_workspaces() {
             workspace_window_elements(
                 &mut elements,
@@ -239,18 +289,6 @@ where
         decorator,
         scale,
         &[Layer::Top],
-    );
-
-    // An open menu is over everything on its output, panels included from the
-    // user's point of view — it was opened deliberately and dismisses itself.
-    menu_elements(
-        &mut elements,
-        shell,
-        monitor,
-        renderer,
-        decorator,
-        scale,
-        style,
     );
 
     // Above every window, below the panels: the preview is a hint about where
@@ -321,7 +359,6 @@ where
         );
     }
 
-    let _ = shell;
     elements
 }
 
@@ -524,39 +561,14 @@ fn tile_elements<R, D>(
         return;
     }
 
-    // The interpolated rect, not the target: this is what makes a window slide.
-    // Output-local, because the damage tracker works in this output's own
-    // space. `offset` slides the whole workspace the tile belongs to; rounding
-    // only at the physical step keeps both motions sub-pixel smooth.
-    let animated = tile.render_rect();
-    let frame_loc: Point<i32, Physical> = (animated.loc + offset).to_physical_precise_round(scale);
-    let frame = Rectangle::new(frame_loc, animated.size.to_physical_precise_round(scale));
-
-    let inset: i32 = (tile.render_titlebar() * scale.y).round() as i32;
+    let Placed {
+        frame,
+        inset,
+        clip,
+        surface_origin,
+    } = Placed::new(tile, offset, scale);
     let reveal = tile.titlebar_reveal();
-    // Where the client actually draws. Equal to the frame when undecorated, so
-    // the undecorated path costs nothing extra.
-    let clip = Rectangle::new(
-        frame_loc + Point::from((0, inset)),
-        Size::from((frame.size.w, (frame.size.h - inset).max(1))),
-    );
     let alpha = tile.render_alpha();
-    // The client's own origin, which sits its window geometry's offset up and
-    // to the left of the clip: a client that draws its own shadows keeps them
-    // in its buffer, outside the rect it asked to be framed.
-    let surface_origin = clip.loc
-        - tile
-            .window()
-            .geometry()
-            .loc
-            .to_physical_precise_round(scale);
-
-    let popups = popup::popup_elements(renderer, tile.window(), surface_origin, scale, alpha);
-    elements.extend(
-        decorate::unclipped(renderer, decorator, popups, scale)
-            .into_iter()
-            .map(|popup| CrownElement::Tile(Wrap::from(popup))),
-    );
 
     if inset > 0 {
         frame_overlay(
@@ -605,13 +617,6 @@ fn tile_elements<R, D>(
         // still the *old* size — so without the clip it bleeds over its
         // neighbour. `from_element` returns `None` when the element falls
         // entirely outside, which is exactly what should not be drawn.
-        // if shell.is_animating() {
-        //     let Some(surface) =  else {
-        //         continue;
-        //     }
-        // }
-        // Drawn at its own size here, unless a subsurface animates its own;
-        // the overview passes a smaller factor through the very same wrapper.
         let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip) else {
             continue;
         };
@@ -665,6 +670,52 @@ fn tile_elements<R, D>(
             style,
             alpha * reveal,
         );
+    }
+}
+
+/// Where a tile's pieces land on the output this frame.
+///
+/// The interpolated rect, not the target: this is what makes a window slide.
+/// Output-local, because the damage tracker works in this output's own space.
+/// `offset` slides the whole workspace the tile belongs to; rounding only at
+/// the physical step keeps both motions sub-pixel smooth.
+pub(crate) struct Placed {
+    /// The whole window, frame included.
+    pub frame: Rectangle<i32, Physical>,
+    /// How much of the frame's top the titlebar takes.
+    pub inset: i32,
+    /// Where the client actually draws. Equal to the frame when undecorated,
+    /// so the undecorated path costs nothing extra.
+    pub clip: Rectangle<i32, Physical>,
+    /// The client's own origin, which sits its window geometry's offset up and
+    /// to the left of the clip: a client that draws its own shadows keeps them
+    /// in its buffer, outside the rect it asked to be framed.
+    pub surface_origin: Point<i32, Physical>,
+}
+
+impl Placed {
+    pub(crate) fn new(tile: &Tile, offset: Point<f64, Logical>, scale: Scale<f64>) -> Self {
+        let animated = tile.render_rect();
+        let frame_loc: Point<i32, Physical> =
+            (animated.loc + offset).to_physical_precise_round(scale);
+        let frame = Rectangle::new(frame_loc, animated.size.to_physical_precise_round(scale));
+        let inset = (tile.render_titlebar() * scale.y).round() as i32;
+        let clip = Rectangle::new(
+            frame_loc + Point::from((0, inset)),
+            Size::from((frame.size.w, (frame.size.h - inset).max(1))),
+        );
+        let surface_origin = clip.loc
+            - tile
+                .window()
+                .geometry()
+                .loc
+                .to_physical_precise_round(scale);
+        Self {
+            frame,
+            inset,
+            clip,
+            surface_origin,
+        }
     }
 }
 
@@ -899,7 +950,7 @@ fn frame_backing<R, D>(
 
 /// The menu row's labels along a titlebar.
 ///
-/// Pushed by [`frame_elements`] for the window that owns them, from the layout
+/// Pushed by [`frame_overlay`] for the window that owns them, from the layout
 /// [`State::layout_menus`](crate::state::State::layout_menus) recorded before
 /// the frame — so what is drawn is exactly what a click will find.
 fn menu_row_elements<R, D>(
@@ -1295,13 +1346,51 @@ fn surface_effect_elements<R, D>(
     R::TextureId: Clone + 'static,
     D: TileDecorator<R>,
 {
+    shadow_elements(
+        out,
+        renderer,
+        decorator,
+        surface,
+        fingerprint,
+        &effects,
+        alpha,
+    );
+
+    let (ids, commit) = blur::backdrop_slots(
+        surface,
+        effects.pieces.len(),
+        fingerprint,
+        effects.generation,
+    );
+    for (id, piece) in std::iter::zip(ids, &effects.pieces) {
+        let backdrop = piece_backdrop(id, commit, piece, &effects, alpha, strength);
+        if let Some(backdrop) = decorator.backdrop(renderer, backdrop) {
+            out(backdrop);
+        }
+    }
+}
+
+/// The shadows a surface casts through `crownos_background_effects`.
+fn shadow_elements<R, D>(
+    out: &mut dyn FnMut(D::Element),
+    renderer: &mut R,
+    decorator: &mut D,
+    surface: &WlSurface,
+    fingerprint: u64,
+    effects: &blur::SurfaceEffects,
+    alpha: f32,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Clone + 'static,
+    D: TileDecorator<R>,
+{
     let (ids, commit) = blur::shadow_slots(
         surface,
         effects.shadows.len(),
         fingerprint,
         effects.generation,
     );
-    for (id, piece) in std::iter::zip(ids, effects.shadows) {
+    for (id, &piece) in std::iter::zip(ids, &effects.shadows) {
         if let Some(shadow) = decorator.shadow(
             renderer,
             Shadow {
@@ -1314,30 +1403,52 @@ fn surface_effect_elements<R, D>(
             out(shadow);
         }
     }
+}
 
+/// One piece of a surface's glass, as its backdrop draws it.
+fn piece_backdrop(
+    id: Id,
+    commit: CommitCounter,
+    piece: &blur::GlassPiece,
+    effects: &blur::SurfaceEffects,
+    alpha: f32,
+    strength: f32,
+) -> Backdrop {
+    Backdrop {
+        id,
+        commit,
+        geometry: piece.geometry,
+        mask: piece.mask,
+        radius: piece.radius,
+        glass: effects.glass,
+        alpha,
+        strength: effects.strength * strength,
+    }
+}
+
+/// The backdrop that lifts the glass a glazed surface is laid on: its one
+/// piece, under the identity that piece's backdrop has always had. `None`
+/// with no blur this frame, or nothing of the piece on screen.
+fn glazed_backdrop<R, D>(
+    decorator: &D,
+    surface: &WlSurface,
+    effects: &blur::SurfaceEffects,
+    alpha: f32,
+) -> Option<Backdrop>
+where
+    R: Renderer + ImportAll,
+    D: TileDecorator<R>,
+{
+    let fingerprint = decorator.blur_fingerprint()?;
+    let piece = effects.pieces.first()?;
     let (ids, commit) = blur::backdrop_slots(
         surface,
         effects.pieces.len(),
         fingerprint,
         effects.generation,
     );
-    for (id, piece) in std::iter::zip(ids, &effects.pieces) {
-        if let Some(backdrop) = decorator.backdrop(
-            renderer,
-            Backdrop {
-                id,
-                commit,
-                geometry: piece.geometry,
-                mask: piece.mask,
-                radius: piece.radius,
-                glass: effects.glass,
-                alpha,
-                strength: effects.strength * strength,
-            },
-        ) {
-            out(backdrop);
-        }
-    }
+    let id = ids.into_iter().next()?;
+    Some(piece_backdrop(id, commit, piece, effects, alpha, 1.0))
 }
 
 pub(crate) fn layer_elements<R, D>(
@@ -1373,50 +1484,91 @@ pub(crate) fn layer_elements<R, D>(
                 Kind::Unspecified,
             );
 
-            match radius {
+            // A panel that speaks `composited_blur` painted its body square
+            // for the compositor to cut: its own surface is laid on its glass
+            // and cut with it, and the glass's backdrop only lifts.
+            let shading = decorator.glass(scale.x, GlassKind::Panel).shading;
+            let effects =
+                blur::place_surface_effects(surface.wl_surface(), location, scale, clip, shading);
+            let glazed = effects.as_ref().and_then(|effects| effects.glazed);
+            let own = Id::from_wayland_resource(surface.wl_surface());
+            let mut lift = None;
+
+            for scaled in popups.into_iter().chain(tree) {
                 // A panel that asked to be rounded is clipped to its own
-                // radius, which costs it the decorator's wrapper per element.
-                Some(radius) => {
-                    for scaled in popups.into_iter().chain(tree) {
-                        let Some(cropped) = CropRenderElement::from_element(scaled, scale, clip)
-                        else {
-                            continue;
-                        };
-                        if let Some(decorated) =
-                            decorator.decorate(renderer, cropped, clip, [radius; 4])
-                        {
-                            elements.push(CrownElement::Tile(Wrap::from(decorated)));
-                        }
+                // radius. Nothing to round, nothing to crop: the surfaces go
+                // into the frame as the client committed them, animations
+                // applied, only sampled the way windows are.
+                let (shape, corners) = match radius {
+                    Some(radius) => (clip, [radius; 4]),
+                    None => (scaled.geometry(scale), [0.0; 4]),
+                };
+                let Some(cropped) = CropRenderElement::from_element(scaled, scale, shape) else {
+                    continue;
+                };
+                let glazing = match (glazed, &effects) {
+                    (Some(outline), Some(effects)) if lift.is_none() && cropped.id() == &own => {
+                        let backdrop =
+                            glazed_backdrop(decorator, surface.wl_surface(), effects, 1.0);
+                        let glaze = Glaze { outline, backdrop };
+                        decorator.glaze(renderer, cropped, shape, corners, glaze)
                     }
+                    _ => Glazing::Decorated(decorator.decorate(renderer, cropped, shape, corners)),
+                };
+                let tile = |element| CrownElement::Tile(Wrap::from(element));
+                match glazing {
+                    Glazing::Glazed {
+                        surface,
+                        lift: glass,
+                    } => {
+                        elements.push(tile(surface));
+                        lift = Some(glass);
+                    }
+                    Glazing::Decorated(decorated) => elements.extend(decorated.map(tile)),
                 }
-                // Nothing to round, so nothing to crop: the surfaces go into
-                // the frame as the client committed them, animations applied,
-                // only sampled the way windows are.
-                None => elements.extend(
-                    decorate::unclipped(renderer, decorator, popups.into_iter().chain(tree), scale)
-                        .into_iter()
-                        .map(|surface| CrownElement::Tile(Wrap::from(surface))),
-                ),
             }
 
-            // Panels and notifications are what actually wants glass, so layer
-            // surfaces get the same treatment windows do.
-            backdrop_elements(
-                &mut |element| elements.push(CrownElement::Tile(Wrap::from(element))),
-                renderer,
-                decorator,
-                surface.wl_surface(),
-                location,
-                scale,
-                clip,
-                Outline {
-                    rect: clip,
-                    radius: radius.unwrap_or(0.0),
-                },
-                1.0,
-                GlassKind::Panel,
-                1.0,
-            );
+            let out = &mut |element| elements.push(CrownElement::Tile(Wrap::from(element)));
+            match lift {
+                // The shadows first and the glass's lift after, exactly where
+                // the glass would have stood: the lift then sees the frame as
+                // the glass always did, shadow-free.
+                Some(lift) => {
+                    if let (Some(effects), Some(fingerprint)) =
+                        (&effects, decorator.blur_fingerprint())
+                    {
+                        let wl_surface = surface.wl_surface();
+                        shadow_elements(
+                            out,
+                            renderer,
+                            decorator,
+                            wl_surface,
+                            fingerprint,
+                            effects,
+                            1.0,
+                        );
+                    }
+                    lift.into_iter().for_each(out);
+                }
+                // Panels and notifications are what actually wants glass, so
+                // layer surfaces get the same treatment windows do.
+                None => backdrop_elements(
+                    out,
+                    renderer,
+                    decorator,
+                    surface.wl_surface(),
+                    location,
+                    scale,
+                    clip,
+                    Outline {
+                        rect: clip,
+                        radius: radius.unwrap_or(0.0),
+                    },
+                    1.0,
+                    GlassKind::Panel,
+                    1.0,
+                ),
+            }
         }
     }
 }

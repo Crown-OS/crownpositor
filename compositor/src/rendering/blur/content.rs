@@ -1,12 +1,13 @@
 //! What actually changed under the glass this frame.
 //!
-//! A backdrop owes the band around changed content, because blur spreads a
-//! change past the damage that carried it. The output's damage cannot say what
-//! changed: it also holds the bands themselves, and smithay shapes it into
-//! tiles, so a repainted band comes back larger than it was offered. Owing a
-//! band for that excess hands bands back and forth between overlapping glass
-//! forever. A second tracker over every element *except* the glass answers the
-//! question directly.
+//! A blur spreads a changed pixel past the rectangle it arrived in, so a
+//! backdrop has to repaint a band around every change beneath it. The output's
+//! damage cannot say what changed: it holds those bands themselves, and
+//! smithay shapes it into tiles, so a repainted band would come back larger
+//! than it was asked for and overlapping glass would hand bands back and forth
+//! forever. A second tracker over every element *except* the glass answers
+//! the question directly — before the frame is drawn, so each backdrop can
+//! claim its band as this frame's damage rather than owing it to the next.
 
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
@@ -15,16 +16,16 @@ use smithay::{
         damage::OutputDamageTracker,
         element::{Element, Id},
     },
-    utils::{Physical, Point, Rectangle},
+    utils::{Physical, Rectangle},
 };
 
-use crate::utils::region;
+use crate::rendering::blur::scene::grow;
 
 #[derive(Debug, Default)]
 struct State {
     tracker: Option<OutputDamageTracker>,
     glass: HashSet<Id>,
-    /// `None` until observed: a frame nobody observed treats all damage as
+    /// `None` until observed: a frame nobody observed treats every pixel as
     /// changed, which is always safe.
     changed: Option<Vec<Rectangle<i32, Physical>>>,
 }
@@ -71,21 +72,21 @@ impl ContentDamage {
             .map(|(damage, _)| damage.cloned().unwrap_or_default());
     }
 
-    /// The part of `damage` where content really changed, both in coordinates
-    /// relative to `origin`.
-    pub(super) fn changed(
+    /// Where a change within `reach` of `geometry` lands on it, relative to
+    /// `geometry`. `None` when the frame was never observed.
+    pub(super) fn changed_near(
         &self,
-        damage: &[Rectangle<i32, Physical>],
-        origin: Point<i32, Physical>,
-    ) -> Vec<Rectangle<i32, Physical>> {
-        match &self.0.borrow().changed {
-            Some(changed) => region::intersect(
-                damage,
-                changed
-                    .iter()
-                    .map(|rect| Rectangle::new(rect.loc - origin, rect.size)),
-            ),
-            None => damage.to_vec(),
-        }
+        geometry: Rectangle<i32, Physical>,
+        reach: i32,
+    ) -> Option<Vec<Rectangle<i32, Physical>>> {
+        let state = self.0.borrow();
+        let changed = state.changed.as_ref()?;
+        Some(
+            changed
+                .iter()
+                .filter_map(|rect| grow(*rect, reach).intersection(geometry))
+                .map(|rect| Rectangle::new(rect.loc - geometry.loc, rect.size))
+                .collect(),
+        )
     }
 }

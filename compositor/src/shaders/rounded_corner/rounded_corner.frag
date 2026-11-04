@@ -8,9 +8,9 @@
 #extension GL_OES_EGL_image_external : require
 #endif
 
-// Gives us fwidth(), for scale-independent edge antialiasing and the area
-// filter's texel size. `enable` rather than `require` so drivers without it
-// fall back to the fixed 1px width and plain bilinear sampling below.
+// Gives us dFdx/dFdy and fwidth(), for scale-independent edge antialiasing and
+// the area filter's texel size. `enable` rather than `require` so drivers
+// without it fall back to the fixed 1px width and plain bilinear sampling below.
 #extension GL_OES_standard_derivatives : enable
 
 // The signed distance math needs more headroom than mediump gives us for large
@@ -112,13 +112,15 @@ void main() {
     float distance = rounded_box(gl_FragCoord.xy - shape_origin - half_size, half_size, r);
 
 #if defined(GL_OES_standard_derivatives)
-    // Width of one screen pixel in distance-field units, so the edge stays one
-    // pixel wide however the element is scaled.
-    float aa = max(fwidth(distance), 0.0001);
+    // Width of one screen pixel along the field's gradient, so the edge stays
+    // one pixel wide however the element is scaled. The linear ramp across it is
+    // the area of the pixel inside the edge: the ramp the glass under a window
+    // and the client's own rounded painting use, so all three share one outline.
+    float aa = max(length(vec2(dFdx(distance), dFdy(distance))), 0.0001);
 #else
     float aa = 1.0;
 #endif
-    float mask = 1.0 - smoothstep(-0.5 * aa, 0.5 * aa, distance);
+    float mask = clamp(0.5 - distance / aa, 0.0, 1.0);
 
     // The texture is premultiplied, so scaling every channel keeps it that way.
     color = color * (alpha * mask);

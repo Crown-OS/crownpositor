@@ -82,6 +82,9 @@ pub struct Cursor {
     pub status: CursorImageStatus,
     /// Nothing is drawn while set: a locked pointer points at nothing.
     pub suppressed: bool,
+    /// Set for a drag in progress: the grabbing hand then stays, whatever a
+    /// client or a focus change asks for.
+    pub dragging: bool,
     /// What the drag in progress carries under the pointer.
     pub drag_icon: Option<DragIcon>,
     animation: Animation,
@@ -137,6 +140,7 @@ impl Cursor {
             cache: HashMap::new(),
             status: CursorImageStatus::default_named(),
             suppressed: false,
+            dragging: false,
             drag_icon: None,
             animation: Animation::idle(),
         }
@@ -172,6 +176,7 @@ impl Cursor {
         let mut fresh = Self::new(theme);
         fresh.status = std::mem::replace(&mut self.status, CursorImageStatus::Hidden);
         fresh.suppressed = self.suppressed;
+        fresh.dragging = self.dragging;
         fresh.drag_icon = self.drag_icon.take();
         fresh.animation.wake = self.animation.wake.take();
         *self = fresh;
@@ -215,17 +220,6 @@ impl Cursor {
                 .drag_icon
                 .as_ref()
                 .is_some_and(|icon| icon.surface == *surface)
-    }
-
-    /// Applies a commit to the drag icon, if `surface` is it.
-    pub fn commit(&mut self, surface: &WlSurface) {
-        if let Some(icon) = self
-            .drag_icon
-            .as_mut()
-            .filter(|icon| icon.surface == *surface)
-        {
-            icon.commit();
-        }
     }
 
     /// Takes the pointer image back from the clients, and says whether it had

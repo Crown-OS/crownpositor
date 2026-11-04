@@ -10,7 +10,10 @@ use std::{
 
 use zip::ZipArchive;
 
-use crate::rendering::cursor::hyprcursor::meta::{Manifest, Meta};
+use crate::{
+    rendering::cursor::hyprcursor::meta::{Manifest, Meta},
+    utils::xdg,
+};
 
 const MANIFESTS: [&str; 2] = ["manifest.hl", "manifest.toml"];
 const METAS: [&str; 2] = ["meta.hl", "meta.toml"];
@@ -30,7 +33,7 @@ impl Theme {
     /// Matches a theme by directory name or by the name in its manifest, as
     /// libhyprcursor does, searching the user's icon directories first.
     pub fn find(name: &str) -> Option<Self> {
-        let dirs = search_dirs();
+        let dirs = xdg::icon_dirs();
         dirs.iter()
             .find_map(|dir| Self::load(&dir.join(name)))
             .or_else(|| {
@@ -92,32 +95,6 @@ impl Theme {
             .flatten()
             .collect()
     }
-}
-
-/// `$XDG_DATA_HOME/icons`, `~/.icons`, then `icons` under every
-/// `$XDG_DATA_DIRS` entry: the order libhyprcursor and every XCursor loader
-/// use, so a theme a user installed shadows the system's copy.
-fn search_dirs() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let data_home = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.as_ref().map(|home| home.join(".local/share")));
-    let data_dirs = std::env::var("XDG_DATA_DIRS")
-        .ok()
-        .filter(|dirs| !dirs.is_empty())
-        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_owned());
-
-    data_home
-        .map(|dir| dir.join("icons"))
-        .into_iter()
-        .chain(home.map(|home| home.join(".icons")))
-        .chain(
-            data_dirs
-                .split(':')
-                .filter(|dir| !dir.is_empty())
-                .map(|dir| Path::new(dir).join("icons")),
-        )
-        .collect()
 }
 
 /// One `.hlc` file: a zip of a `meta` file and the frame images it names.

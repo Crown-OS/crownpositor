@@ -12,11 +12,7 @@
 
 use smithay::utils::{Physical, Rectangle};
 
-use crate::{rendering::decorate::Backdrop, utils::squircle};
-
-/// A pixel of slack around a shape, so the antialiased edge is never counted as
-/// opaque. Below that the seam between the two pieces shows.
-const MARGIN: i32 = 1;
+use crate::rendering::{decorate::Backdrop, opaque};
 
 /// The opaque glass built so far for one frame.
 #[derive(Debug, Default)]
@@ -47,41 +43,17 @@ impl GlassStack {
     }
 }
 
-/// Where a backdrop is opaque enough to hide what is under it.
-///
-/// A rounded rectangle is two bands — the shape inset by its corner's reach
-/// along one axis — plus four corner arcs, and only the bands are rectangles. The arcs
-/// are left out rather than approximated: a lower piece drawing through a
-/// corner costs one small doubly blurred sliver, while claiming a corner that
-/// is not there would leave a hole.
-///
-/// Nothing at all while the glass is fading, because glass that is not opaque
-/// is glass whatever is under it still shows through.
-fn opaque_core(
+/// Where a backdrop is opaque enough to hide what is under it. Nothing at all
+/// while the glass is fading, because glass that is not opaque is glass
+/// whatever is under it still shows through.
+pub(super) fn opaque_core(
     backdrop: &Backdrop,
     geometry: Rectangle<i32, Physical>,
 ) -> impl Iterator<Item = Rectangle<i32, Physical>> {
-    let radius = squircle::reach(backdrop.radius).ceil() as i32;
-    let bands = match (backdrop.alpha >= 1.0, radius > 0) {
-        (false, _) => Vec::new(),
-        (true, false) => vec![inset(backdrop.mask, MARGIN, MARGIN)],
-        (true, true) => vec![
-            inset(backdrop.mask, radius + MARGIN, MARGIN),
-            inset(backdrop.mask, MARGIN, radius + MARGIN),
-        ],
-    };
-    bands
-        .into_iter()
-        .flatten()
+    let opaque = backdrop.alpha >= 1.0;
+    opaque::bands(backdrop.mask, [backdrop.radius; 4])
+        .filter(move |_| opaque)
         .filter_map(move |band| band.intersection(geometry))
-}
-
-/// `rect` shrunk by `x` on the left and right and `y` on the top and bottom.
-/// `None` once nothing is left of it.
-fn inset(rect: Rectangle<i32, Physical>, x: i32, y: i32) -> Option<Rectangle<i32, Physical>> {
-    let size = (rect.size.w - 2 * x, rect.size.h - 2 * y);
-    (size.0 > 0 && size.1 > 0)
-        .then(|| Rectangle::new((rect.loc.x + x, rect.loc.y + y).into(), size.into()))
 }
 
 #[cfg(test)]
@@ -143,7 +115,7 @@ mod tests {
         assert!(stack.occlude(&bar, bar.geometry).is_empty());
     }
 
-    /// A rounded piece claims its two bands and leaves its corners to whatever
+    /// A rounded piece claims its bands and leaves its corners to whatever
     /// is under it, which is the one place the arcs actually show.
     #[test]
     fn a_rounded_piece_does_not_claim_its_corners() {
@@ -154,7 +126,14 @@ mod tests {
         let under = backdrop(rect(0, 0, 100, 100), 0.0, 1.0);
         let occluders = stack.occlude(&under, under.geometry);
         // A squircle corner of radius 20 starts curving 30 pixels in.
-        assert_eq!(occluders, vec![rect(31, 1, 38, 98), rect(1, 31, 98, 38)]);
+        assert_eq!(
+            occluders,
+            vec![
+                rect(31, 1, 38, 98),
+                rect(1, 31, 30, 38),
+                rect(69, 31, 30, 38)
+            ]
+        );
 
         // The corner, and the start of its curve, are claimed by neither band.
         assert!(!occluders.iter().any(|rect| rect.contains((4, 4))));

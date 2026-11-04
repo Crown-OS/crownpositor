@@ -69,7 +69,7 @@ use crate::{
     rendering::{
         self, FrameStyle,
         blur::{BlurCache, BlurConfig, BlurSession},
-        rounded::MultiDecorator,
+        rounded::GlesDecorator,
     },
     shell::{
         gaming,
@@ -653,7 +653,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         shell,
         monitor,
         &mut renderer,
-        &mut MultiDecorator::new(blur, &mut surface.corners, &mut surface.canvases),
+        &mut GlesDecorator::new(blur, &mut surface.corners, &mut surface.canvases),
         &mut input.cursor,
         input.pointer_location,
         scale,
@@ -795,12 +795,6 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
             target_presentation_time,
             animating,
         );
-    }
-
-    // A backdrop that owes a halo has to be asked for the frame that pays it;
-    // nothing else on screen changed, so no other source would schedule one.
-    if surface.blur.wants_redraw() {
-        surface.redraw_state = std::mem::take(&mut surface.redraw_state).queue();
     }
     released
 }

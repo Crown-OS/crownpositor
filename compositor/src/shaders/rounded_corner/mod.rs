@@ -24,7 +24,7 @@ const ONE_TO_ONE: f64 = 1e-3;
 pub struct RoundedCornerShader(pub GlesTexProgram);
 
 impl RoundedCornerShader {
-    fn uniforms() -> [UniformName<'static>; 4] {
+    pub(crate) fn uniforms() -> [UniformName<'static>; 4] {
         [
             UniformName::new("shape_origin", UniformType::_2f),
             UniformName::new("shape_size", UniformType::_2f),

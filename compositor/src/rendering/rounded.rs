@@ -8,12 +8,6 @@
 //! element, so this wraps an element and brackets its draw call: bind the
 //! program, draw, unbind. Without the unbind every element after it in the list
 //! would be drawn with rounded corners too.
-//!
-//! Two renderers can drive the shader: the plain [`GlesRenderer`] (winit) and
-//! the multi-GPU [`KmsRenderer`] (DRM). The multi renderer exposes its
-//! underlying GLES renderer/frame through `AsMut`, which is all the override
-//! needs — so both impls below are the same three lines around the same
-//! program.
 
 use smithay::{
     backend::renderer::{
@@ -21,8 +15,7 @@ use smithay::{
             Element, Id, Kind, RenderElement, UnderlyingStorage,
             memory::MemoryRenderBufferRenderElement,
         },
-        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram},
-        multigpu::{Error as MultiError, MultiFrame},
+        gles::{GlesFrame, GlesTexProgram},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
@@ -32,19 +25,21 @@ use smithay::{
 };
 
 use crate::{
-    backend::render::{GbmGlesApi, KmsRenderer},
     rendering::{
-        blur::{BlurBackdrop, BlurSession, Glass, GlassGlyph, GlassKind},
+        blur::{BlurBackdrop, BlurSession, Glass, GlassGlyph, GlassHandoff, GlassKind},
         corners::CornerMemory,
-        decorate::{Backdrop, Cropped, GlyphDraw, Shadow, TileDecorator},
+        decorate::{Backdrop, Cropped, Glaze, Glazing, GlyphDraw, Shadow, TileDecorator},
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
         framebuffer::FramebufferSpace,
+        glazed::{Clip, Glazed},
+        gles::GlesBacked,
+        opaque,
         shaded_sprite::ShadedSprite,
         snapshot::SnapshotElement,
         warp::{self, SwingRequest, WarpCanvases, WarpElement, WarpRequest},
     },
     shaders::{
-        lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader,
+        glazed::GlazedShader, lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader,
         sprite_blur::SpriteBlurShader,
     },
 };
@@ -154,14 +149,16 @@ impl<E: Element> Element for Rounded<E> {
         self.inner.damage_since(scale, commit)
     }
 
-    /// Empty once corners are cut away: the element is no longer fully opaque
-    /// and anything behind it has to be drawn.
+    /// What the client declared opaque, less the corners the clip cuts away:
+    /// an opaque window still hides everything under its middle, which is
+    /// what spares the wallpaper, the glass behind its frame and the windows
+    /// below from being drawn there.
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        let regions = self.inner.opaque_regions(scale);
         if self.is_square() {
-            self.inner.opaque_regions(scale)
-        } else {
-            OpaqueRegions::default()
+            return regions;
         }
+        opaque::within(&regions, self.shape, self.radius, self.geometry(scale).loc)
     }
 
     fn alpha(&self) -> f32 {
@@ -173,426 +170,52 @@ impl<E: Element> Element for Rounded<E> {
     }
 }
 
-impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Rounded<E> {
+impl<R: GlesBacked, E: RenderElement<R>> RenderElement<R> for Rounded<E> {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        let bound = self.bind(frame, src, dst, self.inner.transform());
+    ) -> Result<(), R::Error> {
+        // The override lives on the GLES frame; the inner element still draws
+        // through the renderer's own frame so cross-GPU copies keep working.
+        let bound = self.bind(R::gles_frame(frame), src, dst, self.inner.transform());
         let result = self
             .inner
             .draw(frame, src, dst, damage, opaque_regions, cache);
         if bound {
-            frame.clear_tex_program_override();
+            R::gles_frame(frame).clear_tex_program_override();
         }
         result
     }
 
-    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         // Withheld on purpose: handing this to a DRM plane would scan the buffer
         // out directly and skip the shader, so the corners would come back.
-        let _ = renderer;
         None
     }
 }
 
-impl<'render, E> RenderElement<KmsRenderer<'render>> for Rounded<E>
-where
-    E: RenderElement<KmsRenderer<'render>>,
-{
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-        cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        // The override lives on the GLES frame under the multi frame; the
-        // inner element still draws through the multi frame so cross-GPU
-        // copies keep working.
-        let bound = self.bind(frame.as_mut(), src, dst, self.inner.transform());
-        let result = self
-            .inner
-            .draw(frame, src, dst, damage, opaque_regions, cache);
-        if bound {
-            frame.as_mut().clear_tex_program_override();
-        }
-        result
-    }
+/// A compositor-rasterised sprite as the decorator shades it.
+pub type Sprite<R> = MemoryRenderBufferRenderElement<R>;
 
-    fn underlying_storage(
-        &self,
-        renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
-        // Same as the GLES impl: no direct scanout for shaded windows.
-        let _ = renderer;
-        None
-    }
-}
-
-/// What a decorated tile can be: the window itself (rounded), or the blurred
-/// glass behind it. One enum rather than two `CrownElement` variants because
-/// the `render_elements!` macro derives a `From` per variant, and two wrapped
-/// generics would overlap.
-#[derive(Debug)]
-pub enum Decorated<E, S> {
-    Window(Rounded<E>),
-    Snapshot(Rounded<SnapshotElement>),
-    Backdrop(BlurBackdrop),
-    TitleBar(TitleBar),
-    Border(WindowDecoration),
-    Shadow(GlassShadow),
-    Warp(WarpElement),
-    Sprite(ShadedSprite<S>),
-    GlassGlyph(GlassGlyph<S>),
-}
-
-impl<E: Element, S: Element> Element for Decorated<E, S> {
-    fn id(&self) -> &Id {
-        match self {
-            Self::Window(window) => window.id(),
-            Self::Snapshot(snapshot) => snapshot.id(),
-            Self::Backdrop(backdrop) => backdrop.id(),
-            Self::TitleBar(bar) => bar.id(),
-            Self::Border(border) => border.id(),
-            Self::Shadow(shadow) => shadow.id(),
-            Self::Warp(warp) => warp.id(),
-            Self::Sprite(sprite) => sprite.id(),
-            Self::GlassGlyph(glyph) => glyph.id(),
-        }
-    }
-
-    fn current_commit(&self) -> CommitCounter {
-        match self {
-            Self::Window(window) => window.current_commit(),
-            Self::Snapshot(snapshot) => snapshot.current_commit(),
-            Self::Backdrop(backdrop) => backdrop.current_commit(),
-            Self::TitleBar(bar) => bar.current_commit(),
-            Self::Border(border) => border.current_commit(),
-            Self::Shadow(shadow) => shadow.current_commit(),
-            Self::Warp(warp) => warp.current_commit(),
-            Self::Sprite(sprite) => sprite.current_commit(),
-            Self::GlassGlyph(glyph) => glyph.current_commit(),
-        }
-    }
-
-    fn src(&self) -> Rectangle<f64, BufferCoords> {
-        match self {
-            Self::Window(window) => window.src(),
-            Self::Snapshot(snapshot) => snapshot.src(),
-            Self::Backdrop(backdrop) => backdrop.src(),
-            Self::TitleBar(bar) => bar.src(),
-            Self::Border(border) => border.src(),
-            Self::Shadow(shadow) => shadow.src(),
-            Self::Warp(warp) => warp.src(),
-            Self::Sprite(sprite) => sprite.src(),
-            Self::GlassGlyph(glyph) => glyph.src(),
-        }
-    }
-
-    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        match self {
-            Self::Window(window) => window.geometry(scale),
-            Self::Snapshot(snapshot) => snapshot.geometry(scale),
-            Self::Backdrop(backdrop) => backdrop.geometry(scale),
-            Self::TitleBar(bar) => bar.geometry(scale),
-            Self::Border(border) => border.geometry(scale),
-            Self::Shadow(shadow) => shadow.geometry(scale),
-            Self::Warp(warp) => warp.geometry(scale),
-            Self::Sprite(sprite) => sprite.geometry(scale),
-            Self::GlassGlyph(glyph) => glyph.geometry(scale),
-        }
-    }
-
-    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
-        match self {
-            Self::Window(window) => window.location(scale),
-            Self::Snapshot(snapshot) => snapshot.location(scale),
-            Self::Backdrop(backdrop) => backdrop.location(scale),
-            Self::TitleBar(bar) => bar.location(scale),
-            Self::Border(border) => border.location(scale),
-            Self::Shadow(shadow) => shadow.location(scale),
-            Self::Warp(warp) => warp.location(scale),
-            Self::Sprite(sprite) => sprite.location(scale),
-            Self::GlassGlyph(glyph) => glyph.location(scale),
-        }
-    }
-
-    fn transform(&self) -> Transform {
-        match self {
-            Self::Window(window) => window.transform(),
-            Self::Snapshot(snapshot) => snapshot.transform(),
-            Self::Backdrop(backdrop) => backdrop.transform(),
-            Self::TitleBar(bar) => bar.transform(),
-            Self::Border(border) => border.transform(),
-            Self::Shadow(shadow) => shadow.transform(),
-            Self::Warp(warp) => warp.transform(),
-            Self::Sprite(sprite) => sprite.transform(),
-            Self::GlassGlyph(glyph) => glyph.transform(),
-        }
-    }
-
-    fn damage_since(
-        &self,
-        scale: Scale<f64>,
-        commit: Option<CommitCounter>,
-    ) -> DamageSet<i32, Physical> {
-        match self {
-            Self::Window(window) => window.damage_since(scale, commit),
-            Self::Snapshot(snapshot) => snapshot.damage_since(scale, commit),
-            Self::Backdrop(backdrop) => backdrop.damage_since(scale, commit),
-            Self::TitleBar(bar) => bar.damage_since(scale, commit),
-            Self::Border(border) => border.damage_since(scale, commit),
-            Self::Shadow(shadow) => shadow.damage_since(scale, commit),
-            Self::Warp(warp) => warp.damage_since(scale, commit),
-            Self::Sprite(sprite) => sprite.damage_since(scale, commit),
-            Self::GlassGlyph(glyph) => glyph.damage_since(scale, commit),
-        }
-    }
-
-    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        match self {
-            Self::Window(window) => window.opaque_regions(scale),
-            Self::Snapshot(snapshot) => snapshot.opaque_regions(scale),
-            Self::Backdrop(backdrop) => backdrop.opaque_regions(scale),
-            Self::TitleBar(bar) => bar.opaque_regions(scale),
-            Self::Border(border) => border.opaque_regions(scale),
-            Self::Shadow(shadow) => shadow.opaque_regions(scale),
-            Self::Warp(warp) => warp.opaque_regions(scale),
-            Self::Sprite(sprite) => sprite.opaque_regions(scale),
-            Self::GlassGlyph(glyph) => glyph.opaque_regions(scale),
-        }
-    }
-
-    fn alpha(&self) -> f32 {
-        match self {
-            Self::Window(window) => window.alpha(),
-            Self::Snapshot(snapshot) => snapshot.alpha(),
-            Self::Backdrop(backdrop) => backdrop.alpha(),
-            Self::TitleBar(bar) => bar.alpha(),
-            Self::Border(border) => border.alpha(),
-            Self::Shadow(shadow) => shadow.alpha(),
-            Self::Warp(warp) => warp.alpha(),
-            Self::Sprite(sprite) => sprite.alpha(),
-            Self::GlassGlyph(glyph) => glyph.alpha(),
-        }
-    }
-
-    fn kind(&self) -> Kind {
-        match self {
-            Self::Window(window) => window.kind(),
-            Self::Snapshot(snapshot) => snapshot.kind(),
-            Self::Backdrop(backdrop) => backdrop.kind(),
-            Self::TitleBar(bar) => bar.kind(),
-            Self::Border(border) => border.kind(),
-            Self::Shadow(shadow) => shadow.kind(),
-            Self::Warp(warp) => warp.kind(),
-            Self::Sprite(sprite) => sprite.kind(),
-            Self::GlassGlyph(glyph) => glyph.kind(),
-        }
-    }
-}
-
-impl<E, S> RenderElement<GlesRenderer> for Decorated<E, S>
-where
-    E: RenderElement<GlesRenderer>,
-    S: RenderElement<GlesRenderer>,
-{
-    fn draw(
-        &self,
-        frame: &mut GlesFrame<'_, '_>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-        cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        match self {
-            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions, cache),
-            Self::Snapshot(snapshot) => RenderElement::<GlesRenderer>::draw(
-                snapshot,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Backdrop(backdrop) => RenderElement::<GlesRenderer>::draw(
-                backdrop,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::TitleBar(bar) => RenderElement::<GlesRenderer>::draw(
-                bar,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Border(border) => RenderElement::<GlesRenderer>::draw(
-                border,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Shadow(shadow) => RenderElement::<GlesRenderer>::draw(
-                shadow,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Warp(warp) => RenderElement::<GlesRenderer>::draw(
-                warp,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Sprite(sprite) => sprite.draw(frame, src, dst, damage, opaque_regions, cache),
-            Self::GlassGlyph(glyph) => glyph.draw(frame, src, dst, damage, opaque_regions, cache),
-        }
-    }
-
-    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
-        match self {
-            Self::Window(window) => window.underlying_storage(renderer),
-            Self::Snapshot(snapshot) => snapshot.underlying_storage(renderer),
-            Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
-            Self::TitleBar(bar) => RenderElement::<GlesRenderer>::underlying_storage(bar, renderer),
-            Self::Border(border) => {
-                RenderElement::<GlesRenderer>::underlying_storage(border, renderer)
-            }
-            Self::Shadow(shadow) => {
-                RenderElement::<GlesRenderer>::underlying_storage(shadow, renderer)
-            }
-            Self::Warp(warp) => RenderElement::<GlesRenderer>::underlying_storage(warp, renderer),
-            Self::Sprite(_) => None,
-            Self::GlassGlyph(_) => None,
-        }
-    }
-}
-
-impl<'render, E, S> RenderElement<KmsRenderer<'render>> for Decorated<E, S>
-where
-    E: RenderElement<KmsRenderer<'render>>,
-    S: RenderElement<KmsRenderer<'render>>,
-{
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-        cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        match self {
-            Self::Window(window) => window.draw(frame, src, dst, damage, opaque_regions, cache),
-            Self::Snapshot(snapshot) => RenderElement::<KmsRenderer<'render>>::draw(
-                snapshot,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Backdrop(backdrop) => RenderElement::<KmsRenderer<'render>>::draw(
-                backdrop,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::TitleBar(bar) => RenderElement::<KmsRenderer<'render>>::draw(
-                bar,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Border(border) => RenderElement::<KmsRenderer<'render>>::draw(
-                border,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Shadow(shadow) => RenderElement::<KmsRenderer<'render>>::draw(
-                shadow,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Warp(warp) => RenderElement::<KmsRenderer<'render>>::draw(
-                warp,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            ),
-            Self::Sprite(sprite) => sprite.draw(frame, src, dst, damage, opaque_regions, cache),
-            Self::GlassGlyph(glyph) => glyph.draw(frame, src, dst, damage, opaque_regions, cache),
-        }
-    }
-
-    fn underlying_storage(
-        &self,
-        renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
-        match self {
-            Self::Window(window) => window.underlying_storage(renderer),
-            Self::Snapshot(snapshot) => snapshot.underlying_storage(renderer),
-            Self::Backdrop(backdrop) => backdrop.underlying_storage(renderer),
-            Self::TitleBar(bar) => {
-                RenderElement::<KmsRenderer<'render>>::underlying_storage(bar, renderer)
-            }
-            Self::Border(border) => {
-                RenderElement::<KmsRenderer<'render>>::underlying_storage(border, renderer)
-            }
-            Self::Shadow(shadow) => {
-                RenderElement::<KmsRenderer<'render>>::underlying_storage(shadow, renderer)
-            }
-            Self::Warp(warp) => {
-                RenderElement::<KmsRenderer<'render>>::underlying_storage(warp, renderer)
-            }
-            Self::Sprite(_) => None,
-            Self::GlassGlyph(_) => None,
-        }
-    }
+smithay::backend::renderer::element::render_elements! {
+    /// What a decorated tile can be: the window itself (rounded), the blurred
+    /// glass behind it, or any of the compositor's own shader-drawn pieces.
+    pub Decorated<R> where R: GlesBacked;
+    Window = Rounded<Cropped<R>>,
+    Glazed = Glazed<Cropped<R>>,
+    Snapshot = Rounded<SnapshotElement>,
+    Backdrop = BlurBackdrop,
+    TitleBar = TitleBar,
+    Border = WindowDecoration,
+    Shadow = GlassShadow,
+    Warp = WarpElement,
+    Sprite = ShadedSprite<Sprite<R>>,
+    GlassGlyph = GlassGlyph<Sprite<R>>,
 }
 
 /// Rounds corners with the GLES texture-program override, and materialises
@@ -600,7 +223,7 @@ where
 ///
 /// The programs are resolved at construction/decoration time, because
 /// `GlesFrame` does not expose its renderer — so nothing can be looked up
-/// from inside `draw`.
+/// from inside `draw`. One decorator serves every renderer built on GLES.
 #[derive(Debug)]
 pub struct GlesDecorator<'a> {
     blur: Option<BlurSession<'a>>,
@@ -622,23 +245,61 @@ impl<'a> GlesDecorator<'a> {
     }
 }
 
-impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
-    type Element = Decorated<Cropped<GlesRenderer>, MemoryRenderBufferRenderElement<GlesRenderer>>;
+impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
+    type Element = Decorated<R>;
 
     fn decorate(
         &mut self,
-        renderer: &mut GlesRenderer,
-        element: Cropped<GlesRenderer>,
+        renderer: &mut R,
+        element: Cropped<R>,
         shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element> {
         // A missing program (shader never compiled) squares the corners; it
         // must not drop the window.
-        let program = RoundedCornerShader::get(renderer);
+        let program = RoundedCornerShader::get(renderer.gles());
         let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
         Some(Decorated::Window(Rounded::new(
             element, program, shape, radius, reshaped,
         )))
+    }
+
+    fn glaze(
+        &mut self,
+        renderer: &mut R,
+        element: Cropped<R>,
+        shape: Rectangle<i32, Physical>,
+        radius: [f32; 4],
+        glaze: Glaze,
+    ) -> Glazing<Self::Element> {
+        let Some(program) = GlazedShader::get(renderer.gles()) else {
+            return Glazing::Decorated(self.decorate(renderer, element, shape, radius));
+        };
+        let clip = Clip {
+            shape,
+            radius,
+            reshaped: self.corners.reshaped(element.id(), shape.size, radius),
+        };
+        let handoff = GlassHandoff::default();
+        let lift = glaze
+            .backdrop
+            .zip(self.blur.as_mut())
+            .and_then(|(backdrop, session)| BlurBackdrop::new(renderer.gles(), session, backdrop))
+            .map(|backdrop| backdrop.lifting_for(handoff.clone()));
+        let occluders = lift
+            .as_ref()
+            .map_or_else(Vec::new, |lift| lift.occluders().to_vec());
+        Glazing::Glazed {
+            surface: Decorated::Glazed(Glazed::new(
+                element,
+                program,
+                clip,
+                glaze.outline,
+                handoff,
+                occluders,
+            )),
+            lift: lift.map(Decorated::Backdrop),
+        }
     }
 
     fn blur_strength_for(&self, shrink: f64) -> f32 {
@@ -659,242 +320,79 @@ impl TileDecorator<GlesRenderer> for GlesDecorator<'_> {
 
     fn snapshot(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         element: SnapshotElement,
         shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element> {
-        let program = RoundedCornerShader::get(renderer);
+        let program = RoundedCornerShader::get(renderer.gles());
         let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
         Some(Decorated::Snapshot(Rounded::new(
             element, program, shape, radius, reshaped,
         )))
     }
 
-    fn backdrop(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        backdrop: Backdrop,
-    ) -> Option<Self::Element> {
+    fn backdrop(&mut self, renderer: &mut R, backdrop: Backdrop) -> Option<Self::Element> {
         let session = self.blur.as_mut()?;
-        BlurBackdrop::new(renderer, session, backdrop).map(Decorated::Backdrop)
+        BlurBackdrop::new(renderer.gles(), session, backdrop).map(Decorated::Backdrop)
     }
 
-    fn shadow(&mut self, renderer: &mut GlesRenderer, shadow: Shadow) -> Option<Self::Element> {
-        GlassShadow::new(renderer, shadow).map(Decorated::Shadow)
+    fn shadow(&mut self, renderer: &mut R, shadow: Shadow) -> Option<Self::Element> {
+        GlassShadow::new(renderer.gles(), shadow).map(Decorated::Shadow)
     }
 
-    fn title_bar(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        params: TitleBarParams,
-    ) -> Option<Self::Element> {
-        TitleBar::new(renderer, params).map(Decorated::TitleBar)
+    fn title_bar(&mut self, renderer: &mut R, params: TitleBarParams) -> Option<Self::Element> {
+        TitleBar::new(renderer.gles(), params).map(Decorated::TitleBar)
     }
 
-    fn border(&mut self, renderer: &mut GlesRenderer, border: Border) -> Option<Self::Element> {
-        WindowDecoration::new(renderer, border).map(Decorated::Border)
+    fn border(&mut self, renderer: &mut R, border: Border) -> Option<Self::Element> {
+        WindowDecoration::new(renderer.gles(), border).map(Decorated::Border)
     }
 
-    fn warp(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        request: WarpRequest<'_, '_>,
-    ) -> Option<Self::Element> {
-        warp::warp(renderer, self.canvases, request).map(Decorated::Warp)
+    fn warp(&mut self, renderer: &mut R, request: WarpRequest<'_, '_>) -> Option<Self::Element> {
+        warp::warp(renderer.gles(), self.canvases, request).map(Decorated::Warp)
     }
 
-    fn swing(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        request: SwingRequest<'_>,
-    ) -> Option<Self::Element> {
-        warp::swing(renderer, self.canvases, request).map(Decorated::Warp)
+    fn swing(&mut self, renderer: &mut R, request: SwingRequest<'_>) -> Option<Self::Element> {
+        warp::swing(renderer.gles(), self.canvases, request).map(Decorated::Warp)
     }
 
     fn blurred_sprite(
         &mut self,
-        renderer: &mut GlesRenderer,
-        sprite: MemoryRenderBufferRenderElement<GlesRenderer>,
+        renderer: &mut R,
+        sprite: Sprite<R>,
         radius: f32,
     ) -> Option<Self::Element> {
-        let program = SpriteBlurShader::get(renderer)?;
-        Some(Decorated::Sprite(blurred(sprite, program, radius)))
+        let program = SpriteBlurShader::get(renderer.gles())?;
+        let size = sprite.src().size;
+        let uniforms = SpriteBlurShader::uniform_values(radius, [size.w, size.h]).to_vec();
+        Some(Decorated::Sprite(ShadedSprite::new(
+            sprite,
+            program,
+            uniforms,
+            u64::from(radius.to_bits()),
+        )))
     }
 
     fn lock_glyph(
         &mut self,
-        renderer: &mut GlesRenderer,
-        sprite: MemoryRenderBufferRenderElement<GlesRenderer>,
+        renderer: &mut R,
+        sprite: Sprite<R>,
         glyph: GlyphDraw,
     ) -> Option<Self::Element> {
         if let Some(session) = self.blur.as_mut()
             && glyph.glass.is_some()
         {
-            return GlassGlyph::new(renderer, session, sprite, glyph).map(Decorated::GlassGlyph);
-        }
-        let program = LockGlyphShader::get(renderer)?.plain;
-        Some(Decorated::Sprite(bent(sprite, program, &glyph)))
-    }
-}
-
-/// [`GlesDecorator`], but for the multi-GPU renderer the KMS backend uses.
-#[derive(Debug)]
-pub struct MultiDecorator<'a> {
-    blur: Option<BlurSession<'a>>,
-    corners: &'a mut CornerMemory,
-    canvases: &'a mut WarpCanvases,
-}
-
-impl<'a> MultiDecorator<'a> {
-    pub fn new(
-        blur: Option<BlurSession<'a>>,
-        corners: &'a mut CornerMemory,
-        canvases: &'a mut WarpCanvases,
-    ) -> Self {
-        Self {
-            blur,
-            corners,
-            canvases,
-        }
-    }
-}
-
-impl<'render> TileDecorator<KmsRenderer<'render>> for MultiDecorator<'_> {
-    type Element = Decorated<
-        Cropped<KmsRenderer<'render>>,
-        MemoryRenderBufferRenderElement<KmsRenderer<'render>>,
-    >;
-
-    fn decorate(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        element: Cropped<KmsRenderer<'render>>,
-        shape: Rectangle<i32, Physical>,
-        radius: [f32; 4],
-    ) -> Option<Self::Element> {
-        let program = RoundedCornerShader::get(renderer.as_mut());
-        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
-        Some(Decorated::Window(Rounded::new(
-            element, program, shape, radius, reshaped,
-        )))
-    }
-
-    fn blur_strength_for(&self, shrink: f64) -> f32 {
-        self.blur
-            .as_ref()
-            .map_or(1.0, |blur| blur.config.strength_for(shrink))
-    }
-
-    fn blur_fingerprint(&self) -> Option<u64> {
-        self.blur.as_ref().map(|blur| blur.config.fingerprint())
-    }
-
-    fn glass(&self, scale: f64, kind: GlassKind) -> Glass {
-        self.blur
-            .as_ref()
-            .map_or_else(Glass::default, |blur| blur.config.glass(scale, kind))
-    }
-
-    fn snapshot(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        element: SnapshotElement,
-        shape: Rectangle<i32, Physical>,
-        radius: [f32; 4],
-    ) -> Option<Self::Element> {
-        let program = RoundedCornerShader::get(renderer.as_mut());
-        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
-        Some(Decorated::Snapshot(Rounded::new(
-            element, program, shape, radius, reshaped,
-        )))
-    }
-
-    fn backdrop(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        backdrop: Backdrop,
-    ) -> Option<Self::Element> {
-        let session = self.blur.as_mut()?;
-        BlurBackdrop::new(renderer.as_mut(), session, backdrop).map(Decorated::Backdrop)
-    }
-
-    fn shadow(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        shadow: Shadow,
-    ) -> Option<Self::Element> {
-        GlassShadow::new(renderer.as_mut(), shadow).map(Decorated::Shadow)
-    }
-
-    fn title_bar(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        params: TitleBarParams,
-    ) -> Option<Self::Element> {
-        TitleBar::new(renderer.as_mut(), params).map(Decorated::TitleBar)
-    }
-
-    fn border(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        border: Border,
-    ) -> Option<Self::Element> {
-        WindowDecoration::new(renderer.as_mut(), border).map(Decorated::Border)
-    }
-
-    fn warp(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        request: WarpRequest<'_, '_>,
-    ) -> Option<Self::Element> {
-        warp::warp(renderer.as_mut(), self.canvases, request).map(Decorated::Warp)
-    }
-
-    fn swing(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        request: SwingRequest<'_>,
-    ) -> Option<Self::Element> {
-        warp::swing(renderer.as_mut(), self.canvases, request).map(Decorated::Warp)
-    }
-
-    fn blurred_sprite(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        sprite: MemoryRenderBufferRenderElement<KmsRenderer<'render>>,
-        radius: f32,
-    ) -> Option<Self::Element> {
-        let program = SpriteBlurShader::get(renderer.as_mut())?;
-        Some(Decorated::Sprite(blurred(sprite, program, radius)))
-    }
-
-    fn lock_glyph(
-        &mut self,
-        renderer: &mut KmsRenderer<'render>,
-        sprite: MemoryRenderBufferRenderElement<KmsRenderer<'render>>,
-        glyph: GlyphDraw,
-    ) -> Option<Self::Element> {
-        if let Some(session) = self.blur.as_mut()
-            && glyph.glass.is_some()
-        {
-            return GlassGlyph::new(renderer.as_mut(), session, sprite, glyph)
+            return GlassGlyph::new(renderer.gles(), session, sprite, glyph)
                 .map(Decorated::GlassGlyph);
         }
-        let program = LockGlyphShader::get(renderer.as_mut())?.plain;
-        Some(Decorated::Sprite(bent(sprite, program, &glyph)))
+        let program = LockGlyphShader::get(renderer.gles())?.plain;
+        let uniforms = LockGlyphShader::uniform_values(&glyph);
+        Some(Decorated::Sprite(ShadedSprite::new(
+            sprite,
+            program,
+            uniforms,
+            glyph.fingerprint(),
+        )))
     }
-}
-
-/// `sprite` blurred by `radius` texels.
-fn blurred<E: Element>(sprite: E, program: GlesTexProgram, radius: f32) -> ShadedSprite<E> {
-    let size = sprite.src().size;
-    let uniforms = SpriteBlurShader::uniform_values(radius, [size.w, size.h]).to_vec();
-    ShadedSprite::new(sprite, program, uniforms, u64::from(radius.to_bits()))
-}
-
-/// `sprite` drawn as a clock glyph.
-fn bent<E: Element>(sprite: E, program: GlesTexProgram, glyph: &GlyphDraw) -> ShadedSprite<E> {
-    let uniforms = LockGlyphShader::uniform_values(glyph);
-    ShadedSprite::new(sprite, program, uniforms, glyph.fingerprint())
 }

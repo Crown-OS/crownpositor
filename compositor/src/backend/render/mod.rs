@@ -39,12 +39,9 @@ use smithay::backend::{
 };
 
 use crate::{
-    rendering::{
-        decorate::TileDecorator,
-        rounded::{GlesDecorator, MultiDecorator},
-    },
+    rendering::{decorate::TileDecorator, rounded::GlesDecorator},
     shaders::{
-        blur::BlurShaders, border::BorderShader, color::ColorWindowShader,
+        blur::BlurShaders, border::BorderShader, color::ColorWindowShader, glazed::GlazedShader,
         lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader, shadow::ShadowShader,
         sprite_blur::SpriteBlurShader, title_bar::TitleBarShader, warp::WarpShaders,
     },
@@ -150,12 +147,13 @@ impl CrownRenderer for GlesRenderer {
         WarpShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         SpriteBlurShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         LockGlyphShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
-        TitleBarShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
+        TitleBarShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        GlazedShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 }
 
 impl<'render> CrownRenderer for KmsRenderer<'render> {
-    type Decorator<'frame> = MultiDecorator<'frame>;
+    type Decorator<'frame> = GlesDecorator<'frame>;
 
     fn compile_shaders(&mut self) -> Result<(), RenderInitError> {
         // The programs land in the GLES renderer's EGL user data, so they
@@ -174,7 +172,9 @@ impl<'render> CrownRenderer for KmsRenderer<'render> {
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
         LockGlyphShader::init(self.as_mut())
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
-        TitleBarShader::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))
+        TitleBarShader::init(self.as_mut())
+            .map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        GlazedShader::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))
     }
 }
 

@@ -3,14 +3,16 @@
 //! exactly the pixel size every output scale needs.
 
 mod meta;
-mod raster;
 mod theme;
 
 use smithay::{backend::allocator::Fourcc, input::pointer::CursorIcon};
 
-use crate::rendering::cursor::{
-    hyprcursor::theme::{ShapeArchive, Theme},
-    source::{CursorSource, RawFrame, RawImage, RawShape, shape_names},
+use crate::{
+    rendering::cursor::{
+        hyprcursor::theme::{ShapeArchive, Theme},
+        source::{CursorSource, RawFrame, RawImage, RawShape, shape_names},
+    },
+    utils::raster,
 };
 
 pub struct HyprcursorSource {
@@ -51,7 +53,7 @@ impl HyprcursorSource {
                 let pixmap = if entry.is_vector() {
                     raster::vector(&data, side)?
                 } else {
-                    raster::bitmap(&data, side, meta.resize)?
+                    raster::bitmap(&data, side, meta.resize.quality())?
                 };
                 Some(RawFrame {
                     image: RawImage {

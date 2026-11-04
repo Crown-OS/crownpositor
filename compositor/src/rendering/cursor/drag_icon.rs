@@ -1,6 +1,7 @@
 //! The picture a client's drag carries under the pointer, drawn by the
-//! compositor so it follows the pointer over every surface. It hangs from the
-//! pointer where it was grabbed and swings as the pointer moves.
+//! compositor so it follows the pointer over every surface. The grabbing hand
+//! holds it by the middle of its top edge and it sways a little as the
+//! pointer moves.
 
 use std::time::Instant;
 
@@ -10,7 +11,6 @@ use smithay::{
     desktop::utils::bbox_from_surface_tree,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, Scale},
-    wayland::compositor::{SurfaceAttributes, with_states},
 };
 
 use crate::rendering::{
@@ -25,11 +25,13 @@ use crate::rendering::{
 /// Swings smaller than this are drawn upright, straight from the client's
 /// buffers.
 const UPRIGHT: f64 = 0.002;
+/// How far below its top edge the hand grips the icon.
+const GRIP_DEPTH: f64 = 6.0;
 
-/// A drag's icon surface, its origin `offset` from the pointer's hot point.
+/// A drag's icon surface. Where the client asked it to sit is ignored: it
+/// always hangs from the hand.
 pub struct DragIcon {
     pub surface: WlSurface,
-    pub offset: Point<i32, Logical>,
     /// `None` while animations are off: the icon then never swings.
     pendulum: Option<Pendulum>,
     swung: Instant,
@@ -43,26 +45,9 @@ impl DragIcon {
     ) -> Self {
         Self {
             surface,
-            offset: Point::default(),
             pendulum: (animations != AnimationProfile::None)
                 .then(|| Pendulum::new(pointer, Point::default())),
             swung: Instant::now(),
-        }
-    }
-
-    /// Moves the icon by what its latest commit asked for, through
-    /// `wl_surface.offset` or an attach offset.
-    pub fn commit(&mut self) {
-        let delta = with_states(&self.surface, |states| {
-            states
-                .cached_state
-                .get::<SurfaceAttributes>()
-                .current()
-                .buffer_delta
-                .take()
-        });
-        if let Some(delta) = delta {
-            self.offset += delta;
         }
     }
 
@@ -74,25 +59,28 @@ impl DragIcon {
 
     /// Follows the pointer to `pointer` and says how far the icon has swung,
     /// clockwise in radians.
-    fn swing(&mut self, pointer: Point<f64, Logical>) -> f64 {
+    fn swing(&mut self, pointer: Point<f64, Logical>, middle: Point<f64, Logical>) -> f64 {
         let now = Instant::now();
         let dt = now.duration_since(std::mem::replace(&mut self.swung, now));
-        let middle = self.middle();
         self.pendulum.as_mut().map_or(0.0, |pendulum| {
             pendulum.swing(pointer, middle, dt.as_secs_f64())
         })
     }
 
-    /// The icon's middle, from the pointer's hot point.
-    fn middle(&self) -> Point<f64, Logical> {
-        let bounds = bbox_from_surface_tree(&self.surface, self.offset).to_f64();
-        bounds.loc + bounds.size.downscale(2.0).to_point()
+    /// Where the icon's origin and its middle sit from the pointer's hot
+    /// point, held by the middle of its top edge.
+    fn hold(&self) -> (Point<f64, Logical>, Point<f64, Logical>) {
+        let bounds = bbox_from_surface_tree(&self.surface, (0, 0)).to_f64();
+        let depth = GRIP_DEPTH.min(bounds.size.h / 2.0);
+        let grip = bounds.loc + Point::from((bounds.size.w / 2.0, depth));
+        let middle = Point::from((0.0, bounds.size.h / 2.0 - depth));
+        (Point::default() - grip, middle)
     }
 }
 
 impl Cursor {
-    /// Pushes the drag icon, hung from the pointer at `local` and turned as
-    /// far as it has swung.
+    /// Pushes the drag icon, held under the hand at `local` and turned as far
+    /// as it has swung.
     pub(super) fn render_drag_icon<R, D>(
         &mut self,
         elements: &mut Elements<R, D>,
@@ -109,11 +97,12 @@ impl Cursor {
         let Some(icon) = &mut self.drag_icon else {
             return;
         };
-        let angle = icon.swing(pointer);
+        let (origin, middle) = icon.hold();
+        let angle = icon.swing(pointer, middle);
         if icon.is_swinging() {
             self.animation.request(Instant::now());
         }
-        let origin = local + icon.offset.to_f64();
+        let origin = local + origin;
         if angle.abs() >= UPRIGHT {
             let request = SwingRequest {
                 surface: &icon.surface,

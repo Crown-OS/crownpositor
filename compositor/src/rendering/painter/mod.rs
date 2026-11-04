@@ -1,6 +1,7 @@
 //! What every compositor-drawn scene draws with: SpaceControl and
 //! WindowControl both place windows, glass and text through one [`Painter`].
 
+mod frost;
 mod thumbnail;
 
 pub(in crate::rendering) use thumbnail::{Backing, Thumbnail};
@@ -8,10 +9,13 @@ pub(in crate::rendering) use thumbnail::{Backing, Thumbnail};
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
-        element::{Id, Kind, Wrap, memory::MemoryRenderBufferRenderElement},
+        element::{
+            Id, Kind, Wrap,
+            memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
+        },
         utils::CommitCounter,
     },
-    utils::{Logical, Physical, Point, Rectangle, Scale},
+    utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size},
 };
 
 use crate::rendering::{
@@ -113,21 +117,29 @@ where
         colour: [f32; 4],
         alpha: f32,
     ) {
-        let scale = self.scale;
-        let Some(label) = self.text.label(text, scale.x, colour, true) else {
+        let Some(label) = self.text.label(text, self.scale.x, colour, true) else {
             return;
         };
-        // Rasterised at this output's scale, so drawn one pixel per pixel and
-        // centred in pixels.
-        let half = Point::<f64, Physical>::from((
-            f64::from(label.size.w) / 2.0,
-            f64::from(label.size.h) / 2.0,
-        ));
+        let (buffer, size) = (label.buffer.clone(), label.size);
+        self.sprite(&buffer, size, centre, alpha);
+    }
+
+    /// Pixels rasterised at this output's scale, `size` of them, centred on
+    /// `centre` and drawn one pixel per pixel.
+    pub(in crate::rendering) fn sprite(
+        &mut self,
+        buffer: &MemoryRenderBuffer,
+        size: Size<i32, Buffer>,
+        centre: Point<f64, Logical>,
+        alpha: f32,
+    ) {
+        let scale = self.scale;
+        let half = Point::<f64, Physical>::from((f64::from(size.w) / 2.0, f64::from(size.h) / 2.0));
         let origin = (centre.to_physical(scale) - half).to_i32_round::<i32>();
         if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
             self.renderer,
             origin.to_f64(),
-            &label.buffer,
+            buffer,
             Some(alpha),
             None,
             None,

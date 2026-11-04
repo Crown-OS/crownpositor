@@ -10,7 +10,7 @@ use smithay::{
 use crate::{
     rendering::{
         Elements, FrameStyle, Stacking, cursor::Cursor, decorate::TileDecorator, layer_elements,
-        tile_elements, workspace_window_elements,
+        popup, tile_elements, workspace_window_elements,
     },
     shell::{Shell, monitor::Monitor, tile::Tile, workspace::Workspace},
 };
@@ -67,6 +67,7 @@ where
         cursor.render(&mut elements, renderer, decorator, scale);
     }
     let offset = Point::default() - tile.render_rect().loc;
+    popup::tile_popup_elements(&mut elements, tile, renderer, decorator, scale, offset);
     tile_elements(
         &mut elements,
         shell,
@@ -103,6 +104,14 @@ where
     if let Some(cursor) = cursor {
         cursor.render(&mut elements, renderer, decorator, scale);
     }
+    popup::workspace_popup_elements(
+        &mut elements,
+        workspace,
+        renderer,
+        decorator,
+        scale,
+        Point::default(),
+    );
     let covered = workspace_window_elements(
         &mut elements,
         shell,

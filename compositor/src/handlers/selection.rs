@@ -5,7 +5,7 @@ use smithay::{
     input::{
         Seat,
         dnd::{DnDGrab, DndGrabHandler, DndTarget, GrabType, Source},
-        pointer::{CursorIcon, CursorImageStatus, Focus},
+        pointer::{CursorIcon, Focus},
     },
     reexports::wayland_server::protocol::{wl_data_source::WlDataSource, wl_surface::WlSurface},
     utils::{Logical, Point, Serial},
@@ -85,9 +85,10 @@ impl WaylandDndGrabHandler for State {
                 pointer.set_grab(self, grab, serial, Focus::Keep);
             }
         }
-        // The client under the pointer gets a leave and no say over the
-        // cursor until the drop hands focus back.
+        // The leave on the first motion resets the cursor, and the dragging
+        // client may still set one: the hand holds until the drop.
         self.show_cursor(CursorIcon::Grabbing);
+        self.input.cursor.dragging = true;
         // smithay only offers the drag on the first motion, and Chromium
         // cancels one released before its first `enter`: a motion in place
         // offers it to the surface under the cursor straight away.
@@ -125,7 +126,7 @@ impl State {
         if self.input.cursor.drag_icon.take().is_some() {
             self.queue_pointer_redraw();
         }
-        if self.input.cursor.status == CursorImageStatus::Named(CursorIcon::Grabbing) {
+        if std::mem::take(&mut self.input.cursor.dragging) {
             self.show_cursor(CursorIcon::Default);
         }
     }

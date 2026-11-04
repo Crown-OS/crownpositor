@@ -1,5 +1,7 @@
 //! The switcher's state machine: open, browsing, then either committed to a
-//! window or dismissed. Both endings sink the strip on the same spring.
+//! window or dismissed. Both endings let the stack go on the same spring, and
+//! the top card back down onto its window: the chosen one, or on dismissal
+//! the one that had focus.
 
 use spacecontrol::animations::spring::{Spring, SpringProfile};
 
@@ -15,6 +17,8 @@ pub struct Switcher<K> {
     reveal: Spring,
     open: bool,
     strip: Strip<K>,
+    /// The window focused when it opened, which dismissing goes back to.
+    origin: Option<K>,
     motion: bool,
 }
 
@@ -24,6 +28,7 @@ impl<K> Default for Switcher<K> {
             reveal: Spring::with_profile(0.0, motion::RISE),
             open: false,
             strip: Strip::default(),
+            origin: None,
             motion: true,
         }
     }
@@ -33,6 +38,8 @@ impl<K: Copy + Eq> Switcher<K> {
     /// Rises with `keys`, most recent first. Nothing to switch between keeps it
     /// closed.
     pub fn open(&mut self, keys: impl IntoIterator<Item = K>, direction: Direction) -> bool {
+        let mut keys = keys.into_iter().peekable();
+        self.origin = keys.peek().copied();
         self.strip.reset(keys, direction);
         if !self.strip.has_live() {
             return false;
@@ -49,7 +56,7 @@ impl<K: Copy + Eq> Switcher<K> {
         }
     }
 
-    /// Sinks the strip and hands back the selected window to focus.
+    /// Lets the stack go and hands back the selected window to focus.
     pub fn commit(&mut self) -> Option<K> {
         if !self.open {
             return None;
@@ -64,9 +71,13 @@ impl<K: Copy + Eq> Switcher<K> {
         self.commit()
     }
 
-    /// Sinks the strip and leaves focus where it was.
+    /// Lets the stack go with the window that had focus on top, and leaves
+    /// focus where it was.
     pub fn dismiss(&mut self) {
         if self.open {
+            if let Some(origin) = self.origin {
+                self.strip.select_key(origin);
+            }
             self.close();
         }
     }
@@ -87,7 +98,7 @@ impl<K: Copy + Eq> Switcher<K> {
         self.land();
     }
 
-    /// Follows windows opening and closing while the strip is up; the last one
+    /// Follows windows opening and closing while the stack is up; the last one
     /// closing dismisses it.
     pub fn sync<I>(&mut self, keys: I)
     where
@@ -136,7 +147,7 @@ impl<K: Copy + Eq> Switcher<K> {
         self.is_visible() && !(self.reveal.at_rest() && self.strip.at_rest())
     }
 
-    /// How far the strip has risen, overshoot included.
+    /// How far the stack has come up, overshoot included.
     pub fn progress(&self) -> f64 {
         f64::from(self.reveal.position)
     }
@@ -183,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn the_strip_overshoots_on_the_way_up() {
+    fn the_stack_overshoots_on_the_way_up() {
         let mut switcher = Switcher::default();
         switcher.open([1, 2], Direction::Forward);
         let mut highest = 0.0f64;
@@ -196,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn committing_hands_back_the_selection_and_sinks_the_strip() {
+    fn committing_hands_back_the_selection_and_lets_the_stack_go() {
         let mut switcher = Switcher::default();
         switcher.open([1, 2, 3], Direction::Forward);
         settled(&mut switcher);
@@ -218,7 +229,16 @@ mod tests {
     }
 
     #[test]
-    fn the_last_window_closing_dismisses_the_strip() {
+    fn dismissing_puts_the_focused_window_back_on_top() {
+        let mut switcher = Switcher::default();
+        switcher.open([1, 2, 3], Direction::Forward);
+        switcher.advance(Direction::Forward);
+        switcher.dismiss();
+        assert_eq!(switcher.strip().selected_key(), Some(1));
+    }
+
+    #[test]
+    fn the_last_window_closing_dismisses_the_stack() {
         let mut switcher = Switcher::default();
         switcher.open([1], Direction::Forward);
         switcher.sync([]);

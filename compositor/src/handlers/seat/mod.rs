@@ -35,7 +35,7 @@ impl SeatHandler for State {
     /// force a frame the pointer keeps the previous image until something else
     /// happens to damage the output.
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
-        if self.input.cursor.status == image {
+        if self.input.cursor.dragging || self.input.cursor.status == image {
             return;
         }
         self.input.cursor.status = image;

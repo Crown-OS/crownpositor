@@ -47,9 +47,21 @@ pub struct Effects {
     pub border_width: u32,
     pub blur: Option<Blur>,
     pub shadow: Option<Shadow>,
+    /// Whether the surface is drawn over its blur and cut with it once
+    /// (`composited_blur`). Asked for by every version 2 effect object that
+    /// sets a blur, and kept at commit only while the compositor advertises
+    /// the capability: the client paints its body for whichever it was told.
+    pub composited: bool,
 }
 
 impl Effects {
+    /// These effects as a commit applies them, `composited` being whether
+    /// `composited_blur` is advertised right now.
+    pub(super) fn applied(mut self, composited: bool) -> Self {
+        self.composited &= composited;
+        self
+    }
+
     /// Whether there is anything at all to draw. A surface whose client set
     /// effects and then turned every one of them off costs the renderer
     /// nothing beyond this check.
@@ -97,13 +109,19 @@ pub fn surface_effects(states: &SurfaceData) -> Option<CommittedEffects> {
 pub(super) struct CommittedCache(Mutex<CommittedEffects>);
 
 /// Applies the double-buffered effects, which is the post-commit hook's job.
-pub(super) fn apply_committed(states: &SurfaceData) {
+/// `composited` is whether `composited_blur` is advertised at this commit.
+pub(super) fn apply_committed(states: &SurfaceData, composited: bool) {
     // The cached state only exists once a client has touched this protocol, so
     // an unrelated surface's commit never allocates one.
     if !states.cached_state.has::<Effects>() {
         return;
     }
-    let pending = states.cached_state.get::<Effects>().current().clone();
+    let pending = states
+        .cached_state
+        .get::<Effects>()
+        .current()
+        .clone()
+        .applied(composited);
 
     let cache = states
         .data_map
@@ -175,6 +193,23 @@ mod tests {
         let whole = blur(None);
         let empty = blur(Some(Primitives::from(&[][..])));
         assert_ne!(whole, empty);
+    }
+
+    #[test]
+    fn compositing_lapses_while_the_capability_is_withdrawn() {
+        let asked = Effects {
+            blur: Some(blur(None)),
+            composited: true,
+            ..Default::default()
+        };
+        assert!(asked.clone().applied(true).composited);
+        assert!(!asked.applied(false).composited);
+
+        let version_1 = Effects {
+            blur: Some(blur(None)),
+            ..Default::default()
+        };
+        assert!(!version_1.applied(true).composited);
     }
 
     #[test]

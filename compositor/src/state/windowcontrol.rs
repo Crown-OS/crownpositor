@@ -1,6 +1,6 @@
 //! Driving the Alt+Tab switcher from input.
 //!
-//! The strip lives on the focused monitor — it was raised from the keyboard,
+//! The stack lives on the focused monitor — it was raised from the keyboard,
 //! which has no position on screen — and owns the pointer and keyboard as a
 //! mode while it is up, the same way the overview does.
 
@@ -23,7 +23,7 @@ impl State {
             .any(|monitor| monitor.window_control().is_open())
     }
 
-    /// On a floating workspace, raises the strip on the focused monitor or
+    /// On a floating workspace, raises the stack on the focused monitor or
     /// moves its selection once it is up. A tiling workspace already shows
     /// every window, so there it just hands focus to the next one.
     pub(super) fn window_control_advance(&mut self, direction: Direction) {
@@ -44,7 +44,8 @@ impl State {
         }
     }
 
-    /// Switches to the selected window, which zooms forward as the strip sinks.
+    /// Switches to the top card's window, which lands back in its place as
+    /// the stack goes.
     pub(super) fn window_control_commit(&mut self) {
         let committed = self
             .shell
@@ -62,8 +63,8 @@ impl State {
         }
     }
 
-    /// Lifts the thumbnail under the pointer. Returns whether the strip took
-    /// the motion, in which case no client may see it.
+    /// Lifts the card under the pointer. Returns whether the stack took the
+    /// motion, in which case no client may see it.
     pub fn window_control_motion(&mut self, at: Point<f64, Logical>) -> bool {
         let Some((monitor, local)) = self.window_control_at(at) else {
             return false;
@@ -76,8 +77,8 @@ impl State {
         true
     }
 
-    /// Releases a click on a thumbnail. Anywhere else just belongs to the
-    /// strip.
+    /// Releases a click: on a card it switches to that window, anywhere else
+    /// it dismisses the stack.
     pub fn window_control_click(&mut self, at: Point<f64, Logical>) -> bool {
         let Some((monitor, local)) = self.window_control_at(at) else {
             return false;
@@ -95,7 +96,7 @@ impl State {
         true
     }
 
-    /// Scrolls the row: a wheel notch is one window, a touchpad drags it
+    /// Slides the stack: a wheel notch is one window, a touchpad drags it
     /// continuously and lets it glide onto the nearest window when lifted.
     pub fn window_control_scroll(&mut self, amount: f64, discrete: bool, stopped: bool) -> bool {
         let Some(monitor) = self
@@ -119,7 +120,7 @@ impl State {
         true
     }
 
-    /// The monitor whose open strip `at` falls on, and `at` in its own space.
+    /// The monitor whose open stack `at` falls on, and `at` in its own space.
     fn window_control_at(
         &self,
         at: Point<f64, Logical>,

@@ -81,9 +81,11 @@ float segment(in vec2 p, in vec2 a, in vec2 b) {
     return length(pa - ba * h);
 }
 
-// Coverage of a distance field's interior, antialiased over one screen pixel.
+// Coverage of a distance field's interior: the area of a screen pixel `aa`
+// wide on the inside of the edge. The same linear ramp as the window clip and
+// the glass underneath, so their outlines meet without a seam.
 float coverage(in float distance, in float aa) {
-    return 1.0 - smoothstep(-0.5 * aa, 0.5 * aa, distance);
+    return clamp(0.5 - distance / aa, 0.0, 1.0);
 }
 
 // `over` compositing for premultiplied colours.
@@ -114,7 +116,7 @@ void main() {
     vec2 p = v_coords * size;
 
 #if defined(GL_OES_standard_derivatives)
-    float aa = max(fwidth(p.x), 0.0001);
+    float aa = max(length(vec2(dFdx(p.x), dFdy(p.x))), 0.0001);
 #else
     float aa = 1.0;
 #endif

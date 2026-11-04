@@ -17,7 +17,6 @@ use smithay::{
                 surface::WaylandSurfaceRenderElement,
             },
             gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
-            multigpu::{Error as MultiError, MultiFrame},
             utils::{CommitCounter, OpaqueRegions},
         },
     },
@@ -28,7 +27,7 @@ use smithay::{
     },
 };
 
-use crate::backend::render::{GbmGlesApi, KmsRenderer};
+use crate::rendering::gles::GlesBacked;
 
 const TRANSPARENT: [f32; 4] = [0.0; 4];
 
@@ -165,44 +164,23 @@ impl Element for SnapshotElement {
     }
 }
 
-impl RenderElement<GlesRenderer> for SnapshotElement {
+impl<R: GlesBacked> RenderElement<R> for SnapshotElement {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        self.draw_gles(frame, src, dst, damage, opaque_regions)
+    ) -> Result<(), R::Error> {
+        // Captured on the GLES context every renderer here draws through, so
+        // the texture never crosses GPUs.
+        self.draw_gles(R::gles_frame(frame), src, dst, damage, opaque_regions)
+            .map_err(R::lift)
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
-        None
-    }
-}
-
-impl<'render> RenderElement<KmsRenderer<'render>> for SnapshotElement {
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        // Captured on the render device, which is the GLES context under the
-        // multi frame: the texture never crosses GPUs.
-        self.draw_gles(frame.as_mut(), src, dst, damage, opaque_regions)
-            .map_err(MultiError::Render)
-    }
-
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

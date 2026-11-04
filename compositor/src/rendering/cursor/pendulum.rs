@@ -12,11 +12,14 @@ use smithay::utils::{Logical, Point};
 const SUBSTEP: f64 = 1.0 / 240.0;
 /// The most time one frame may simulate, so a stall cannot fling the icon.
 const MAX_DT: f64 = 1.0 / 30.0;
-/// Logical pixels per second squared. A 48 px lever swings about once a
-/// second.
-const GRAVITY: f64 = 2400.0;
-/// Swing speed lost per second. Little, so a swing carries on for a while.
-const DRAG: f64 = 1.5;
+/// Logical pixels per second squared. Stiff, so the icon barely leans: a 48 px
+/// lever swings about twice a second.
+const GRAVITY: f64 = 9000.0;
+/// Swing speed lost per second. Enough that a stop rocks back once and
+/// settles.
+const DRAG: f64 = 12.0;
+/// The most the icon is drawn turned, in radians, however hard it is flung.
+const MAX_TILT: f64 = 0.17;
 /// An icon grabbed near its middle would hang from no lever at all and never
 /// swing, so it hangs from at least this much.
 const MIN_LEVER: f64 = 24.0;
@@ -52,7 +55,7 @@ impl Pendulum {
     }
 
     /// Follows the pointer to `pivot`, `dt` seconds on, and returns how far the
-    /// icon has swung, clockwise in radians. `middle` is where the unrotated
+    /// icon is drawn turned, clockwise in radians. `middle` is where the unrotated
     /// icon's middle is from the pivot; a new one rehangs the icon at the same
     /// swing.
     pub fn swing(
@@ -79,7 +82,7 @@ impl Pendulum {
             self.bob = self.pivot + self.hang.upscale(self.lever);
             self.previous = self.bob;
         }
-        self.angle()
+        MAX_TILT * (self.angle() / MAX_TILT).tanh()
     }
 
     pub fn at_rest(&self) -> bool {
@@ -172,6 +175,19 @@ mod tests {
             .last()
             .unwrap_or_default();
         assert!(angle > 0.1, "only swung {angle}");
+    }
+
+    #[test]
+    fn a_hard_flick_only_tilts_the_icon_a_little() {
+        let mut pendulum = hanging();
+        let middle = Point::from((0.0, 40.0));
+        let steepest = (1..=60)
+            .map(|frame| {
+                let pivot = Point::from((f64::from(frame.min(6)) * 200.0, 0.0));
+                pendulum.swing(pivot, middle, FRAME).abs()
+            })
+            .fold(0.0, f64::max);
+        assert!(steepest <= MAX_TILT, "tilted {steepest}");
     }
 
     #[test]

@@ -354,7 +354,7 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
             return;
         };
 
-        session.dirty = session.targets.blur.wants_redraw();
+        session.dirty = false;
         if matches!(outcome, Ok(Outcome::Rendered(_))) {
             session.last_frame_at = Some(now);
         }
@@ -463,7 +463,7 @@ fn render_copies(state: &mut State) {
         match outcome {
             Ok(CopyOutcome::Copied(damage)) => {
                 copy::complete(copy, damage, now);
-                copy.dirty = copy.copier.targets.blur.wants_redraw();
+                copy.dirty = false;
                 if let Some((output, windows)) = callbacks {
                     for window in &windows {
                         window.send_frame(&output, now, None, |_, _| Some(output.clone()));

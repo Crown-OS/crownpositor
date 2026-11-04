@@ -38,7 +38,6 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
-        self.input.cursor.commit(surface);
 
         if !is_sync_subsurface(surface)
             && let Some(window) = self.shell.window_for_surface(&root_surface(surface))

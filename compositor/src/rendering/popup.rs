@@ -1,16 +1,31 @@
+//! Popups, drawn whole rather than cropped to the surface that opened them: a
+//! menu is free to hang past the edge of its window.
+//!
+//! A window's popups are not drawn with the window. They form a stratum of
+//! their own over every window and every panel, so a menu hanging past its
+//! window's edge is never cut off by the window above or the dock below —
+//! and the pointer is routed to them first, in the same order.
+
 use smithay::{
     backend::renderer::{
-        ImportAll, Renderer,
-        element::{Kind, utils::RescaleRenderElement},
+        ImportAll, ImportMem, Renderer,
+        element::{Kind, Wrap, utils::RescaleRenderElement},
     },
     desktop::{LayerSurface, PopupManager, Window},
-    utils::{Physical, Point, Scale},
+    utils::{Logical, Physical, Point, Scale},
 };
 
-use crate::rendering::surface_tree::{SurfaceElement, TransformedSurface, surface_elements};
+use crate::{
+    rendering::{
+        Elements, Placed,
+        decorate::{self, TileDecorator},
+        element::CrownElement,
+        surface_tree::{SurfaceElement, TransformedSurface, surface_elements},
+    },
+    shell::{tile::Tile, workspace::Workspace},
+};
 
-/// A window's popups, drawn whole rather than cropped to the window: a menu is
-/// free to hang past the edge of the window that opened it.
+/// A window's popups, placed from where its own `(0, 0)` lands.
 pub fn popup_elements<R>(
     renderer: &mut R,
     window: &Window,
@@ -43,6 +58,56 @@ where
         })
         .map(unscaled)
         .collect()
+}
+
+/// One tile's popups, where the tile is drawn this frame.
+pub(crate) fn tile_popup_elements<R, D>(
+    elements: &mut Elements<R, D>,
+    tile: &Tile,
+    renderer: &mut R,
+    decorator: &mut D,
+    scale: Scale<f64>,
+    offset: Point<f64, Logical>,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Clone + 'static,
+    D: TileDecorator<R>,
+{
+    let origin = Placed::new(tile, offset, scale).surface_origin;
+    let popups = popup_elements(renderer, tile.window(), origin, scale, tile.render_alpha());
+    elements.extend(
+        decorate::unclipped(renderer, decorator, popups, scale)
+            .into_iter()
+            .map(|popup| CrownElement::Tile(Wrap::from(popup))),
+    );
+}
+
+/// The popups of every window `workspace` shows, in the windows' own order.
+/// A settled fullscreen window is the only window shown, and a window on its
+/// way into its icon has let go of its popups.
+pub(crate) fn workspace_popup_elements<R, D>(
+    elements: &mut Elements<R, D>,
+    workspace: &Workspace,
+    renderer: &mut R,
+    decorator: &mut D,
+    scale: Scale<f64>,
+    offset: Point<f64, Logical>,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Clone + 'static,
+    D: TileDecorator<R>,
+{
+    let settled = workspace.fullscreen().filter(|id| {
+        workspace
+            .tile(*id)
+            .is_some_and(|tile| tile.morph().is_none())
+    });
+    let shown = workspace
+        .stacking_order()
+        .filter(|tile| settled.is_none_or(|id| id == tile.id()) && tile.morph().is_none());
+    for tile in shown {
+        tile_popup_elements(elements, tile, renderer, decorator, scale, offset);
+    }
 }
 
 /// A layer surface's popups, placed the way smithay's `LayerSurface` places

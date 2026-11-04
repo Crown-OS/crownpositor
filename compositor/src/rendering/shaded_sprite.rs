@@ -6,8 +6,7 @@
 use smithay::{
     backend::renderer::{
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
-        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, Uniform},
-        multigpu::{Error as MultiError, MultiFrame},
+        gles::{GlesFrame, GlesTexProgram, Uniform},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
@@ -16,7 +15,7 @@ use smithay::{
     },
 };
 
-use crate::backend::render::{GbmGlesApi, KmsRenderer};
+use crate::rendering::gles::GlesBacked;
 
 #[derive(Debug)]
 pub struct ShadedSprite<E> {
@@ -99,54 +98,25 @@ impl<E: Element> Element for ShadedSprite<E> {
     }
 }
 
-impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for ShadedSprite<E> {
+impl<R: GlesBacked, E: RenderElement<R>> RenderElement<R> for ShadedSprite<E> {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        self.bind(frame);
+    ) -> Result<(), R::Error> {
+        self.bind(R::gles_frame(frame));
         let result = self
             .inner
             .draw(frame, src, dst, damage, opaque_regions, cache);
-        frame.clear_tex_program_override();
+        R::gles_frame(frame).clear_tex_program_override();
         result
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
-        None
-    }
-}
-
-impl<'render, E> RenderElement<KmsRenderer<'render>> for ShadedSprite<E>
-where
-    E: RenderElement<KmsRenderer<'render>>,
-{
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &[Rectangle<i32, Physical>],
-        cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        self.bind(frame.as_mut());
-        let result = self
-            .inner
-            .draw(frame, src, dst, damage, opaque_regions, cache);
-        frame.as_mut().clear_tex_program_override();
-        result
-    }
-
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

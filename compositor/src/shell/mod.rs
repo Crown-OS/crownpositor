@@ -1087,10 +1087,10 @@ impl Shell {
     /// surface's origin sits in the same space.
     ///
     /// Walks the scene in the order `rendering::output_elements` builds it —
-    /// Overlay and Top layers, then the workspaces, then Bottom and Background
-    /// — so what answers a click is what is drawn under it. A settled
-    /// fullscreen window hides the Overlay and Top layers, so they cannot take
-    /// the pointer from it either. A miss at one level
+    /// every window's popups, the Overlay and Top layers, then the workspaces,
+    /// then Bottom and Background — so what answers a click is what is drawn
+    /// under it. A settled fullscreen window hides the Overlay and Top layers,
+    /// so they cannot take the pointer from it either. A miss at one level
     /// falls through to the next rather than swallowing the event: a layer
     /// surface anchored across the whole output is usually transparent, and
     /// input-region-less, over most of it.
@@ -1121,9 +1121,50 @@ impl Shell {
         } else {
             &[Layer::Overlay, Layer::Top]
         };
-        layer_under(output, origin, local, panels)
+        self.popup_under_pointer(location)
+            .or_else(|| layer_under(output, origin, local, panels))
             .or_else(|| self.window_under_pointer(location))
             .or_else(|| layer_under(output, origin, local, &[Layer::Bottom, Layer::Background]))
+    }
+
+    /// A popup at a global logical point, whichever window opened it. Popups
+    /// are drawn over every window and panel, so they are asked before any of
+    /// them; the windows are walked in their stacking order so that two popups
+    /// over each other answer the way they are drawn.
+    fn popup_under_pointer(
+        &self,
+        location: Point<f64, Logical>,
+    ) -> Option<(PointerFocusTarget, Point<f64, Logical>)> {
+        let monitor = self.monitor_at(location)?;
+        let origin = monitor.geometry().loc;
+        let carried = self.carried_window();
+
+        monitor
+            .visible_workspaces()
+            .find_map(|(workspace, offset)| {
+                let shift = origin.to_f64() + offset;
+                let fullscreen = workspace.fullscreen();
+                workspace
+                    .stacking_order()
+                    .filter(|tile| Some(tile.id()) != carried)
+                    .filter(|tile| fullscreen.is_none_or(|id| id == tile.id()))
+                    .find_map(|tile| {
+                        let content_origin =
+                            (tile.surface_origin().to_f64() + shift).to_i32_round::<i32>();
+                        let window = tile.window();
+                        let (surface, offset) = window.surface_under(
+                            location - content_origin.to_f64(),
+                            WindowSurfaceType::POPUP | WindowSurfaceType::SUBSURFACE,
+                        )?;
+                        Some((
+                            PointerFocusTarget::Window {
+                                window: window.clone(),
+                                surface,
+                            },
+                            (offset + content_origin).to_f64(),
+                        ))
+                    })
+            })
     }
 
     /// The window half of [`Self::pointer_focus_under`]: which toplevel the

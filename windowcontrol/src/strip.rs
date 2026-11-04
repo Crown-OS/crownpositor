@@ -62,7 +62,7 @@ impl<K> Entry<K> {
 pub struct Strip<K> {
     entries: Vec<Entry<K>>,
     selected: usize,
-    /// The index the row is centred on, fractional while it glides.
+    /// The index of the card on top, fractional while it glides.
     position: Spring,
 }
 
@@ -145,6 +145,12 @@ impl<K: Copy + Eq> Strip<K> {
             self.selected = index;
             self.position.set_target(index as f32);
             self.focus_selected();
+        }
+    }
+
+    pub fn select_key(&mut self, key: K) {
+        if let Some(index) = self.entries.iter().position(|entry| entry.key == key) {
+            self.select(index);
         }
     }
 

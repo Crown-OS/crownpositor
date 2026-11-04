@@ -11,20 +11,14 @@
 //! outward rather than insetting also keeps the layout out of it: a border
 //! eats into the gap between tiles, and no window is resized to make room.
 //!
-//! Like [`BlurBackdrop`] this cannot be generic over the renderer. A generic
-//! `R::Frame` only offers what [`Frame`] declares — clears, solid fills and
-//! texture blits — and there is no way to bind a GLES program through it, so
-//! the two impls below name their renderers and the multi-GPU one forwards to
-//! the GLES frame underneath it.
-//!
-//! [`BlurBackdrop`]: crate::rendering::blur::BlurBackdrop
-//! [`Frame`]: smithay::backend::renderer::Frame
+//! Like every shader element this draws through [`GlesBacked`]: a generic
+//! `R::Frame` only offers clears, solid fills and texture blits, and there is
+//! no way to bind a GLES program through it.
 
 use smithay::{
     backend::renderer::{
         element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
         gles::{GlesError, GlesFrame, GlesPixelProgram, GlesRenderer},
-        multigpu::{Error as MultiError, MultiFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{
@@ -33,10 +27,7 @@ use smithay::{
     },
 };
 
-use crate::{
-    backend::render::{GbmGlesApi, KmsRenderer},
-    shaders::border::BorderShader,
-};
+use crate::{rendering::gles::GlesBacked, shaders::border::BorderShader};
 
 /// What a decorator needs to build the border for one window.
 #[derive(Debug, Clone)]
@@ -234,45 +225,22 @@ impl Element for WindowDecoration {
     }
 }
 
-impl RenderElement<GlesRenderer> for WindowDecoration {
+impl<R: GlesBacked> RenderElement<R> for WindowDecoration {
     fn draw(
         &self,
-        frame: &mut GlesFrame<'_, '_>,
+        frame: &mut R::Frame<'_, '_>,
         src: Rectangle<f64, BufferCoords>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
-    ) -> Result<(), GlesError> {
-        self.draw_gles(frame, src, dst, damage)
+    ) -> Result<(), R::Error> {
+        self.draw_gles(R::gles_frame(frame), src, dst, damage)
+            .map_err(R::lift)
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         // Never a plane candidate: the pixels only exist through the shader.
-        None
-    }
-}
-
-impl<'render> RenderElement<KmsRenderer<'render>> for WindowDecoration {
-    fn draw(
-        &self,
-        frame: &mut MultiFrame<'render, 'render, '_, '_, GbmGlesApi, GbmGlesApi>,
-        src: Rectangle<f64, BufferCoords>,
-        dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
-    ) -> Result<(), MultiError<GbmGlesApi, GbmGlesApi>> {
-        // The program lives on the render device's GLES context — the same one
-        // `frame.as_mut()` exposes — so this never crosses GPUs.
-        self.draw_gles(frame.as_mut(), src, dst, damage)
-            .map_err(MultiError::Render)
-    }
-
-    fn underlying_storage(
-        &self,
-        _renderer: &mut KmsRenderer<'render>,
-    ) -> Option<UnderlyingStorage<'_>> {
         None
     }
 }

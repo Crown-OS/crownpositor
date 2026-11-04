@@ -1,13 +1,11 @@
 //! What a blur pipeline keeps between frames.
 //!
-//! Two things outlive a frame, with different lifetimes. The scene and its
-//! pyramid belong to the *output*: a backdrop refreshes them only inside the
-//! rectangles the damage tracker hands it, so everywhere else they hold the
-//! composite from the frames that did own those pixels, which is the only
-//! correct thing to blur there. The halo belongs to one *backdrop*, because it
-//! is the damage that backdrop owes the tracker next frame.
+//! The scene and its pyramid belong to the *output*: a backdrop refreshes them
+//! only inside the rectangles the damage tracker hands it, so everywhere else
+//! they hold the composite from the frames that did own those pixels, which is
+//! the only correct thing to blur there.
 
-use std::{cell::RefCell, collections::HashMap, mem, rc::Rc};
+use std::rc::Rc;
 
 use smithay::{
     backend::renderer::{
@@ -21,22 +19,6 @@ use crate::rendering::blur::{
     BlurConfig, content::ContentDamage, scene::BlurScene, stack::GlassStack,
 };
 
-/// The band a blur still owes, element-local.
-///
-/// A pass spreads a changed pixel `radius` further than the rectangle it
-/// arrived in, so the ring around each damage rect is stale once the draw is
-/// done. It is carried into the next frame rather than widening this one's
-/// damage, which the tracker has already closed.
-#[derive(Debug, Default)]
-pub struct Halo {
-    /// Owed by this frame's draw, offered at the start of the next one.
-    pub(super) pending: Vec<Rectangle<i32, Physical>>,
-    /// This frame's offer. Offered whether or not the element is still
-    /// visible, so a band nobody claims expires with the frame instead of
-    /// keeping the output awake.
-    pub(super) reported: Vec<Rectangle<i32, Physical>>,
-}
-
 /// One output's blur state, across frames.
 #[derive(Debug, Default)]
 pub struct BlurCache {
@@ -45,21 +27,11 @@ pub struct BlurCache {
     /// are. Emptied here rather than at the end of a frame, because a frame
     /// that renders nothing never reaches an end.
     stack: GlassStack,
-    current: HashMap<Id, Rc<RefCell<Halo>>>,
-    previous: HashMap<Id, Rc<RefCell<Halo>>>,
     content: ContentDamage,
 }
 
 impl BlurCache {
-    /// Retires last frame's backdrops. Whatever is not asked for again is
-    /// dropped with it, which is how a closed window stops asking for frames.
-    /// Each surviving backdrop's owed band becomes this frame's offer.
     pub fn begin_frame(&mut self) {
-        self.previous = mem::take(&mut self.current);
-        for halo in self.previous.values() {
-            let mut halo = halo.borrow_mut();
-            halo.reported = mem::take(&mut halo.pending);
-        }
         self.stack.clear();
         self.content.begin_frame();
         if let Some(scene) = &self.scene {
@@ -93,19 +65,10 @@ impl BlurCache {
         &mut self.stack
     }
 
-    pub(super) fn halo(&mut self, id: &Id) -> Rc<RefCell<Halo>> {
+    /// Marks `id` as glass this frame, so the content tracker leaves it out.
+    pub(super) fn register(&mut self, id: &Id) -> ContentDamage {
         self.content.add_glass(id);
-        let halo = self.previous.remove(id).unwrap_or_default();
-        self.current.insert(id.clone(), Rc::clone(&halo));
-        halo
-    }
-
-    /// Whether any backdrop this frame drew owes a band, and the output
-    /// therefore needs one more frame to settle.
-    pub fn wants_redraw(&self) -> bool {
-        self.current
-            .values()
-            .any(|halo| !halo.borrow().pending.is_empty())
+        self.content.clone()
     }
 }
 
