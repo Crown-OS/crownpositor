@@ -20,5 +20,6 @@ wayland-protocols-wlr = { version = "0.3", default-features = false, features = 
 wayland-server = { workspace = true }
 
 [dev-dependencies]
+crownos-protocols = { workspace = true, features = ["client"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "client"] }
