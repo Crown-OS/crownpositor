@@ -66,12 +66,9 @@ uniform float control_hover;
 // Defined in `shaders/common/rounded_box.glsl`, concatenated after this file.
 float rounded_box(in vec2 p, in vec2 b, in float r);
 
-// A circular-cornered box, for the glyph strokes: a glyph is a drawing, not a
-// window, so it keeps the round ends of the pen that drew it.
-float pen_box(in vec2 p, in vec2 b, in float r) {
-    vec2 q = abs(p) - b + r;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-}
+// How far each maximize bracket's arms reach along the box edge, as a share
+// of the glyph's half-extent.
+const float BRACKET_ARM = 0.5;
 
 // Distance to a line segment, for the glyph strokes.
 float segment(in vec2 p, in vec2 a, in vec2 b) {
@@ -97,10 +94,13 @@ vec4 over(in vec4 dst, in vec4 src) {
 // Distance, not coverage, so the caller antialiases them all the same way.
 float glyph(in vec2 p, in float index, in float h, in float stroke) {
     if (index < 0.5) {
-        // Maximize: a square outline.
-        float outer = pen_box(p, vec2(h), stroke * 0.5);
-        float inner = pen_box(p, vec2(h - stroke), 0.0);
-        return max(outer, -inner);
+        // Maximize: four corner brackets, folded into one quadrant.
+        vec2 q = abs(p);
+        vec2 corner = vec2(h);
+        float arm = h * BRACKET_ARM;
+        float across = segment(q, corner, vec2(h - arm, h));
+        float down = segment(q, corner, vec2(h, h - arm));
+        return min(across, down) - stroke * 0.5;
     }
     if (index < 1.5) {
         // Minimize: a single bar.
