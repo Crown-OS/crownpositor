@@ -86,7 +86,7 @@ impl<D: AppIconsDispatch> Dispatch<CrownosAppIconManagerV1, (), D> for AppIconsS
 impl<D: AppIconsDispatch> Dispatch<CrownosAppIconV1, AppIconData, D> for AppIconsState {
     fn request(
         state: &mut D,
-        _client: &Client,
+        client: &Client,
         icon: &CrownosAppIconV1,
         request: crownos_app_icon_v1::Request,
         data: &AppIconData,
@@ -116,7 +116,7 @@ impl<D: AppIconsDispatch> Dispatch<CrownosAppIconV1, AppIconData, D> for AppIcon
             }
             crownos_app_icon_v1::Request::Activate => {
                 let placed = state.app_icons_state().placed(icon);
-                if !state.activate_app(&data.app_id, placed) {
+                if !state.activate_app(client, &data.app_id, placed) {
                     icon.launch();
                 }
             }

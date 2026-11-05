@@ -79,6 +79,13 @@ pub fn android_peer(client: &Client) -> Option<AndroidPeer> {
         .and_then(|state| state.android_peer)
 }
 
+/// Which of our programs `client` is, if it is one and unsandboxed.
+pub fn executable(client: &Client) -> Option<KnownExecutable> {
+    client
+        .get_data::<ClientState>()
+        .and_then(|state| state.executable)
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixStream;

@@ -40,9 +40,9 @@ pub trait AppIconsHandler {
 
     /// Restores and focuses the windows of `app_id`, out of `icon` — the
     /// surface the activated icon is drawn on and where — when it is placed.
-    /// Returns `false` when the application has none, which makes the
-    /// launcher start it.
-    fn activate_app(&mut self, app_id: &str, icon: Option<PlacedIcon>) -> bool;
+    /// `client` is who activated it. Returns `false` when the application
+    /// has none, which makes the launcher start it.
+    fn activate_app(&mut self, client: &Client, app_id: &str, icon: Option<PlacedIcon>) -> bool;
 }
 
 /// Where an icon rests on its surface, in surface-local coordinates.
