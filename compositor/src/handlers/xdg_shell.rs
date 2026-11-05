@@ -14,10 +14,15 @@ use smithay::{
     },
 };
 
+use protocols::crownos_android_shell::SizeLock;
+
 use super::xdg_decoration::requested_chrome;
 use crate::{
     layout::placement,
-    shell::tile::{Chrome, Tile, WindowState},
+    shell::{
+        android::AndroidWindow,
+        tile::{Chrome, Tile, WindowState},
+    },
     state::{State, launch_target::LaunchTarget},
     utils::id::WindowId,
 };
@@ -268,10 +273,17 @@ impl State {
         // a client that sets no window geometry maps with a zero size.
         unmapped.window.on_commit();
         let (min_size, max_size) = size_hints(surface);
+        let android = self.android_window_of(&toplevel);
+        // A dialog never takes a splash's place; the app's main window does.
+        let placeholder = match parent {
+            None => self.placeholder_for(&toplevel, app_id.as_deref()),
+            Some(_) => None,
+        };
         let carried = self.carried_offset(surface);
         let target = self.launch_target(surface);
-        let location = carried
-            .and_then(|_| self.carried_location())
+        let location = placeholder
+            .and_then(|placeholder| self.shell.location(placeholder))
+            .or_else(|| carried.and_then(|_| self.carried_location()))
             .or_else(|| target.and_then(|target| self.launch_location(target)))
             .or_else(|| self.shell.default_location())?;
         let area = self
@@ -289,11 +301,12 @@ impl State {
         let dialog = rules.floating.is_none()
             && (auto_float(
                 app_id.as_deref(),
+                android.as_ref(),
                 parent.is_some(),
                 min_size,
                 max_size,
                 area.size,
-            ) || is_splash(title.as_deref(), chrome));
+            ) || is_splash(title.as_deref(), chrome, android.as_ref()));
         if dialog {
             rules.floating = Some(true);
         }
@@ -322,8 +335,12 @@ impl State {
         );
         tile.set_size_hints(min_size, max_size);
         tile.set_chrome(chrome);
-        tile.set_dialog(dialog);
-        let fixed_size = min_size != Size::default() && min_size == max_size;
+        // An Android task floated for a structural reason still wears our
+        // frame: Android draws none of its own, and Back lives on it.
+        tile.set_dialog(dialog && android.is_none());
+        tile.set_android(android, area);
+        let fixed_size =
+            (min_size != Size::default() && min_size == max_size) || tile.is_size_locked();
         tile.set_title(title.as_deref().unwrap_or_default());
 
         if tile.state().is_floating() {
@@ -355,8 +372,16 @@ impl State {
             tile.set_state(WindowState::Maximized);
         }
 
-        self.shell.insert_tile(tile, location);
-        self.grow_if_launched(id);
+        // A splash standing in for this window hands its place over, and has
+        // already played the launch, so the window does not grow in again.
+        let unplaced = match placeholder {
+            Some(placeholder) => self.replace_placeholder(placeholder, tile),
+            None => Some(tile),
+        };
+        if let Some(tile) = unplaced {
+            self.shell.insert_tile(tile, location);
+            self.grow_if_launched(id);
+        }
 
         if rules.focus.unwrap_or(true) {
             self.shell.focus_window(id);
@@ -394,11 +419,20 @@ const AUTH_AGENT_APP_ID_MARKERS: [&str; 3] = ["polkit", "policykit", "soteria"];
 /// Structural reasons a toplevel should float, ahead of any config rule.
 fn auto_float(
     app_id: Option<&str>,
+    android: Option<&AndroidWindow>,
     has_parent: bool,
     min: Size<i32, Logical>,
     max: Size<i32, Logical>,
     area: Size<i32, Logical>,
 ) -> bool {
+    let fixed_size = min != Size::default() && min == max;
+    // An Android task floats for structural reasons only: a dialog of its
+    // own, or an app that cannot resize. Its app_id is a package name, which
+    // none of the heuristics below were written for, and a phone app's
+    // limits say nothing about it being a dialog.
+    if let Some(android) = android {
+        return has_parent || fixed_size || android.size_lock == SizeLock::Fixed;
+    }
     // The file chooser and friends, which run as their own process and so have
     // no parent to be transient for.
     if app_id.is_some_and(|app_id| {
@@ -423,7 +457,7 @@ fn auto_float(
         return true;
     }
     // The client says it is not resizable.
-    if min != Size::default() && min == max {
+    if fixed_size {
         return true;
     }
     // A max size small in both axes is a dialog by any other name.
@@ -431,9 +465,10 @@ fn auto_float(
 }
 
 /// A frameless window with no title, like DaVinci Resolve's loading screen:
-/// there is nothing to call it in a switcher and nothing to drag it by.
-fn is_splash(title: Option<&str>, chrome: Chrome) -> bool {
-    chrome == Chrome::Client && title.is_none_or(str::is_empty)
+/// there is nothing to call it in a switcher and nothing to drag it by. An
+/// Android task window is never one: its title can arrive after it maps.
+fn is_splash(title: Option<&str>, chrome: Chrome, android: Option<&AndroidWindow>) -> bool {
+    android.is_none() && chrome == Chrome::Client && title.is_none_or(str::is_empty)
 }
 
 fn size_hints(surface: &WlSurface) -> (Size<i32, Logical>, Size<i32, Logical>) {
@@ -506,7 +541,7 @@ mod tests {
     #[test]
     fn a_transient_toplevel_floats() {
         // Blender's Preferences window, GIMP's dialogs, most "Save As".
-        assert!(auto_float(None, true, unset(), unset(), area()));
+        assert!(auto_float(None, None, true, unset(), unset(), area()));
     }
 
     #[test]
@@ -515,10 +550,18 @@ mod tests {
             "xdg-desktop-portal-gtk",
             "org.freedesktop.impl.portal.desktop.kde",
         ] {
-            assert!(auto_float(Some(app_id), false, unset(), unset(), area()));
+            assert!(auto_float(
+                Some(app_id),
+                None,
+                false,
+                unset(),
+                unset(),
+                area()
+            ));
         }
         assert!(!auto_float(
             Some("org.gnome.Nautilus"),
+            None,
             false,
             unset(),
             unset(),
@@ -535,34 +578,124 @@ mod tests {
             "lxqt-policykit-agent",
             "gay.vaskel.soteria",
         ] {
-            assert!(auto_float(Some(app_id), false, unset(), unset(), area()));
+            assert!(auto_float(
+                Some(app_id),
+                None,
+                false,
+                unset(),
+                unset(),
+                area()
+            ));
+        }
+    }
+
+    fn android(size_lock: SizeLock) -> AndroidWindow {
+        AndroidWindow {
+            size_lock,
+            title_color: None,
         }
     }
 
     #[test]
+    fn an_android_app_named_like_a_prompt_still_tiles() {
+        for app_id in [
+            "waydroid.org.example.polkitviewer",
+            "waydroid.org.freedesktop.impl.portal.desktop.kde",
+            "waydroid.xdg-desktop-portal",
+        ] {
+            assert!(!auto_float(
+                Some(app_id),
+                Some(&android(SizeLock::Free)),
+                false,
+                unset(),
+                unset(),
+                area()
+            ));
+        }
+    }
+
+    #[test]
+    fn a_small_android_app_is_no_dialog() {
+        assert!(!auto_float(
+            Some("waydroid.org.example"),
+            Some(&android(SizeLock::Free)),
+            false,
+            unset(),
+            (400, 300).into(),
+            area()
+        ));
+    }
+
+    #[test]
+    fn an_android_app_that_cannot_resize_floats() {
+        let app = Some("waydroid.org.example");
+        assert!(auto_float(
+            app,
+            Some(&android(SizeLock::Fixed)),
+            false,
+            unset(),
+            unset(),
+            area()
+        ));
+        let fixed = Size::from((400, 700));
+        assert!(auto_float(
+            app,
+            Some(&android(SizeLock::Free)),
+            false,
+            fixed,
+            fixed,
+            area()
+        ));
+        assert!(auto_float(
+            app,
+            Some(&android(SizeLock::Free)),
+            true,
+            unset(),
+            unset(),
+            area()
+        ));
+    }
+
+    #[test]
+    fn an_untitled_android_window_is_no_splash() {
+        assert!(!is_splash(
+            None,
+            Chrome::Client,
+            Some(&android(SizeLock::Free))
+        ));
+    }
+
+    #[test]
     fn an_untitled_frameless_window_is_a_splash() {
-        assert!(is_splash(None, Chrome::Client));
-        assert!(is_splash(Some(""), Chrome::Client));
-        assert!(!is_splash(Some("davinci-resolve"), Chrome::Client));
-        assert!(!is_splash(None, Chrome::Compositor));
+        assert!(is_splash(None, Chrome::Client, None));
+        assert!(is_splash(Some(""), Chrome::Client, None));
+        assert!(!is_splash(Some("davinci-resolve"), Chrome::Client, None));
+        assert!(!is_splash(None, Chrome::Compositor, None));
     }
 
     #[test]
     fn a_fixed_size_toplevel_floats() {
         let fixed = Size::from((400, 300));
-        assert!(auto_float(None, false, fixed, fixed, area()));
+        assert!(auto_float(None, None, false, fixed, fixed, area()));
     }
 
     #[test]
     fn a_small_max_size_reads_as_a_dialog() {
-        assert!(auto_float(None, false, unset(), (400, 300).into(), area()));
+        assert!(auto_float(
+            None,
+            None,
+            false,
+            unset(),
+            (400, 300).into(),
+            area()
+        ));
     }
 
     #[test]
     fn an_ordinary_window_tiles() {
-        assert!(!auto_float(None, false, unset(), unset(), area()));
+        assert!(!auto_float(None, None, false, unset(), unset(), area()));
         assert!(
-            !auto_float(None, false, (400, 300).into(), unset(), area()),
+            !auto_float(None, None, false, (400, 300).into(), unset(), area()),
             "a minimum size alone is not a dialog"
         );
     }
@@ -571,6 +704,7 @@ mod tests {
     fn a_large_max_size_still_tiles() {
         // A window that merely caps itself below the screen is not a dialog.
         assert!(!auto_float(
+            None,
             None,
             false,
             unset(),

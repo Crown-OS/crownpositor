@@ -1,6 +1,7 @@
 //! The model: monitors own workspaces, workspaces own tiles, and the indices
 //! here are the only way to get from a surface to any of it.
 
+pub mod android;
 pub mod arrangement;
 pub mod closing;
 pub mod decoration;
@@ -49,7 +50,7 @@ use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
-    layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
+    layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, aspect, placement},
     menu::Menus,
     rendering::snapshot::Snapshot,
     shell::{
@@ -73,6 +74,9 @@ use crate::{
     utils::id::{OutputId, WindowId, WorkspaceId},
 };
 
+/// The `xdg_wm_base` version that brought the `suspended` toplevel state.
+const SUSPENDED_SINCE: u32 = 6;
+
 /// Writes a tile's geometry and state into its toplevel's pending state.
 ///
 /// `send_pending_configure` already returns `None` when nothing differs, so
@@ -88,6 +92,7 @@ fn configure(
     // and nothing at all while the client still owns the decision.
     let size = tile.configured_size();
     let recorded = tile.content_size();
+    let suspended = (toplevel.version() >= SUSPENDED_SINCE).then_some(tile.is_suspended());
 
     toplevel.with_pending_state(|pending| {
         pending.size = size;
@@ -116,6 +121,12 @@ fn configure(
             XdgState::TiledBottom,
         ] {
             toggle(&mut pending.states, edge, tiled);
+        }
+
+        // Only for clients that know the state: smithay drops it from an
+        // older client's configure, but the change alone would still send one.
+        if let Some(suspended) = suspended {
+            toggle(&mut pending.states, XdgState::Suspended, suspended);
         }
     });
 
@@ -899,7 +910,7 @@ impl Shell {
         cascade
     }
 
-    /// One of two functions that may change tile membership.
+    /// One of three functions that may change tile membership.
     pub fn insert_tile(&mut self, tile: Tile, at: Location) -> bool {
         let (id, surface) = (tile.id(), tile.surface().clone());
         let Some(workspace) = self.workspace_mut(at) else {
@@ -911,7 +922,7 @@ impl Shell {
         true
     }
 
-    /// The other. Also clears the window from every layout's side tables, so an
+    /// Another. Also clears the window from every layout's side tables, so an
     /// algorithm cannot retain a dead id.
     pub fn remove_tile(&mut self, id: WindowId) -> Option<Tile> {
         let at = self.window_to_location.remove(&id)?;
@@ -922,6 +933,27 @@ impl Shell {
             transaction.forget(id);
         }
         Some(tile)
+    }
+
+    /// The third: `tile` takes window `old`'s place in its workspace, and
+    /// `old` leaves the model. Hands `tile` back when `old` is not mapped.
+    pub fn replace_tile(&mut self, old: WindowId, tile: Tile) -> Result<Tile, Box<Tile>> {
+        let Some(at) = self.location(old) else {
+            return Err(Box::new(tile));
+        };
+        let (id, surface) = (tile.id(), tile.surface().clone());
+        let Some(workspace) = self.workspace_mut(at) else {
+            return Err(Box::new(tile));
+        };
+        let replaced = workspace.replace_tile(old, tile)?;
+        self.window_to_location.remove(&old);
+        self.surface_to_window.remove(replaced.surface());
+        self.surface_to_window.insert(surface, id);
+        self.window_to_location.insert(id, at);
+        for transaction in &mut self.transactions {
+            transaction.forget(old);
+        }
+        Ok(replaced)
     }
 
     /// Take-then-insert, so a failed destination cannot leave a half-updated
@@ -1545,6 +1577,11 @@ impl Shell {
         let Some(location) = self.location(id) else {
             return self.snap_previews.clear();
         };
+        // A window whose app cannot resize stays at its size, so no edge
+        // offers it another.
+        if self.tile(id).is_some_and(Tile::is_size_locked) {
+            return self.snap_previews.clear();
+        }
         let Some(workspace) = self.workspace(location) else {
             return self.snap_previews.clear();
         };
@@ -1662,11 +1699,22 @@ impl Shell {
             return false;
         }
 
+        if tile.is_size_locked() {
+            return false;
+        }
+
         // The hints are the client's, so they limit its content; the frame
         // around it is that plus the titlebar. Clamping the frame instead
         // would let the content go a titlebar shorter than the client allows.
+        // An app that keeps its aspect ratio has the dragged side lead.
         let insets = tile.insets();
-        let content = tile.info().constrain(insets.content_size(rect.size));
+        let info = tile.info();
+        let requested = insets.content_size(rect.size);
+        let kept = info.aspect.map_or(requested, |ratio| {
+            let driver = aspect::Driver::of(edges, tile.content_size(), requested);
+            aspect::follow(ratio, requested, driver)
+        });
+        let content = info.constrain(kept);
         let fitted = placement::fit_resize(
             rect,
             insets.frame_size(content),

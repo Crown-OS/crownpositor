@@ -10,13 +10,15 @@ use smithay::{
 };
 
 use config::ResolvedRule;
+use protocols::crownos_android_shell::{SizeLock, TitleColor};
 
 use spacecontrol::animations::spring::{Spring, SpringProfile};
 
 use crate::{
-    layout::{SnapZone, TileInfo, placement},
+    layout::{SnapZone, TileInfo, aspect, placement},
     shell::{
-        decoration::{DecorationCommit, DecorationIds, FRAME_RIM, Insets},
+        android::AndroidWindow,
+        decoration::{ControlSet, DecorationCommit, DecorationIds, FRAME_RIM, Insets},
         morph::{Choreography, IconOrigin, Morph, MorphEnd},
     },
     utils::id::WindowId,
@@ -148,6 +150,10 @@ pub struct Tile {
     opacity: f32,
     min_size: Size<i32, Logical>,
     max_size: Size<i32, Logical>,
+    /// The extras of an Android task window; `None` for every other window.
+    android: Option<AndroidWindow>,
+    /// Told `Suspended`: nothing of it is on screen.
+    suspended: bool,
 }
 
 /// Who draws a window's frame.
@@ -218,6 +224,8 @@ impl Tile {
             opacity,
             min_size: Size::default(),
             max_size: Size::default(),
+            android: None,
+            suspended: false,
         }
     }
 
@@ -311,7 +319,7 @@ impl Tile {
     /// floating window: a client drawing its own chrome has its own resize
     /// handles, and every other state has its size decided for it.
     pub fn has_resize_band(&self) -> bool {
-        self.state.is_floating() && self.is_decorated()
+        self.state.is_floating() && self.is_decorated() && !self.is_size_locked()
     }
 
     pub fn insets(&self) -> Insets {
@@ -403,7 +411,120 @@ impl Tile {
             id: self.id,
             min_size: self.min_size,
             max_size: self.max_size,
+            aspect: match self.size_lock() {
+                SizeLock::Aspect(ratio) => Some(ratio),
+                SizeLock::Free | SizeLock::Fixed => None,
+            },
         }
+    }
+
+    pub fn is_android(&self) -> bool {
+        self.android.is_some()
+    }
+
+    pub fn size_lock(&self) -> SizeLock {
+        self.android
+            .map_or(SizeLock::Free, |android| android.size_lock)
+    }
+
+    /// An app that cannot resize: the window floats at the size it asks for,
+    /// in no other state.
+    pub fn is_size_locked(&self) -> bool {
+        self.size_lock() == SizeLock::Fixed
+    }
+
+    pub fn title_color(&self) -> Option<TitleColor> {
+        self.android.and_then(|android| android.title_color)
+    }
+
+    /// Which controls the titlebar carries: an Android task window has Back.
+    pub fn controls(&self) -> ControlSet {
+        match self.android {
+            Some(_) => ControlSet::WithBack,
+            None => ControlSet::Window,
+        }
+    }
+
+    /// Takes the window's Android extras, floating it at its own size when
+    /// its app cannot resize. `area` is where it floats. Returns whether
+    /// anything changed.
+    pub fn set_android(
+        &mut self,
+        android: Option<AndroidWindow>,
+        area: Rectangle<i32, Logical>,
+    ) -> bool {
+        if self.android == android {
+            return false;
+        }
+        self.android = android;
+        match self.size_lock() {
+            SizeLock::Fixed => self.float_at_own_size(area),
+            SizeLock::Aspect(ratio)
+                if self.state.is_floating() && self.size_authority == SizeAuthority::Compositor =>
+            {
+                let insets = self.insets();
+                let content =
+                    aspect::fit_within(ratio, insets.content_size(self.floating_rect.size));
+                self.floating_rect.size = insets.frame_size(content);
+            }
+            SizeLock::Aspect(_) | SizeLock::Free => {}
+        }
+        true
+    }
+
+    /// Floats the window at the size its client committed, and leaves the
+    /// size to the client for good.
+    fn float_at_own_size(&mut self, area: Rectangle<i32, Logical>) {
+        let was_floating = self.state.is_floating();
+        self.state = WindowState::Floating;
+        self.restore_state = WindowState::Floating;
+        self.size_authority = SizeAuthority::Client;
+        let content = self.window.geometry().size;
+        if content.is_empty() {
+            return;
+        }
+        self.floating_rect = if was_floating {
+            Rectangle::new(self.floating_rect.loc, self.insets().frame_size(content))
+        } else {
+            placement::initial_rect(content, self.insets(), area, Some(self.target), 0)
+        };
+    }
+
+    /// The part of `slot` the window fills: all of it, unless it keeps an
+    /// aspect ratio, which centres the largest frame with that ratio in it.
+    pub fn fit_slot(&self, slot: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+        let SizeLock::Aspect(ratio) = self.size_lock() else {
+            return slot;
+        };
+        let insets = self.insets();
+        let frame = insets.frame_size(aspect::fit_within(ratio, insets.content_size(slot.size)));
+        placement::place(frame, slot, Some(slot), 0)
+    }
+
+    /// Takes `placeholder`'s place in its state and at its rect, with no
+    /// motion of its own: the placeholder already played the launch. A window
+    /// whose app cannot resize floats at its own size over the place instead.
+    pub fn take_place_of(&mut self, placeholder: &Tile, area: Rectangle<i32, Logical>) {
+        self.state = placeholder.state;
+        self.restore_state = placeholder.restore_state;
+        self.floating_rect = placeholder.floating_rect;
+        self.target = placeholder.target;
+        self.anim = placeholder.anim;
+        self.size_authority = SizeAuthority::Compositor;
+        self.centered = false;
+        self.placed = true;
+        if self.is_size_locked() {
+            self.float_at_own_size(area);
+        }
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.suspended
+    }
+
+    /// Taken by the next configure.
+    pub fn set_suspended(&mut self, suspended: bool) {
+        self.suspended = suspended;
     }
 
     /// Refreshed from the client's size hints on commit.
@@ -470,7 +591,10 @@ impl Tile {
         if requested.w <= 0 || requested.h <= 0 {
             return false;
         }
-        if self.size_authority == SizeAuthority::Compositor && !self.refused(requested) {
+        if self.size_authority == SizeAuthority::Compositor
+            && !self.refused(requested)
+            && !self.is_size_locked()
+        {
             return false;
         }
         let frame = self.insets().frame_size(requested);
@@ -628,9 +752,10 @@ impl Tile {
     ///
     /// Re-entering the state you are already in is a no-op rather than
     /// overwriting `restore_state` with itself, which would strand a window in
-    /// fullscreen with nothing to restore.
+    /// fullscreen with nothing to restore. A window whose app cannot resize
+    /// only ever floats.
     pub fn set_state(&mut self, state: WindowState) {
-        if self.state == state {
+        if self.state == state || (self.is_size_locked() && state != WindowState::Floating) {
             return;
         }
         if matches!(self.state, WindowState::Tiled | WindowState::Floating) {

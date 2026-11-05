@@ -14,10 +14,13 @@ use smithay::{
 use crate::{
     handlers::seat::PointerFocusTarget,
     input::{decoration, mouse::constraint::ConstrainedMotion},
-    shell::monitor::Monitor,
+    shell::{monitor::Monitor, tile::Tile},
     state::State,
     utils::id::WindowId,
 };
+
+/// Linux's `BTN_SIDE`, the thumb button browsers take as Back.
+const SIDE_BUTTON: u32 = 0x113;
 
 impl State {
     /// Absolute motion, from winit and touchscreens. Transforms against the
@@ -209,6 +212,10 @@ impl State {
             }
         }
 
+        if self.side_button_as_back(event.button_code(), state, pointer.is_grabbed()) {
+            return;
+        }
+
         // Which frame the click belongs to, decided before the dispatch and
         // acted on after it: a frame click can start a move grab, and smithay
         // holds the pointer's lock for the whole of `PointerHandle::button`.
@@ -243,6 +250,38 @@ impl State {
         if let Some(window) = frame {
             self.on_frame_click(window, state, serial);
         }
+    }
+
+    /// The side button over an Android task window is Back for it, and
+    /// neither half of the click reaches the window. Returns whether it was.
+    fn side_button_as_back(&mut self, button: u32, state: ButtonState, grabbed: bool) -> bool {
+        if button != SIDE_BUTTON {
+            return false;
+        }
+        match state {
+            ButtonState::Pressed if !grabbed => {
+                let Some(id) = self.android_window_under_pointer() else {
+                    return false;
+                };
+                self.send_android_back(id);
+                self.input.side_button_back = true;
+                true
+            }
+            ButtonState::Pressed => false,
+            ButtonState::Released => std::mem::take(&mut self.input.side_button_back),
+        }
+    }
+
+    /// The Android task window the pointer is over, frame included.
+    fn android_window_under_pointer(&self) -> Option<WindowId> {
+        let (target, _) = self
+            .shell
+            .pointer_focus_under(self.input.pointer_location)?;
+        let id = self.window_id_of(target.window()?)?;
+        self.shell
+            .tile(id)
+            .is_some_and(Tile::is_android)
+            .then_some(id)
     }
 
     /// The window whose frame the pointer is over, by id.

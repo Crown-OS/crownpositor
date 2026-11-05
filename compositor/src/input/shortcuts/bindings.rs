@@ -135,6 +135,7 @@ mod tests {
         assert!(has(|a| matches!(a, Action::SnapWindow(_))));
         assert!(has(|a| matches!(a, Action::ResizeSplit(_))));
         assert!(has(|a| matches!(a, Action::PromoteDemote)));
+        assert!(has(|a| matches!(a, Action::AndroidBack)));
     }
 
     #[test]

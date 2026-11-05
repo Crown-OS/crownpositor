@@ -9,10 +9,12 @@
 //! The payoff is that the arithmetic is testable with a `Vec<TileInfo>` and a
 //! rectangle, with no display and no event loop.
 
+pub mod aspect;
 pub mod placement;
 pub mod snap;
 pub mod tiling;
 
+use protocols::crownos_android_shell::AspectRatio;
 use smithay::utils::{Logical, Rectangle, Size};
 
 use crate::utils::id::WindowId;
@@ -65,6 +67,8 @@ pub struct TileInfo {
     pub min_size: Size<i32, Logical>,
     /// A zero component means unconstrained.
     pub max_size: Size<i32, Logical>,
+    /// The width to height ratio an Android app keeps while it resizes.
+    pub aspect: Option<AspectRatio>,
 }
 
 impl TileInfo {
@@ -73,6 +77,7 @@ impl TileInfo {
             id,
             min_size: Size::default(),
             max_size: Size::default(),
+            aspect: None,
         }
     }
 
@@ -246,6 +251,7 @@ mod tests {
             id: WindowId::next(),
             min_size: (100, 0).into(),
             max_size: (0, 300).into(),
+            aspect: None,
         };
         let size = tile.constrain((40, 900).into());
         assert_eq!(size.w, 100, "below min widens");

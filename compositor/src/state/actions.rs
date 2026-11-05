@@ -109,6 +109,12 @@ impl State {
             Action::ToggleMaximize => {
                 self.shell.toggle_window_state(WindowState::Maximized);
             }
+            Action::AndroidBack => {
+                if let Some(id) = self.android_window_with_keyboard() {
+                    self.send_android_back(id);
+                }
+                return;
+            }
 
             Action::ToggleWorkspaceMode => {
                 self.shell.toggle_workspace_mode();

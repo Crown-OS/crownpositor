@@ -303,6 +303,27 @@ impl Workspace {
         Some(tile)
     }
 
+    /// Puts `tile` exactly where window `old` is: the same slot in the layout
+    /// order, the same place in the stacking and focus order. Hands `tile`
+    /// back when `old` is not here.
+    pub(super) fn replace_tile(&mut self, old: WindowId, tile: Tile) -> Result<Tile, Box<Tile>> {
+        let Some(slot) = self.tiles.iter_mut().find(|slot| slot.id() == old) else {
+            return Err(Box::new(tile));
+        };
+        let id = tile.id();
+        let replaced = std::mem::replace(slot, tile);
+        self.tiling.forget(old);
+        for entry in self.focus_stack.iter_mut().filter(|entry| **entry == old) {
+            *entry = id;
+        }
+        if self.focus == Some(old) {
+            self.focus = Some(id);
+            self.dirty.focus = true;
+        }
+        self.dirty.layout = true;
+        Ok(replaced)
+    }
+
     /// Every window, most recently focused first.
     pub fn recent_windows(&self) -> impl Iterator<Item = WindowId> + Clone + '_ {
         self.focus_stack.iter().rev().copied()
@@ -459,10 +480,13 @@ impl Workspace {
                 tile.claim_size();
             }
 
+            // An app that keeps its aspect ratio fills as much of the place
+            // it is given as the ratio allows. Fullscreen is the exception:
+            // it covers the output, and Android letterboxes the app itself.
             let rect = match tile.state() {
                 WindowState::Fullscreen => output_area,
-                WindowState::Maximized => area,
-                WindowState::Snapped(zone) => zone.rect(area, gaps),
+                WindowState::Maximized => tile.fit_slot(area),
+                WindowState::Snapped(zone) => tile.fit_slot(zone.rect(area, gaps)),
                 // Free to hang off any edge the drag took it over, but never
                 // so far that there is nothing left to catch it by.
                 WindowState::Floating => {
@@ -476,7 +500,7 @@ impl Workspace {
                     } else {
                         let rect = self.scratch_out.rects.get(next).copied().unwrap_or(area);
                         next += 1;
-                        rect
+                        tile.fit_slot(rect)
                     }
                 }
             };

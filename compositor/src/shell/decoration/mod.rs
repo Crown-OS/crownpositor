@@ -83,7 +83,9 @@ const LABEL_GUTTER: i32 = 12;
 /// Space between the title and the menu row, and between menu items.
 const MENU_GUTTER: i32 = 14;
 
-/// A window control, in the order the titlebar draws them: left to right.
+/// A titlebar control. The window controls sit at the right-hand end, left
+/// to right in the order of [`Control::WINDOW`]; Back sits at the left-hand
+/// end of an Android task window's titlebar.
 ///
 /// The discriminants are the indices the titlebar shader draws its glyphs by,
 /// so the picture and the hit test cannot disagree about which is which.
@@ -92,18 +94,29 @@ pub enum Control {
     Maximize,
     Minimize,
     Close,
+    Back,
 }
 
 impl Control {
-    pub const ALL: [Self; 3] = [Self::Maximize, Self::Minimize, Self::Close];
+    pub const WINDOW: [Self; 3] = [Self::Maximize, Self::Minimize, Self::Close];
 
     pub fn index(self) -> usize {
         match self {
             Self::Maximize => 0,
             Self::Minimize => 1,
             Self::Close => 2,
+            Self::Back => 3,
         }
     }
+}
+
+/// Which controls a titlebar carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlSet {
+    /// Maximize, minimize and close.
+    Window,
+    /// Those, and Back for an Android task window.
+    WithBack,
 }
 
 /// Where the pieces of a titlebar sit inside a window's frame.
@@ -114,21 +127,28 @@ impl Control {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TitleBarLayout {
     bar: Rectangle<i32, Logical>,
-    /// Centre of the leftmost control.
+    /// Centre of the leftmost window control.
     first_control: Point<i32, Logical>,
+    /// Centre of the Back control, when the titlebar has one.
+    back: Option<Point<i32, Logical>>,
 }
 
 impl TitleBarLayout {
-    pub fn new(frame: Rectangle<i32, Logical>, insets: Insets) -> Self {
+    pub fn new(frame: Rectangle<i32, Logical>, insets: Insets, controls: ControlSet) -> Self {
         let bar = Rectangle::new(frame.loc, Size::from((frame.size.w, insets.top)));
         let rightmost = frame.loc.x + frame.size.w - CONTROL_MARGIN;
+        let middle = frame.loc.y + insets.top / 2;
 
         Self {
             bar,
             first_control: Point::from((
-                rightmost - CONTROL_PITCH * (Control::ALL.len() as i32 - 1),
-                frame.loc.y + insets.top / 2,
+                rightmost - CONTROL_PITCH * (Control::WINDOW.len() as i32 - 1),
+                middle,
             )),
+            back: match controls {
+                ControlSet::Window => None,
+                ControlSet::WithBack => Some(Point::from((frame.loc.x + CONTROL_MARGIN, middle))),
+            },
         }
     }
 
@@ -148,33 +168,45 @@ impl TitleBarLayout {
         self.first_control
     }
 
-    pub fn control_centre(&self, control: Control) -> Point<i32, Logical> {
-        self.first_control + Point::from((CONTROL_PITCH * control.index() as i32, 0))
+    /// Where `control` sits, if this titlebar has it.
+    pub fn control_centre(&self, control: Control) -> Option<Point<i32, Logical>> {
+        match control {
+            Control::Back => self.back,
+            window => {
+                Some(self.first_control + Point::from((CONTROL_PITCH * window.index() as i32, 0)))
+            }
+        }
     }
 
     /// The clickable square around a control.
     ///
     /// Deliberately the full pitch wide rather than the disc's own diameter:
     /// the discs are small, and a hit target you have to aim at is a bad one.
-    pub fn control_rect(&self, control: Control) -> Rectangle<i32, Logical> {
-        let centre = self.control_centre(control);
+    pub fn control_rect(&self, control: Control) -> Option<Rectangle<i32, Logical>> {
+        let centre = self.control_centre(control)?;
         let half = CONTROL_PITCH / 2;
-        Rectangle::new(
+        Some(Rectangle::new(
             Point::from((centre.x - half, self.bar.loc.y)),
             Size::from((CONTROL_PITCH, self.bar.size.h)),
-        )
+        ))
     }
 
     pub fn control_at(&self, point: Point<f64, Logical>) -> Option<Control> {
-        Control::ALL
+        Control::WINDOW
             .into_iter()
-            .find(|control| self.control_rect(*control).to_f64().contains(point))
+            .chain([Control::Back])
+            .find(|control| {
+                self.control_rect(*control)
+                    .is_some_and(|rect| rect.to_f64().contains(point))
+            })
     }
 
     /// Where the title starts, and how much room it has before the controls.
     pub fn label(&self) -> Rectangle<i32, Logical> {
-        let start = self.bar.loc.x + LABEL_MARGIN;
-        let end = self.control_centre(Control::Maximize).x - CONTROL_PITCH / 2 - LABEL_GUTTER;
+        let start = self.back.map_or(self.bar.loc.x + LABEL_MARGIN, |back| {
+            back.x + CONTROL_PITCH / 2 + LABEL_GUTTER
+        });
+        let end = self.first_control.x - CONTROL_PITCH / 2 - LABEL_GUTTER;
         Rectangle::new(
             Point::from((start, self.bar.loc.y)),
             Size::from(((end - start).max(0), self.bar.size.h)),
@@ -458,9 +490,13 @@ mod tests {
 
     #[test]
     fn the_controls_sit_at_the_right_hand_end_in_drawing_order() {
-        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36));
+        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36), ControlSet::Window);
 
-        let centres = Control::ALL.map(|control| layout.control_centre(control).x);
+        let centres = Control::WINDOW.map(|control| layout.control_centre(control).map(|at| at.x));
+        let [Some(maximize), Some(minimize), Some(close)] = centres else {
+            panic!("a titlebar always has its window controls");
+        };
+        let centres = [maximize, minimize, close];
         assert!(
             centres[0] < centres[1] && centres[1] < centres[2],
             "maximize, minimize, close run left to right"
@@ -471,18 +507,22 @@ mod tests {
 
     #[test]
     fn a_control_is_vertically_centred_in_the_bar() {
-        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36));
-        assert_eq!(layout.control_centre(Control::Close).y, 18);
+        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36), ControlSet::Window);
+        assert_eq!(
+            layout.control_centre(Control::Close).map(|at| at.y),
+            Some(18)
+        );
     }
 
     #[test]
     fn clicking_a_control_finds_it_and_only_it() {
-        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36));
+        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36), ControlSet::Window);
 
-        for control in Control::ALL {
-            let centre = layout.control_centre(control).to_f64();
-            assert_eq!(layout.control_at(centre), Some(control));
+        for control in Control::WINDOW {
+            let centre = layout.control_centre(control).map(|at| at.to_f64());
+            assert_eq!(centre.and_then(|at| layout.control_at(at)), Some(control));
         }
+        assert_eq!(layout.control_centre(Control::Back), None);
         assert_eq!(
             layout.control_at((100.0, 18.0).into()),
             None,
@@ -497,26 +537,28 @@ mod tests {
 
     #[test]
     fn the_title_stops_short_of_the_controls() {
-        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36));
+        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36), ControlSet::Window);
         let label = layout.label();
-        let first = layout.control_rect(Control::Maximize);
+        let first = layout
+            .control_rect(Control::Maximize)
+            .map(|rect| rect.loc.x);
 
         assert_eq!(label.loc.x, LABEL_MARGIN);
-        assert!(label.loc.x + label.size.w <= first.loc.x);
+        assert!(first.is_some_and(|first| label.loc.x + label.size.w <= first));
     }
 
     /// A window too narrow for both cannot be allowed to produce a negative
     /// width, which every rect consumer would then read as inverted.
     #[test]
     fn a_narrow_window_yields_an_empty_title_rather_than_a_negative_one() {
-        let layout = TitleBarLayout::new(rect(0, 0, 60, 600), Insets::top(36));
+        let layout = TitleBarLayout::new(rect(0, 0, 60, 600), Insets::top(36), ControlSet::Window);
         assert_eq!(layout.label().size.w, 0);
         assert_eq!(layout.menu(200).size.w, 0);
     }
 
     #[test]
     fn the_menu_row_follows_the_measured_title() {
-        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36));
+        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36), ControlSet::Window);
         let menu = layout.menu(64);
 
         assert_eq!(menu.loc.x, LABEL_MARGIN + 64 + MENU_GUTTER);
@@ -527,8 +569,29 @@ mod tests {
     /// that overlaps the controls.
     #[test]
     fn an_overlong_title_squeezes_the_menu_out() {
-        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36));
+        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36), ControlSet::Window);
         assert_eq!(layout.menu(10_000).size.w, 0);
+    }
+
+    #[test]
+    fn back_sits_at_the_left_end_and_pushes_the_title_along() {
+        let layout =
+            TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36), ControlSet::WithBack);
+        let back = layout.control_centre(Control::Back);
+        assert_eq!(back, Some(Point::from((CONTROL_MARGIN, 18))));
+        assert_eq!(
+            back.and_then(|at| layout.control_at(at.to_f64())),
+            Some(Control::Back)
+        );
+        let back_rect = layout
+            .control_rect(Control::Back)
+            .map(|rect| rect.loc.x + rect.size.w);
+        assert!(back_rect.is_some_and(|end| layout.label().loc.x > end));
+        assert_eq!(
+            layout.control_at((300.0, 18.0).into()),
+            None,
+            "in the title"
+        );
     }
 
     #[test]

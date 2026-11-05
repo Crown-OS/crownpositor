@@ -349,6 +349,7 @@ dependencies = [
  "protocols",
  "regex",
  "resvg",
+ "rustix 1.1.4",
  "serde",
  "skrifa 0.40.0",
  "smithay",

@@ -1,7 +1,7 @@
 //! The titlebar shader program.
 //!
 //! A *pixel* program, like [`BorderShader`]: the titlebar samples no buffer,
-//! it generates its panel, its highlight and its three controls from their
+//! it generates its panel, its highlight and its controls from their
 //! geometry. Compiled once per GL context, parked in the EGL context's user
 //! data, and fetched through a fallible [`get`] so a compile failure costs the
 //! decoration rather than the compositor.
@@ -38,11 +38,14 @@ pub struct TitleBarUniforms {
     pub tint_bottom: [f32; 4],
     pub highlight: [f32; 4],
     pub control_origin: (f32, f32),
+    /// Centre of the Back control, drawn only when `back_shown` is 1.
+    pub back_origin: (f32, f32),
+    pub back_shown: f32,
     pub control_spacing: f32,
     pub control_radius: f32,
     pub control_fill: [f32; 4],
     pub control_glyph: [f32; 4],
-    /// Index of the control under the pointer; anything outside `0..3` is none.
+    /// Index of the control under the pointer; anything outside `0..4` is none.
     pub control_hover: f32,
 }
 
@@ -54,7 +57,7 @@ impl TitleBarShader {
     /// `size`, `alpha` and `tint` are absent on purpose: the renderer supplies
     /// those to every pixel program, and naming them again would ask GL for a
     /// uniform location twice.
-    fn uniforms() -> [UniformName<'static>; 13] {
+    fn uniforms() -> [UniformName<'static>; 15] {
         [
             UniformName::new("window_offset", UniformType::_2f),
             UniformName::new("window_size", UniformType::_2f),
@@ -64,6 +67,8 @@ impl TitleBarShader {
             UniformName::new("tint_bottom", UniformType::_4f),
             UniformName::new("highlight", UniformType::_4f),
             UniformName::new("control_origin", UniformType::_2f),
+            UniformName::new("back_origin", UniformType::_2f),
+            UniformName::new("back_shown", UniformType::_1f),
             UniformName::new("control_spacing", UniformType::_1f),
             UniformName::new("control_radius", UniformType::_1f),
             UniformName::new("control_fill", UniformType::_4f),
@@ -93,7 +98,7 @@ impl TitleBarShader {
             .map(|shader| shader.0.clone())
     }
 
-    pub fn values(uniforms: &TitleBarUniforms) -> [Uniform<'static>; 13] {
+    pub fn values(uniforms: &TitleBarUniforms) -> [Uniform<'static>; 15] {
         [
             Uniform::new("window_offset", uniforms.window_offset),
             Uniform::new("window_size", uniforms.window_size),
@@ -103,6 +108,8 @@ impl TitleBarShader {
             Uniform::new("tint_bottom", uniforms.tint_bottom),
             Uniform::new("highlight", uniforms.highlight),
             Uniform::new("control_origin", uniforms.control_origin),
+            Uniform::new("back_origin", uniforms.back_origin),
+            Uniform::new("back_shown", uniforms.back_shown),
             Uniform::new("control_spacing", uniforms.control_spacing),
             Uniform::new("control_radius", uniforms.control_radius),
             Uniform::new("control_fill", uniforms.control_fill),

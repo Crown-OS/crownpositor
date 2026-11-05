@@ -149,6 +149,11 @@ impl State {
                         }
 
                         match state.input.bindings.lookup(modifiers, &handle) {
+                            Some(Action::AndroidBack)
+                                if state.android_window_with_keyboard().is_none() =>
+                            {
+                                FilterResult::Forward
+                            }
                             Some(action) => {
                                 state.input.intercepted.insert(handle.raw_code());
                                 FilterResult::Intercept(action)

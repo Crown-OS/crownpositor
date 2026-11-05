@@ -11,7 +11,7 @@ use smithay::{
 use crate::{
     controls::Controls,
     state::{State, client::ClientState},
-    utils::runtime::TaskSender,
+    utils::{client_identity, runtime::TaskSender},
 };
 
 pub struct CommonState {
@@ -67,7 +67,8 @@ impl CommonState {
 
         loop_handle
             .insert_source(listening_socket, move |client_stream, _, state| {
-                ClientState::default().insert(&mut state.common.display_handle, client_stream);
+                ClientState::unsandboxed(client_identity::executable_of(&client_stream))
+                    .insert(&mut state.common.display_handle, client_stream);
             })
             .expect("Failed to init the wayland event source.");
 

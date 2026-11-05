@@ -120,7 +120,7 @@ impl State {
         let monitor = self.shell.monitor_by_id(location.output)?;
         Some(MenuAnchor {
             window,
-            layout: TitleBarLayout::new(tile.target(), tile.insets()),
+            layout: TitleBarLayout::new(tile.target(), tile.insets(), tile.controls()),
             origin: monitor.geometry().loc,
             bounds: monitor.geometry(),
         })

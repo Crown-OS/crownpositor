@@ -13,8 +13,10 @@ use smithay::{
         },
         utils::CommitCounter,
     },
-    utils::{Physical, Point, Rectangle, Scale, Size},
+    utils::{Logical, Physical, Point, Rectangle, Scale, Size},
 };
+
+use protocols::crownos_android_shell::TitleColor;
 
 use crate::{
     rendering::{
@@ -96,7 +98,7 @@ impl<'a> Frame<'a> {
                 window: self.rect,
                 thickness: self.ring(style),
                 radius: self.radius,
-                color: style.palette(focused).border,
+                color: style.palette_for(self.tile, focused).border,
                 alpha,
             },
         ) {
@@ -120,7 +122,7 @@ impl<'a> Frame<'a> {
     {
         let area = self.layout(style).label();
         let focused = style.focused == Some(self.tile.id());
-        let color = style.palette(focused).label;
+        let color = style.palette_for(self.tile, focused).label;
         let scale = style.scale;
         if area.size.w <= 0 {
             return;
@@ -180,7 +182,7 @@ impl<'a> Frame<'a> {
         D: TileDecorator<R>,
     {
         let (focused, commit) = self.appearance(style);
-        let palette = style.palette(focused);
+        let palette = style.palette_for(self.tile, focused);
         let palette = FramePalette {
             control_glyph: palette
                 .control_glyph
@@ -226,6 +228,12 @@ impl<'a> Frame<'a> {
 
         let layout = self.layout(style);
         let physical = |value: i32| (f64::from(value) * style.scale * self.zoom) as f32;
+        let place = |at: Point<i32, Logical>| {
+            (
+                self.rect.loc.x as f32 + physical(at.x),
+                self.rect.loc.y as f32 + physical(at.y),
+            )
+        };
         let first = layout.first_control_centre();
         let panel = geometry.and_then(|geometry| {
             decorator.title_bar(
@@ -237,10 +245,8 @@ impl<'a> Frame<'a> {
                     frame: self.rect,
                     radius: self.radius,
                     bar_height: self.inset as f32,
-                    first_control: (
-                        self.rect.loc.x as f32 + physical(first.x),
-                        self.rect.loc.y as f32 + physical(first.y),
-                    ),
+                    first_control: place(first),
+                    back_control: layout.control_centre(Control::Back).map(place),
                     control_pitch: physical(layout.control_pitch()),
                     control_radius: physical(layout.control_radius()),
                     hovered: style.hover_on(self.tile.id()),
@@ -289,6 +295,7 @@ impl<'a> Frame<'a> {
                 logical(self.rect.size.h),
             ))),
             Insets::top(logical(self.inset)),
+            self.tile.controls(),
         )
     }
 
@@ -296,7 +303,13 @@ impl<'a> Frame<'a> {
         let id = self.tile.id();
         let focused = style.focused == Some(id);
         let glyphs = (self.tile.anim().glyphs() * f32::from(u8::MAX)).round() as u8;
-        let key = appearance_key(focused, style.hover_on(id), style.dark, glyphs);
+        let key = appearance_key(
+            focused,
+            style.hover_on(id),
+            style.dark,
+            glyphs,
+            self.tile.title_color(),
+        );
         (focused, self.tile.decoration_commit(key))
     }
 }
@@ -320,8 +333,20 @@ pub(crate) fn client_area(
 
 /// What a frame's *pixels* depend on, packed so the commit counter can tell in
 /// one comparison whether they changed. `glyphs` is how much the controls'
-/// glyphs show, in 256ths, so their fade repaints the panel on every step.
-fn appearance_key(focused: bool, hovered: Option<Control>, dark: bool, glyphs: u8) -> u64 {
+/// glyphs show, in 256ths, so their fade repaints the panel on every step;
+/// `tint` is an app's own title colour, in the upper half.
+fn appearance_key(
+    focused: bool,
+    hovered: Option<Control>,
+    dark: bool,
+    glyphs: u8,
+    tint: Option<TitleColor>,
+) -> u64 {
     let hover = hovered.map_or(u64::from(u8::MAX), |control| control.index() as u64);
-    (u64::from(glyphs) << 24) | (u64::from(focused) << 16) | (u64::from(dark) << 8) | hover
+    let tint = tint.map_or(0, |color| u64::from(color.argb()));
+    (tint << 32)
+        | (u64::from(glyphs) << 24)
+        | (u64::from(focused) << 16)
+        | (u64::from(dark) << 8)
+        | hover
 }

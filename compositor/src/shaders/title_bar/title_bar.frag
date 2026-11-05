@@ -1,5 +1,6 @@
-// A window's titlebar: the tinted panel, its top highlight, and the three
-// window controls — all generated from geometry in one pass.
+// A window's titlebar: the tinted panel, its top highlight, the three window
+// controls and an Android task window's Back — all generated from geometry in
+// one pass.
 //
 // A *pixel* shader like border.frag, so smithay prepends `#version 100`,
 // substitutes no `//_DEFINES_` line and compiles only the plain and
@@ -7,10 +8,10 @@
 // this is a separate element drawn underneath, and everything here is tint
 // laid over it.
 //
-// The controls live in the same pass as the panel because they are three
-// circles and three glyphs — a handful of distance-field evaluations, far
-// cheaper than three more elements for the damage tracker to track and three
-// more draw calls to issue.
+// The controls live in the same pass as the panel because they are a few
+// circles and glyphs — a handful of distance-field evaluations, far cheaper
+// than more elements for the damage tracker to track and more draw calls to
+// issue.
 
 #extension GL_OES_standard_derivatives : enable
 
@@ -54,13 +55,18 @@ uniform vec4 highlight;
 // Centre of the first control, its spacing and radius, in physical pixels.
 // Controls run left to right: maximize, minimize, close.
 uniform vec2 control_origin;
+// Centre of the Back control at the bar's other end, drawn only when
+// `back_shown` is 1.
+uniform vec2 back_origin;
+uniform float back_shown;
 uniform float control_spacing;
 uniform float control_radius;
 // Premultiplied disc and glyph colours.
 uniform vec4 control_fill;
 uniform vec4 control_glyph;
-// Which control the pointer is over, as an index; anything outside 0..2 means
-// none. Held as a float because that is what a `_1f` uniform carries.
+// Which control the pointer is over, as an index — 3 is Back; anything
+// outside 0..3 means none. Held as a float because that is what a `_1f`
+// uniform carries.
 uniform float control_hover;
 
 // Defined in `shaders/common/rounded_box.glsl`, concatenated after this file.
@@ -93,7 +99,7 @@ vec4 over(in vec4 dst, in vec4 src) {
     return src + dst * (1.0 - src.a);
 }
 
-// The three glyphs, drawn into a box of half-extent `h` centred on the origin.
+// The four glyphs, drawn into a box of half-extent `h` centred on the origin.
 // Distance, not coverage, so the caller antialiases them all the same way.
 float glyph(in vec2 p, in float index, in float h, in float stroke) {
     if (index < 0.5) {
@@ -106,10 +112,31 @@ float glyph(in vec2 p, in float index, in float h, in float stroke) {
         // Minimize: a single bar.
         return segment(p, vec2(-h, 0.0), vec2(h, 0.0)) - stroke * 0.5;
     }
-    // Close: two crossed strokes.
-    float a = segment(p, vec2(-h, -h), vec2(h, h));
-    float b = segment(p, vec2(-h, h), vec2(h, -h));
-    return min(a, b) - stroke * 0.5;
+    if (index < 2.5) {
+        // Close: two crossed strokes.
+        float a = segment(p, vec2(-h, -h), vec2(h, h));
+        float b = segment(p, vec2(-h, h), vec2(h, -h));
+        return min(a, b) - stroke * 0.5;
+    }
+    // Back: a chevron pointing left.
+    vec2 tip = vec2(-h * 0.5, 0.0);
+    float upper = segment(p, vec2(h * 0.5, -h), tip);
+    float lower = segment(p, tip, vec2(h * 0.5, h));
+    return min(upper, lower) - stroke * 0.5;
+}
+
+// One control over `color`: a disc with its glyph knocked into it. The
+// hovered one lifts rather than changing hue, which reads at any accent
+// colour.
+vec4 control(in vec4 color, in vec2 local, in float index, in float aa) {
+    float lift = abs(index - control_hover) < 0.5 ? 1.35 : 1.0;
+    float disc = coverage(length(local) - control_radius, aa);
+    color = over(color, control_fill * (disc * lift));
+
+    float extent = control_radius * 0.42;
+    float stroke = max(control_radius * 0.18, 1.0);
+    float ink = coverage(glyph(local, index, extent, stroke), aa);
+    return over(color, control_glyph * (ink * disc));
 }
 
 void main() {
@@ -137,20 +164,12 @@ void main() {
     float from_top = p.y - window_offset.y;
     color = over(color, highlight * coverage(from_top - 1.0, aa));
 
-    // The controls. Each is a disc with a glyph knocked into it; the hovered
-    // one lifts rather than changing hue, which reads at any accent colour.
     for (int index = 0; index < 3; index++) {
         vec2 centre = control_origin + vec2(control_spacing * float(index), 0.0);
-        vec2 local = p - centre;
-
-        float lift = abs(float(index) - control_hover) < 0.5 ? 1.35 : 1.0;
-        float disc = coverage(length(local) - control_radius, aa);
-        color = over(color, control_fill * (disc * lift));
-
-        float extent = control_radius * 0.42;
-        float stroke = max(control_radius * 0.18, 1.0);
-        float ink = coverage(glyph(local, float(index), extent, stroke), aa);
-        color = over(color, control_glyph * (ink * disc));
+        color = control(color, p - centre, float(index), aa);
+    }
+    if (back_shown > 0.5) {
+        color = control(color, p - back_origin, 3.0, aa);
     }
 
     vec4 result = color * (alpha * mask);

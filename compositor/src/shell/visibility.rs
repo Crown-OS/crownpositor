@@ -7,13 +7,26 @@
 //! a client hears about a change once, when it starts, and not again as it
 //! animates.
 
-use protocols::crownos_surface_visibility::Visibility;
+use protocols::crownos_surface_visibility::{Visibility, VisibilityState};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::{
-    shell::{Shell, monitor::Monitor, workspace::Workspace},
+    shell::{Shell, monitor::Monitor, tile::Tile, workspace::Workspace},
     utils::id::WindowId,
 };
+
+/// Whether a window shown as `visibility` should be told it is suspended:
+/// anything not drawn at all, or drawn only under a fullscreen window.
+fn suspends(visibility: Visibility) -> bool {
+    visibility.state != VisibilityState::Visible
+}
+
+/// The suspended state a window last told `suspended` has to be told now, if
+/// it changed.
+fn suspension_change(suspended: bool, visibility: Visibility) -> Option<bool> {
+    let now = suspends(visibility);
+    (now != suspended).then_some(now)
+}
 
 impl Shell {
     /// `root` is a toplevel's or a layer surface's root; anything else is
@@ -26,6 +39,31 @@ impl Shell {
             Some(id) => self.window_visibility(id),
             None => self.layer_visibility(root),
         }
+    }
+
+    /// Tells every window that went out of sight or came back into it, with
+    /// the `suspended` toplevel state. Windows whose visibility did not change
+    /// are left alone, and nothing is sent when no window's did.
+    pub fn refresh_suspended(&mut self) {
+        let changes: Vec<(WindowId, bool)> = self
+            .monitors
+            .iter()
+            .flat_map(Monitor::workspaces)
+            .flat_map(Workspace::tiles)
+            .filter_map(|tile| {
+                let visibility = self.window_visibility(tile.id());
+                suspension_change(tile.is_suspended(), visibility).map(|now| (tile.id(), now))
+            })
+            .collect();
+        if changes.is_empty() {
+            return;
+        }
+        for (id, suspended) in changes {
+            if let Some(tile) = self.tile_mut(id) {
+                tile.set_suspended(suspended);
+            }
+        }
+        self.send_configures();
     }
 
     fn layer_visibility(&self, root: &WlSurface) -> Visibility {
@@ -41,6 +79,9 @@ impl Shell {
     }
 
     fn window_visibility(&self, id: WindowId) -> Visibility {
+        if self.is_locked() || self.tile(id).is_none_or(Tile::is_minimized) {
+            return Visibility::HIDDEN;
+        }
         let Some(location) = self.location(id) else {
             return Visibility::HIDDEN;
         };
@@ -91,4 +132,32 @@ fn covered_by_fullscreen(monitor: &Monitor) -> bool {
         .next()
         .is_some_and(|(workspace, _)| covering_window(workspace).is_some());
     covered && shown.next().is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_window_out_of_sight_is_suspended() {
+        assert_eq!(suspension_change(false, Visibility::HIDDEN), Some(true));
+        assert_eq!(suspension_change(false, Visibility::OCCLUDED), Some(true));
+    }
+
+    #[test]
+    fn a_window_back_in_sight_is_resumed() {
+        assert_eq!(suspension_change(true, Visibility::VISIBLE), Some(false));
+        assert_eq!(
+            suspension_change(true, Visibility::thumbnail(0.25)),
+            Some(false),
+            "a thumbnail in the overview is still drawn"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_window_hears_nothing() {
+        assert_eq!(suspension_change(false, Visibility::VISIBLE), None);
+        assert_eq!(suspension_change(true, Visibility::HIDDEN), None);
+        assert_eq!(suspension_change(true, Visibility::OCCLUDED), None);
+    }
 }

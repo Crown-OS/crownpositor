@@ -7,8 +7,9 @@
 //! smithay's pointer dispatch, where taking a grab is allowed.
 //!
 //! The rules are the ones every desktop already has: the controls close,
-//! minimize and maximize; a drag on the bar moves the window; a double-click
-//! toggles maximize; a drag just outside the frame's edge resizes it.
+//! minimize and maximize, and an Android task window's Back goes back; a drag
+//! on the bar moves the window; a double-click toggles maximize; a drag just
+//! outside the frame's edge resizes it.
 
 use std::time::{Duration, Instant};
 
@@ -203,6 +204,9 @@ impl State {
             Control::Minimize => {
                 self.minimize_window(id);
             }
+            Control::Back => {
+                self.send_android_back(id);
+            }
         }
     }
 
@@ -275,7 +279,7 @@ impl State {
             .window_part_under(location)
             .filter(|hit| hit.part == WindowPart::TitleBar)?;
         let tile = self.shell.tile(hit.id)?;
-        let layout = TitleBarLayout::new(tile.target(), tile.insets());
+        let layout = TitleBarLayout::new(tile.target(), tile.insets(), tile.controls());
 
         // The layout is workspace-local and the pointer is global, so the hit
         // test happens in the frame's own space.

@@ -1,5 +1,6 @@
 pub mod affine;
 pub mod app_icon;
+pub mod client_identity;
 pub mod constraint_region;
 pub mod edid;
 pub mod id;

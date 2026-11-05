@@ -120,6 +120,9 @@ pub enum Action {
     ToggleFloating,
     ToggleFullscreen,
     ToggleMaximize,
+    /// Back, to the Android task window holding the keyboard. Anything else
+    /// keeps the key: a browser's Alt+Left still goes back a page.
+    AndroidBack,
 
     /// Flips the focused workspace between tiling and floating.
     ToggleWorkspaceMode,
@@ -242,6 +245,7 @@ impl FromStr for Action {
             "toggle-float" | "toggle-floating" => Ok(Self::ToggleFloating),
             "toggle-fullscreen" => Ok(Self::ToggleFullscreen),
             "toggle-maximize" => Ok(Self::ToggleMaximize),
+            "android-back" => Ok(Self::AndroidBack),
 
             "toggle-mode" | "toggle-workspace-mode" => Ok(Self::ToggleWorkspaceMode),
             "set-mode" => Ok(Self::SetWorkspaceMode(parse_mode(&arg("mode", parts)?)?)),
@@ -298,6 +302,7 @@ mod tests {
         assert_eq!(parse("toggle-fullscreen"), Action::ToggleFullscreen);
         assert_eq!(parse("create-workspace"), Action::CreateWorkspace);
         assert_eq!(parse("remove-workspace"), Action::RemoveWorkspace);
+        assert_eq!(parse("android-back"), Action::AndroidBack);
     }
 
     #[test]

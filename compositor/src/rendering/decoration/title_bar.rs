@@ -1,4 +1,4 @@
-//! The titlebar panel: tint, highlight and the three controls, in one pass.
+//! The titlebar panel: tint, highlight and the controls, in one pass.
 //!
 //! Everything visible here is generated from geometry by
 //! [`TitleBarShader`](crate::shaders::title_bar::TitleBarShader) — there is no
@@ -47,8 +47,10 @@ pub struct TitleBarParams {
     pub radius: f32,
     /// Height of the titlebar band, down from the sheet's top edge.
     pub bar_height: f32,
-    /// Centre of the leftmost control, physical, output-local.
+    /// Centre of the leftmost window control, physical, output-local.
     pub first_control: (f32, f32),
+    /// Centre of the Back control, same space, for a titlebar that has one.
+    pub back_control: Option<(f32, f32)>,
     pub control_pitch: f32,
     pub control_radius: f32,
     pub hovered: Option<Control>,
@@ -102,11 +104,22 @@ impl TitleBar {
                     params.first_control.0 - params.geometry.loc.x as f32,
                     params.first_control.1 - params.geometry.loc.y as f32,
                 ),
+                back_origin: params.back_control.map_or((0.0, 0.0), |(x, y)| {
+                    (
+                        x - params.geometry.loc.x as f32,
+                        y - params.geometry.loc.y as f32,
+                    )
+                }),
+                back_shown: if params.back_control.is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
                 control_spacing: params.control_pitch,
                 control_radius: params.control_radius,
                 control_fill: params.palette.control_fill,
                 control_glyph: params.palette.control_glyph,
-                // Outside `0..3` when nothing is hovered, which is what the
+                // Outside `0..4` when nothing is hovered, which is what the
                 // shader reads as "lift none of them".
                 control_hover: params
                     .hovered

@@ -60,7 +60,7 @@ use crate::{
         blur::{Glass, GlassKind},
         cursor::Cursor,
         decorate::{Backdrop, Glaze, Glazing, Outline, Shadow, TileDecorator},
-        decoration::{Border, FramePalette, TextRenderer},
+        decoration::{Border, FramePalette, TextRenderer, Theme},
         element::CrownElement,
         frame::{Frame, client_area},
         unstretched::Unstretched,
@@ -92,6 +92,7 @@ pub struct FrameStyle<'a> {
     /// into the output-local space the damage tracker works in.
     pub origin: Point<i32, Logical>,
     pub dark: bool,
+    theme: Theme,
     focused_palette: FramePalette,
     unfocused_palette: FramePalette,
     pub text: &'a mut TextRenderer,
@@ -115,6 +116,7 @@ impl<'a> FrameStyle<'a> {
             scale,
             origin,
             dark: appearance.dark_mode,
+            theme: Theme::of(appearance),
             focused_palette: FramePalette::new(appearance, true),
             unfocused_palette: FramePalette::new(appearance, false),
             text,
@@ -129,6 +131,14 @@ impl<'a> FrameStyle<'a> {
             self.focused_palette
         } else {
             self.unfocused_palette
+        }
+    }
+
+    /// `tile`'s frame colours: the theme's, or its Android app's own.
+    fn palette_for(&self, tile: &Tile, focused: bool) -> FramePalette {
+        match tile.title_color() {
+            Some(color) => FramePalette::tinted(self.theme, focused, color),
+            None => self.palette(focused),
         }
     }
 
