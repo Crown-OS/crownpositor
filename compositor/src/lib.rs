@@ -34,14 +34,8 @@ pub fn run() -> anyhow::Result<()> {
     state.configure_capture_sync();
     state.init_lock_screen();
 
-    // Point child processes at our socket rather than the host compositor.
     // Safety: no other thread is reading the environment yet.
-    unsafe {
-        std::env::set_var("WAYLAND_DISPLAY", &state.common.socket_name);
-        if std::env::var_os("XDG_CURRENT_DESKTOP").is_none() {
-            std::env::set_var("XDG_CURRENT_DESKTOP", state::session_env::DESKTOP_NAME);
-        }
-    }
+    unsafe { state::session_env::enter_wayland_session(&state.common.socket_name) };
     tracing::info!(socket = ?state.common.socket_name, "crownpositor is running");
 
     // A nested session must not repoint the host's activated services at it.
