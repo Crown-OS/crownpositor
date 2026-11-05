@@ -163,7 +163,7 @@ where
 
     /// The '+' on the add tile: two bars, crisp at any size.
     fn plus(&mut self, ids: &TileIds, tile: Rectangle<f64, Logical>, alpha: f32) {
-        let arm = tile.size.w.min(tile.size.h) * 0.32;
+        let arm = tile.size.w.min(tile.size.h) * 0.2;
         let stroke = (arm * 0.12).max(2.0);
         let Point { x, y, .. } = scene::centre(tile);
         let bars = [
