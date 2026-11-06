@@ -1,7 +1,6 @@
 //! Windows bent out of shape on the GPU: poured through a neck into their icon,
 //! crumbled into dust that falls away, or stretched into a drop of liquid
-//! glass that carries their icon. A drag's icon is turned the same way as it
-//! swings from the pointer.
+//! glass that carries their icon.
 //!
 //! A mesh can only bend one texture, so the decorated window is first painted
 //! into a canvas of its own, then drawn through a raw GL program that builds
@@ -14,11 +13,9 @@ mod dust;
 mod element;
 mod genie;
 mod liquid;
-mod swing;
 
 pub use canvas::WarpCanvases;
 pub use element::WarpElement;
-pub use swing::{SwingRequest, swing};
 
 use smithay::{
     backend::renderer::gles::GlesRenderer,

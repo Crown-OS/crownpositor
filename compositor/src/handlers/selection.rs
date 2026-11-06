@@ -62,10 +62,7 @@ impl WaylandDndGrabHandler for State {
             source.cancel();
             return;
         };
-        let pointer_location = self.input.pointer_location;
-        let animations = self.config.current.appearance.animations;
-        self.input.cursor.drag_icon =
-            icon.map(|icon| DragIcon::new(icon, pointer_location, animations));
+        self.input.cursor.drag_icon = icon.map(DragIcon::new);
         let toplevel_drag = (&source as &dyn Any)
             .downcast_ref::<WlDataSource>()
             .and_then(|data_source| {

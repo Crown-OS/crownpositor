@@ -21,7 +21,7 @@ use crate::{
         corners::CornerMemory,
         morph::{Content, morph_elements},
         rounded::GlesDecorator,
-        warp::{WarpRequest, carried::CarriedIcons, swing::SwingCanvas},
+        warp::{WarpRequest, carried::CarriedIcons},
     },
     shell::morph::Morph,
     utils::id::WindowId,
@@ -32,13 +32,12 @@ use crate::{
 const PAD: i32 = 2;
 const TRANSPARENT: [f32; 4] = [0.0; 4];
 
-/// One output's canvases, kept only while a warp draws from them, the
-/// launcher icons its morphs carry and the icon a drag swings.
+/// One output's canvases, kept only while a warp draws from them, and the
+/// launcher icons its morphs carry.
 #[derive(Debug, Default)]
 pub struct WarpCanvases {
     canvases: HashMap<WindowId, Canvas>,
     pub(super) carried: CarriedIcons,
-    pub(super) swing: Option<SwingCanvas>,
 }
 
 #[derive(Debug)]
@@ -67,7 +66,6 @@ impl WarpCanvases {
         self.canvases
             .retain(|_, canvas| mem::take(&mut canvas.used));
         self.carried.begin_frame();
-        self.swing.take_if(|canvas| !canvas.used_last_frame());
     }
 
     /// The window `request` names, painted as it stands. A live window is

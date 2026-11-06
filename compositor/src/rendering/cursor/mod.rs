@@ -21,7 +21,6 @@
 pub mod builtin;
 pub mod drag_icon;
 pub mod hyprcursor;
-mod pendulum;
 pub mod source;
 pub mod xcursor;
 
@@ -48,7 +47,6 @@ use smithay::{
 };
 
 use crate::rendering::{
-    Elements,
     cursor::{
         builtin::BuiltinSource,
         drag_icon::DragIcon,
@@ -56,7 +54,6 @@ use crate::rendering::{
         source::{CursorSource, RawFrame, RawImage, RawShape},
         xcursor::XCursorSource,
     },
-    decorate::TileDecorator,
     surface_tree::{SurfaceElement, surface_elements},
     unstretched::Unstretched,
 };
@@ -297,19 +294,17 @@ impl Cursor {
     /// `pointer` is global logical; `monitor` is the output being drawn and its
     /// origin is what makes the result output-local. Nothing is pushed when the
     /// pointer is on another output or a client asked for no cursor at all.
-    #[allow(clippy::too_many_arguments)]
-    pub fn render<R, D>(
+    pub fn render<R, E>(
         &mut self,
-        elements: &mut Elements<R, D>,
+        elements: &mut Vec<E>,
         renderer: &mut R,
-        decorator: &mut D,
         output_location: Point<i32, Logical>,
         pointer: Point<f64, Logical>,
         scale: Scale<f64>,
     ) where
         R: Renderer + ImportAll + ImportMem,
         R::TextureId: Send + Clone + 'static,
-        D: TileDecorator<R>,
+        E: From<SurfaceElement<R>> + From<Unstretched<MemoryRenderBufferRenderElement<R>>>,
     {
         self.refresh();
         if self.suppressed {
@@ -317,7 +312,7 @@ impl Cursor {
         }
         let local = pointer - output_location.to_f64();
         self.render_pointer(elements, renderer, local, scale);
-        self.render_drag_icon(elements, renderer, decorator, local, pointer, scale);
+        self.render_drag_icon(elements, renderer, local, scale);
     }
 
     fn render_pointer<R, E>(
