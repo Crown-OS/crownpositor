@@ -1,8 +1,11 @@
 //! Pictures the lock screen shows: decoded with hard limits, so a hostile or
 //! merely huge file costs bounded memory, and premultiplied for compositing.
 
+mod mask;
+
 use std::io::Cursor;
 
+use crownos_config::schema::LockBackground;
 use image::{ImageReader, Limits as DecodeLimits};
 use lockscene::Limits;
 use resvg::usvg;
@@ -11,13 +14,21 @@ use tiny_skia::{FilterQuality, IntSize, Pixmap, PixmapPaint, Transform};
 
 use crate::util::blur::box_blur;
 
+pub use crate::util::blur::gaussian_blur;
+pub use mask::{MAX_DEPTH_OCCLUSION, Mask, clock_occlusion, hides_clock, occlusion, subject};
+
+/// How much further than covering the output crownpaper zooms the desktop
+/// wallpaper about its centre (its `REST_ZOOM`), so a lock drawn over the
+/// live wallpaper frames what it cut from the picture the same way.
+pub const DESKTOP_WALLPAPER_ZOOM: f32 = 1.02;
+
 /// Longest side a vector picture is rasterised at.
 const SVG_SIDE: f32 = 3840.0;
-/// The blurred backdrop is drawn at this fraction of the output and scaled up
-/// on the GPU: a blur has no detail to lose.
-const BACKDROP_DOWNSCALE: u32 = 8;
-/// Blur radius, in downscaled pixels, at full `lock.blur`.
-const BACKDROP_RADIUS: f32 = 6.0;
+/// A blurred copy is made at this fraction of the size it covers and scaled
+/// up when drawn: a blur has no detail to lose.
+const BLURRED_DOWNSCALE: u32 = 8;
+/// Pixels of sigma, at the blurred copy's size, below which no copy is made.
+const LEAST_BLUR: f32 = 0.5;
 
 #[derive(Debug, Error)]
 pub enum ImageError {
@@ -31,6 +42,16 @@ pub enum ImageError {
     Svg(#[from] usvg::Error),
     #[error("the picture is empty")]
     Empty,
+}
+
+/// How far past covering the output the lock's `background` is zoomed at
+/// rest, so what is cut from it lines up with it: crownpaper's zoom for the
+/// desktop wallpaper, none for a picture or a colour of the lock's own.
+pub fn background_zoom(background: &LockBackground) -> f32 {
+    match background {
+        LockBackground::Desktop => DESKTOP_WALLPAPER_ZOOM,
+        LockBackground::Image(_) | LockBackground::Token(_) => 1.0,
+    }
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Pixmap, ImageError> {
@@ -48,7 +69,9 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
     head.starts_with("<svg") || (head.starts_with("<?xml") && head.contains("<svg"))
 }
 
-fn decode_raster(bytes: &[u8]) -> Result<Pixmap, ImageError> {
+/// A raster picture's reader, refusing one whose header claims more than
+/// [`Limits::IMAGE_PIXELS`] before anything is decoded.
+fn limited_reader(bytes: &[u8]) -> Result<ImageReader<Cursor<&[u8]>>, ImageError> {
     let (width, height) = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()?
         .into_dimensions()?;
@@ -61,7 +84,11 @@ fn decode_raster(bytes: &[u8]) -> Result<Pixmap, ImageError> {
     limits.max_image_height = Some(height);
     limits.max_alloc = Some(Limits::IMAGE_PIXELS * 4 * 2);
     reader.limits(limits);
-    let rgba = reader.decode()?.into_rgba8();
+    Ok(reader)
+}
+
+fn decode_raster(bytes: &[u8]) -> Result<Pixmap, ImageError> {
+    let rgba = limited_reader(bytes)?.decode()?.into_rgba8();
     let (width, height) = rgba.dimensions();
     let mut data = rgba.into_raw();
     for pixel in data.chunks_exact_mut(4) {
@@ -124,25 +151,30 @@ pub fn blur(pixmap: &mut Pixmap, radius: usize) {
     box_blur(pixmap, radius);
 }
 
-/// A small, blurred copy of `source` covering `width` × `height` once scaled
-/// up, or `None` when `strength` asks for no blur.
-pub fn backdrop(source: &Pixmap, width: u32, height: u32, strength: f32) -> Option<Pixmap> {
-    let radius = (BACKDROP_RADIUS * strength.clamp(0.0, 1.0)).round() as usize;
-    if radius == 0 {
+/// A small copy of `source` covering `width` × `height` once scaled up,
+/// blurred like a gaussian of `sigma` of those pixels: the wallpaper behind
+/// the prompt, for a host that blurs on the CPU. `None` when `sigma` asks
+/// for no blur.
+pub fn blurred(source: &Pixmap, width: u32, height: u32, sigma: f32) -> Option<Pixmap> {
+    let small_sigma = sigma / BLURRED_DOWNSCALE as f32;
+    if small_sigma < LEAST_BLUR {
         return None;
     }
     let mut small = cover(
         source,
-        (width / BACKDROP_DOWNSCALE).max(1),
-        (height / BACKDROP_DOWNSCALE).max(1),
+        (width / BLURRED_DOWNSCALE).max(1),
+        (height / BLURRED_DOWNSCALE).max(1),
     )?;
-    box_blur(&mut small, radius);
+    gaussian_blur(&mut small, small_sigma);
     Some(small)
 }
 
 /// Darkens premultiplied `pixmap` as a black wash at `amount` over it would,
 /// leaving its alpha alone.
 pub fn darken(pixmap: &mut Pixmap, amount: f32) {
+    if amount <= 0.0 {
+        return;
+    }
     let keep = (1.0 - amount.clamp(0.0, 1.0)) * 255.0;
     let keep = keep.round() as u32;
     for pixel in pixmap.data_mut().chunks_exact_mut(4) {
@@ -218,9 +250,18 @@ mod tests {
         let source = decode(&png(40, 10)).expect("decodes");
         let covered = cover(&source, 10, 10).expect("fits");
         assert!(covered.pixels().iter().all(|pixel| pixel.alpha() > 0));
-        assert!(backdrop(&source, 80, 80, 0.0).is_none());
-        let blurred = backdrop(&source, 80, 80, 1.0).expect("blurs");
-        assert_eq!((blurred.width(), blurred.height()), (10, 10));
+        assert!(blurred(&source, 80, 80, 0.0).is_none());
+        let small = blurred(&source, 80, 80, 40.0).expect("blurs");
+        assert_eq!((small.width(), small.height()), (10, 10));
+    }
+
+    #[test]
+    fn only_the_desktop_wallpaper_is_zoomed_past_covering() {
+        assert_eq!(
+            background_zoom(&LockBackground::Desktop),
+            DESKTOP_WALLPAPER_ZOOM
+        );
+        assert_eq!(background_zoom(&LockBackground::Image("a.png".into())), 1.0);
     }
 
     #[test]

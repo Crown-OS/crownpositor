@@ -46,6 +46,7 @@ impl<S: Element> GlassGlyph<S> {
         let glass = glyph.glass.as_ref()?;
         let program = LockGlyphShader::get(renderer)?.glass;
         let geometry = glass.geometry;
+        let strength = session.config.strength_for_sigma(glass.frost);
         let mut hasher = std::hash::DefaultHasher::new();
         inner.id().hash(&mut hasher);
         glyph.fingerprint().hash(&mut hasher);
@@ -61,7 +62,7 @@ impl<S: Element> GlassGlyph<S> {
                 radius: 0.0,
                 glass: Glass::default(),
                 alpha: inner.alpha(),
-                strength: 1.0,
+                strength,
             },
         )?;
         Some(Self {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::transition::{LayerStyle, Moments, PROMPT_BLUR};
 
 fn flow(now: Instant) -> LockFlow {
     LockFlow::new(&Lock::default(), now)
@@ -108,17 +109,55 @@ fn layers_trade_places_on_reveal() {
     let frame = flow.frame(rested);
     assert_eq!(frame.clock, LayerStyle::REST);
     assert!(!frame.prompt.is_visible());
-    assert_eq!(frame.backdrop, 1.0);
+    assert_eq!(frame.wallpaper, LayerStyle::REST);
 
     let _ = flow.pointer(rested);
     let revealed = flow.frame(later(rested, 1000));
-    assert!(!revealed.clock.is_visible());
-    assert_eq!(revealed.prompt, LayerStyle::REST);
+    assert_eq!(revealed, Moments::PROMPT.frame(0.0));
 
     let _ = flow.key(KeyInput::Cancel, later(rested, 1000));
     let hidden = flow.frame(later(rested, 2000));
-    assert_eq!(hidden.clock, LayerStyle::REST);
-    assert!(!hidden.prompt.is_visible());
+    assert_eq!(hidden, Moments::CLOCK.frame(0.0));
+}
+
+#[test]
+fn locking_covers_the_desktop_at_once_and_lands_at_rest() {
+    let now = Instant::now();
+    let flow = flow(now);
+    let start = flow.frame(now);
+    assert!(!start.clock.is_visible());
+    assert_eq!(start.wallpaper.opacity, 1.0);
+    assert!(flow.is_animating(later(now, 100)));
+    let landed = later(now, 600);
+    assert!(!flow.is_animating(landed));
+    assert_eq!(flow.frame(landed), Moments::CLOCK.frame(0.0));
+}
+
+#[test]
+fn turning_back_mid_reveal_is_continuous() {
+    let now = Instant::now();
+    let mut flow = LockFlow::settled(&Lock::default(), now);
+    let _ = flow.pointer(now);
+    let turn = later(now, 150);
+    let before = flow.frame(turn);
+    assert!(before.prompt.is_visible() && before.clock.is_visible());
+    let _ = flow.key(KeyInput::Cancel, turn);
+    assert_eq!(flow.frame(turn), before, "no jump where it turns");
+    let step = flow.frame(later(now, 158));
+    let rise = Moments::PROMPT.frame(0.0).clock.offset[1];
+    for (was, is) in [
+        (before.clock.opacity, step.clock.opacity),
+        (before.clock.offset[1] / rise, step.clock.offset[1] / rise),
+        (
+            before.wallpaper.blur / PROMPT_BLUR,
+            step.wallpaper.blur / PROMPT_BLUR,
+        ),
+    ] {
+        assert!((was - is).abs() < 0.1, "{was} -> {is}");
+    }
+    let settled = later(turn, 1000);
+    assert!(!flow.is_animating(settled));
+    assert_eq!(flow.frame(settled), Moments::CLOCK.frame(0.0));
 }
 
 #[test]
@@ -126,17 +165,28 @@ fn a_settled_lock_has_nothing_left_to_animate() {
     let now = Instant::now();
     let flow = LockFlow::settled(&Lock::default(), now);
     assert!(!flow.is_animating(now));
-    assert_eq!(flow.frame(now).backdrop, 1.0);
+    assert_eq!(flow.frame(now), Moments::CLOCK.frame(0.0));
 }
 
 #[test]
-fn dismissal_fades_everything_and_lifts_the_backdrop() {
+fn a_finished_dismissal_is_invisible() {
     let now = Instant::now();
     let mut flow = LockFlow::settled(&Lock::default(), now);
     type_text(&mut flow, "pw", now);
-    let _ = flow.key(KeyInput::Submit, now);
-    flow.finish(AuthOutcome::Accepted, now);
-    let gone = flow.frame(later(now, 5000));
+    let typed = later(now, 1000);
+    let _ = flow.key(KeyInput::Submit, typed);
+    flow.finish(AuthOutcome::Accepted, typed);
+    assert_eq!(
+        flow.frame(typed),
+        Moments::PROMPT.frame(0.0),
+        "starts at rest"
+    );
+    assert!(flow.is_animating(later(typed, 100)));
+    assert!(!flow.is_finished(later(typed, 200)));
+    let gone_at = later(typed, 600);
+    assert!(flow.is_finished(gone_at));
+    let gone = flow.frame(gone_at);
     assert!(!gone.clock.is_visible() && !gone.prompt.is_visible());
-    assert_eq!(gone.backdrop, 0.0);
+    assert!(!gone.wallpaper.is_visible());
+    assert_eq!(gone.darkening(0.5), 0.0);
 }

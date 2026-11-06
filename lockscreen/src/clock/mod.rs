@@ -1,3 +1,4 @@
+mod glass;
 mod morph;
 
 use std::{fmt::Write, time::Duration};
@@ -9,13 +10,14 @@ use chrono::{
 use crownos_config::schema::Lock;
 
 pub use crate::util::homography::Homography;
+pub use glass::{
+    FROST_DARKENING, FROST_SIGMA, Glass, RIM_REACH, RIM_WHITE, TOP_SHINE_REACH, frost_sigma, rim,
+    rim_at, rim_reach,
+};
 pub use morph::{MORPH_BLUR, MORPH_DURATION, morph};
 
-/// How white glass digits wash at their top and at their baseline.
-pub const GLASS_TINT: [f32; 2] = [0.28, 0.9];
-
 const DEFAULT_TIME: &str = "%H:%M";
-const DEFAULT_DATE: &str = "%A, %e %B";
+const DEFAULT_DATE: &str = "%a, %b %-d";
 
 /// The clock and date as they read right now.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
@@ -116,7 +118,7 @@ mod tests {
         };
         let face = ClockFace::at(&seconds, noon());
         assert_eq!(face.groups(), ("12", "34:56"));
-        assert_eq!(face.date, "Friday, 16 October");
+        assert_eq!(face.date, "Fri, Oct 16");
         let bare = ClockFace {
             time: "1234".into(),
             date: String::new(),

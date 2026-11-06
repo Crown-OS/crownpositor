@@ -2,9 +2,10 @@
 
 use std::time::Duration;
 
-use crownos_config::schema::Easing;
-
-use crate::transition::{Curve, LayerStyle};
+use crate::{
+    transition::LayerStyle,
+    util::easing::{ease_in_out, ease_out},
+};
 
 pub const MORPH_DURATION: Duration = Duration::from_millis(520);
 /// Logical pixels, at the height of the change.
@@ -20,8 +21,8 @@ const SWELL: f32 = 0.06;
 /// The leaving digit and the arriving one, `elapsed` into a change.
 pub fn morph(elapsed: Duration) -> (LayerStyle, LayerStyle) {
     let time = elapsed.as_secs_f32() / MORPH_DURATION.as_secs_f32();
-    let gone = Easing::EaseOut.ease(time / LEAVE_SPAN);
-    let here = Easing::EaseInOut.ease((time - ENTER_START) / (1.0 - ENTER_START));
+    let gone = ease_out(time / LEAVE_SPAN);
+    let here = ease_in_out((time - ENTER_START) / (1.0 - ENTER_START));
     let leaving = LayerStyle {
         opacity: 1.0 - gone,
         blur: MORPH_BLUR * gone,

@@ -1,0 +1,29 @@
+[package]
+name = "depthcut"
+description = "Cuts the subject out of a wallpaper into a cached mask, in a helper process that frees the model by exiting"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+# The helper binary and its model runtime. Hosts that only look masks up and
+# start the helper leave it off, so none of it is compiled into them.
+helper = ["dep:anyhow", "dep:image", "dep:sha2", "dep:tract-linalg", "dep:tract-onnx"]
+
+[dependencies]
+thiserror = { workspace = true }
+
+anyhow = { workspace = true, optional = true }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"], optional = true }
+sha2 = { version = "0.10.9", optional = true }
+tract-linalg = { version = "=0.23.9", features = ["multithread-mm"], optional = true }
+tract-onnx = { version = "=0.23.9", default-features = false, optional = true }
+
+[[bin]]
+name = "crown-depthcut"
+path = "src/main.rs"
+required-features = ["helper"]
+
+[[test]]
+name = "real_model"
+required-features = ["helper"]

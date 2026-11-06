@@ -43,17 +43,21 @@ uniform sampler2D scene_tex;
 uniform vec2 scene_size;
 uniform vec2 half_pixel;
 uniform float offset;
-// The lock's dim, when the glass behind the clock already carries it.
-uniform float dim;
-// How white the glass washes at the glyph's top, and at its baseline.
-uniform vec2 wash;
+// ColorOS 17's glass, as `lockscreen::clock::Glass` fits it: the frost times
+// `gain` — and whatever undoes the darkening the pyramid lifted with it —
+// plus `white`, plus `top_shine` fading out `top_shine_reach` of the
+// way down, plus `rim_white` along the inner rim, clamped. On the stored,
+// sRGB-encoded values, as Skia blends plus-lighter.
+uniform float gain;
+uniform float white;
+uniform float top_shine;
+uniform float top_shine_reach;
+uniform float rim_white;
 // The sprite rows the glyph's top and baseline sit on.
 uniform vec2 rows;
-// One and a half pixels, in sprite rows: how far the lit top edge reaches.
-uniform float edge;
-
-// Brightness of the lit top edge.
-const float SHINE = 0.45;
+// How deep the inner rim reaches, `lockscreen::clock::rim_reach`, in sprite
+// UV per axis.
+uniform vec2 rim_reach;
 
 vec2 cl(vec2 uv) {
     return clamp(uv, half_pixel, vec2(1.0) - half_pixel);
@@ -107,10 +111,16 @@ void main() {
     // The sprite is the glyph's coverage in white; the colour is the glass.
     float coverage = color.a;
     float down = clamp((uv.y - rows.x) / max(rows.y - rows.x, 0.0001), 0.0, 1.0);
-    vec3 frost = upsample(gl_FragCoord.xy / scene_size) * (1.0 - dim);
-    vec3 face = mix(frost, vec3(1.0), mix(wash.x, wash.y, down));
-    float lit = clamp(coverage - glyph(uv - vec2(0.0, edge)).a, 0.0, 1.0);
-    face = mix(face, vec3(1.0), lit * SHINE);
+    // `lockscreen::clock::rim_at`, which the preview fills its glass with.
+    float eroded = min(
+        min(glyph(uv + vec2(rim_reach.x, 0.0)).a, glyph(uv - vec2(rim_reach.x, 0.0)).a),
+        min(glyph(uv + vec2(0.0, rim_reach.y)).a, glyph(uv - vec2(0.0, rim_reach.y)).a));
+    float rim = clamp(coverage - eroded, 0.0, 1.0);
+    vec3 frost = upsample(gl_FragCoord.xy / scene_size);
+    float lift = white
+        + top_shine * (1.0 - smoothstep(0.0, top_shine_reach, down))
+        + rim_white * rim;
+    vec3 face = min(frost * gain + lift, vec3(1.0));
     color = vec4(face * coverage, coverage);
 #endif
 

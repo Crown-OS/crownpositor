@@ -1,4 +1,4 @@
-/// How a layer is drawn at one instant: what transitions animate.
+/// How a layer is drawn at one instant: what the choreography animates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerStyle {
     pub opacity: f32,

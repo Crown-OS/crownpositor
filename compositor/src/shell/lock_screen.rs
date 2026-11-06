@@ -14,6 +14,7 @@ use lockscreen::{
     clock::MORPH_DURATION,
     flow::LockFlow,
     layout::{Content, Layer, Part, Rect},
+    tiny_skia::Pixmap,
 };
 use smithay::{
     backend::renderer::{element::Id, element::memory::MemoryRenderBuffer},
@@ -50,11 +51,29 @@ pub struct OutputVisuals {
     pub sprites: Vec<PreparedSprite>,
     /// Clock glyphs blurring away, and when they started to.
     pub leaving: Vec<(PreparedSprite, Instant)>,
-    /// The background picture, covering the output pixel for pixel.
-    pub picture: Option<MemoryRenderBuffer>,
-    /// The background's subject, framed like the picture, to stand in front
-    /// of the clock.
-    pub depth: Option<MemoryRenderBuffer>,
+    /// The background picture.
+    pub picture: Option<OutputPicture>,
+    /// The background's subject, cut out of it and framed like it, to stand
+    /// in front of the clock.
+    pub subject: Option<OutputSubject>,
+}
+
+/// A picture covering one output pixel for pixel.
+#[derive(Debug)]
+pub struct OutputPicture {
+    pub buffer: MemoryRenderBuffer,
+    pub pixels: [u32; 2],
+}
+
+/// The background's subject on one output.
+#[derive(Debug)]
+pub struct OutputSubject {
+    pub picture: OutputPicture,
+    /// The subject's coverage at a fraction of the output's size, to measure
+    /// the clock against wherever it is laid out.
+    pub probe: Pixmap,
+    /// It would hide too much of the clock where it is now, and is not drawn.
+    pub hides_clock: bool,
 }
 
 impl OutputVisuals {
@@ -88,11 +107,8 @@ pub struct ActiveLock {
     pub flow: LockFlow,
     pub backdrop: Backdrop,
     pub dim: f32,
-    pub blur: f32,
     /// How far the clock's corners are pulled, as its settings last said.
     pub clock_warp: [[f32; 2]; 4],
-    /// The clock's digits are frosted glass.
-    pub clock_glass: bool,
     pub caps_lock: bool,
     pub visuals: HashMap<OutputId, OutputVisuals>,
     /// Layout or pixels are stale on every output.
@@ -101,14 +117,14 @@ pub struct ActiveLock {
     pub ids: LockIds,
 }
 
-/// Stable element ids, so the damage tracker sees the same backdrop, dim and
-/// glass from one frame to the next.
+/// Stable element ids, so the damage tracker sees the same floor, colour,
+/// dim and blur from one frame to the next.
 #[derive(Debug)]
 pub struct LockIds {
     pub base: Id,
     pub color: Id,
     pub dim: Id,
-    pub glass: Id,
+    pub blur: Id,
 }
 
 impl Default for LockIds {
@@ -117,7 +133,7 @@ impl Default for LockIds {
             base: Id::new(),
             color: Id::new(),
             dim: Id::new(),
-            glass: Id::new(),
+            blur: Id::new(),
         }
     }
 }
@@ -143,14 +159,12 @@ impl LockScreen {
         })
     }
 
-    pub fn begin(&mut self, flow: LockFlow, backdrop: Backdrop, dim: f32, blur: f32) {
+    pub fn begin(&mut self, flow: LockFlow, backdrop: Backdrop, dim: f32) {
         self.active = Some(ActiveLock {
             flow,
             backdrop,
             dim,
-            blur,
             clock_warp: [[0.0; 2]; 4],
-            clock_glass: false,
             caps_lock: false,
             visuals: HashMap::new(),
             dirty: true,

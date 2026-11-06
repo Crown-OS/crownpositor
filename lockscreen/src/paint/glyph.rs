@@ -1,13 +1,17 @@
 use tiny_skia::{Pixmap, Point, Transform};
 
 use crate::{
-    layout::{GLOW_SPREAD, GLOW_SWELL, GlyphPaint, GlyphRun, SHADOW_DROP, SHADOW_SPREAD, Shaper},
+    clock::{Glass, TOP_SHINE_REACH},
+    layout::{GlyphPaint, GlyphRun, SHADOW_DROP, SHADOW_SPREAD, Shaper},
     util::blur::box_blur,
 };
 
-use super::shape::{fill, gradient_fill, stroke};
+use super::shape::{fill, gradient_fill};
 
 const WHITE: [f32; 4] = [1.0; 4];
+/// Of the shadow's darkness: what is left at the glyph's top, so it gathers
+/// at the base.
+const SHADOW_TOP: f32 = 0.5;
 
 /// `run`'s outline, stretched, standing on the bottom of its box `pad`
 /// pixels in from the pixmap's edge.
@@ -16,9 +20,10 @@ pub(super) fn draw(shaper: &mut Shaper, pixmap: &mut Pixmap, run: &GlyphRun, sca
         return;
     };
     let top = pad;
-    let baseline = top + (shape.cap_height * shape.stretch * scale).ceil();
+    let height = (shape.cap_height * shape.stretch * scale).ceil();
+    let baseline = top + height;
     let drop = match run.paint {
-        GlyphPaint::Shadow { .. } => SHADOW_DROP * run.size * scale,
+        GlyphPaint::Shadow { .. } => SHADOW_DROP * height,
         _ => 0.0,
     };
     let place = Transform::from_row(
@@ -33,30 +38,29 @@ pub(super) fn draw(shaper: &mut Shaper, pixmap: &mut Pixmap, run: &GlyphRun, sca
         return;
     };
     match run.paint {
-        GlyphPaint::Face { top: upper, bottom } if upper == bottom => fill(pixmap, &path, upper),
-        GlyphPaint::Face { top: upper, bottom } => gradient_fill(
-            pixmap,
-            &path,
-            Point::from_xy(0.0, top),
-            Point::from_xy(0.0, baseline),
-            &[upper, bottom],
-        ),
-        GlyphPaint::Sheen { base, light } => gradient_fill(
-            pixmap,
-            &path,
-            Point::from_xy(pad, top),
-            Point::from_xy(pad + shape.advance * scale, baseline),
-            &[base, light, base],
-        ),
+        GlyphPaint::Glass { whiteness } => {
+            let glass = Glass::at(whiteness);
+            let white = |down| [1.0, 1.0, 1.0, glass.white_at(down, 0.0)];
+            let shine_end = top + (baseline - top) * TOP_SHINE_REACH;
+            gradient_fill(
+                pixmap,
+                &path,
+                Point::from_xy(0.0, top),
+                Point::from_xy(0.0, shine_end),
+                &[white(0.0), white(TOP_SHINE_REACH)],
+            );
+        }
         GlyphPaint::Coverage => fill(pixmap, &path, WHITE),
         GlyphPaint::Shadow { alpha } => {
-            fill(pixmap, &path, [0.0, 0.0, 0.0, alpha]);
-            box_blur(pixmap, (SHADOW_SPREAD * run.size * scale).round() as usize);
-        }
-        GlyphPaint::Glow { color } => {
-            fill(pixmap, &path, color);
-            stroke(pixmap, &path, GLOW_SWELL * run.size * scale, color);
-            box_blur(pixmap, (GLOW_SPREAD * run.size * scale).round() as usize);
+            let shade = |share: f32| [0.0, 0.0, 0.0, alpha * share];
+            gradient_fill(
+                pixmap,
+                &path,
+                Point::from_xy(0.0, top + drop),
+                Point::from_xy(0.0, baseline + drop),
+                &[shade(SHADOW_TOP), shade(1.0)],
+            );
+            box_blur(pixmap, (SHADOW_SPREAD * height).round() as usize);
         }
     }
 }

@@ -278,6 +278,11 @@ fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
         winit.corners.begin_frame();
         winit.canvases.begin_frame();
         let content = winit.blur.content();
+        let blur_config = if shell.lock_screen.is_active() {
+            blur_config.for_lock()
+        } else {
+            blur_config
+        };
         let blur = blur_config.enabled.then_some(BlurSession {
             cache: &mut winit.blur,
             config: blur_config,

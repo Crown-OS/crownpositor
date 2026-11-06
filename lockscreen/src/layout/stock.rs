@@ -1,6 +1,6 @@
 //! The layout drawn when no theme supplies one, built from the settings.
 
-use crownos_config::schema::{Anchor, ClockStyle, LockLayout, LockSlotPosition};
+use crownos_config::schema::{Anchor, ClockLayout, LockSlotPosition};
 use lockscene::Placeholder;
 use taffy::{
     AlignItems, Display, JustifyContent, Line, Size, Style,
@@ -19,13 +19,13 @@ const PROMPT_GAP: f32 = 14.0;
 const SLOT_GAP: f32 = 12.0;
 const EDGE_MARGIN: f32 = 48.0;
 const BOTTOM_MARGIN: f32 = 32.0;
-/// Of the output's height, above a centred clock.
-const CLOCK_TOP: f32 = 0.12;
-/// Of the output's width, left of a left-aligned clock.
+/// Of the output's height, above the clock: where ColorOS's date tops a
+/// centred clock, so its digits start 0.147 of the way down.
+const CLOCK_TOP: f32 = 0.1;
+/// Of the output's width, left of a clock laid out at the left.
 const CLOCK_LEFT: f32 = 0.08;
-const BOTTOM_CLOCK_INSET: [f32; 2] = [64.0, 88.0];
 
-pub(super) fn layout(cx: &Context<'_>, size: [f32; 2]) -> Block {
+pub(super) fn layout(cx: &Context<'_>) -> Block {
     let mut root = Block::new(Style {
         display: Display::Grid,
         grid_template_rows: vec![fr(1.0)],
@@ -36,7 +36,7 @@ pub(super) fn layout(cx: &Context<'_>, size: [f32; 2]) -> Block {
         },
         ..Style::default()
     });
-    root.children = [clock_group(cx, size), prompt_group(cx), bottom_group(cx)]
+    root.children = [clock_group(cx), prompt_group(cx), bottom_group(cx)]
         .into_iter()
         .map(|mut group| {
             group.style.grid_row = Line {
@@ -53,35 +53,22 @@ pub(super) fn layout(cx: &Context<'_>, size: [f32; 2]) -> Block {
     root
 }
 
-fn clock_group(cx: &Context<'_>, size: [f32; 2]) -> Block {
-    let config = &cx.scene.config;
-    let centred = config.layout == LockLayout::Center;
+/// The clock with its date, top-centre when centred and at the top left
+/// otherwise, between the slots placed around it.
+fn clock_group(cx: &Context<'_>) -> Block {
+    let [width, height] = cx.output;
+    let centred = cx.scene.config.clock.layout == ClockLayout::Centered;
     let inherited = Inherited::root(cx, centred);
-    let (align, justify, padding) = match config.layout {
-        LockLayout::Center => (
-            AlignItems::CENTER,
-            JustifyContent::START,
-            edges(0.0, size[1] * CLOCK_TOP, 0.0, 0.0),
-        ),
-        LockLayout::Left => (
-            AlignItems::START,
-            JustifyContent::CENTER,
-            edges(size[0] * CLOCK_LEFT, 0.0, 0.0, 0.0),
-        ),
-        LockLayout::Bottom => (
-            AlignItems::START,
-            JustifyContent::END,
-            edges(BOTTOM_CLOCK_INSET[0], 0.0, 0.0, BOTTOM_CLOCK_INSET[1]),
-        ),
+    let (align, left) = if centred {
+        (AlignItems::CENTER, 0.0)
+    } else {
+        (AlignItems::START, width * CLOCK_LEFT)
     };
 
     let mut children = slots(cx, LockSlotPosition::AboveClock, &inherited);
     let replacement = slots(cx, LockSlotPosition::Clock, &inherited);
     if replacement.is_empty() {
         children.extend(live::block(cx, Placeholder::Clock, &inherited));
-        if config.clock_style != ClockStyle::Minimal {
-            children.extend(live::block(cx, Placeholder::Date, &inherited));
-        }
     } else {
         children.extend(replacement);
     }
@@ -97,8 +84,8 @@ fn clock_group(cx: &Context<'_>, size: [f32; 2]) -> Block {
     let mut group = column(CLOCK_GAP, align)
         .with_children(children)
         .on(Layer::Clock);
-    group.style.justify_content = Some(justify);
-    group.style.padding = padding;
+    group.style.justify_content = Some(JustifyContent::START);
+    group.style.padding = edges(left, height * CLOCK_TOP, 0.0, 0.0);
     group
 }
 
