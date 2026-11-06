@@ -36,7 +36,7 @@ use crate::{
         opaque,
         shaded_sprite::ShadedSprite,
         snapshot::SnapshotElement,
-        warp::{self, SwingRequest, WarpCanvases, WarpElement, WarpRequest},
+        warp::{self, WarpCanvases, WarpElement, WarpRequest},
     },
     shaders::{
         glazed::GlazedShader, lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader,
@@ -351,10 +351,6 @@ impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
 
     fn warp(&mut self, renderer: &mut R, request: WarpRequest<'_, '_>) -> Option<Self::Element> {
         warp::warp(renderer.gles(), self.canvases, request).map(Decorated::Warp)
-    }
-
-    fn swing(&mut self, renderer: &mut R, request: SwingRequest<'_>) -> Option<Self::Element> {
-        warp::swing(renderer.gles(), self.canvases, request).map(Decorated::Warp)
     }
 
     fn blurred_sprite(

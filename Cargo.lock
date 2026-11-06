@@ -343,7 +343,6 @@ dependencies = [
  "crownplugin-view",
  "futures-util",
  "getrandom 0.3.4",
- "glam",
  "lockscreen",
  "parking_lot",
  "protocols",
