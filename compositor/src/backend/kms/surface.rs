@@ -642,7 +642,13 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
     surface.corners.begin_frame();
     surface.canvases.begin_frame();
     let content = surface.blur.content();
-    let blur = (blur_config.enabled && !fullscreen).then_some(BlurSession {
+    let locked = shell.lock_screen.is_active();
+    let blur_config = if locked {
+        blur_config.for_lock()
+    } else {
+        blur_config
+    };
+    let blur = (blur_config.enabled && (locked || !fullscreen)).then_some(BlurSession {
         cache: &mut surface.blur,
         config: blur_config,
         transform,

@@ -128,24 +128,34 @@ pub struct GlyphGlass {
     pub id: Id,
     /// Where the glyph's element draws, output-local.
     pub geometry: Rectangle<i32, Physical>,
-    /// The lock's dim, when the glass behind the clock already carries it.
-    pub dim: f32,
-    /// How white the glass washes at the glyph's top, and at its baseline.
-    pub wash: [f32; 2],
+    /// What the frost the pyramid saw is multiplied by to carry the
+    /// darkening the glass wants, whatever darkening the pyramid lifted.
+    pub frost_gain: f32,
+    /// Physical pixels: the sigma of the gaussian the background is blurred
+    /// by behind the glass.
+    pub frost: f32,
+    /// What the glass makes of the frost.
+    pub face: lockscreen::clock::Glass,
     /// The sprite rows the glyph's top and baseline sit on.
     pub rows: [f32; 2],
-    /// How far the lit top edge reaches, in sprite rows.
-    pub edge: f32,
+    /// How deep the inner rim reaches, in sprite UV per axis.
+    pub rim: [f32; 2],
 }
 
 impl GlyphDraw {
     /// Changes whenever the draw does.
     pub fn fingerprint(&self) -> u64 {
         let glass = self.glass.iter().flat_map(|glass| {
-            [glass.dim, glass.edge]
-                .into_iter()
-                .chain(glass.wash)
-                .chain(glass.rows)
+            [
+                glass.frost_gain,
+                glass.frost,
+                glass.face.gain,
+                glass.face.white,
+                glass.face.top_shine,
+            ]
+            .into_iter()
+            .chain(glass.rows)
+            .chain(glass.rim)
         });
         self.unwarp
             .iter()
@@ -285,6 +295,13 @@ where
     /// thumbnail's glass is the desktop's blurred that much less.
     fn blur_strength_for(&self, shrink: f64) -> f32 {
         let _ = shrink;
+        1.0
+    }
+
+    /// How strongly to blur glass to stand in for a gaussian of `sigma`
+    /// physical pixels, as far as the blur reaches.
+    fn blur_strength_for_sigma(&self, sigma: f32) -> f32 {
+        let _ = sigma;
         1.0
     }
 

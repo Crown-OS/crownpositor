@@ -19,10 +19,5 @@ impl Limits {
     pub const PATH_CHARS: usize = 4096;
     pub const LENGTH: f32 = 8192.0;
     pub const OFFSET: f32 = 4096.0;
-    pub const EFFECTS: usize = 8;
-    pub const DURATION_MS: u32 = 2000;
-    pub const BLUR_RADIUS: f32 = 64.0;
-    pub const SLIDE_DISTANCE: f32 = 600.0;
-    pub const ZOOM: std::ops::RangeInclusive<f32> = 0.5..=1.5;
     pub const PROMPT_TIMEOUT_SECS: u32 = 600;
 }

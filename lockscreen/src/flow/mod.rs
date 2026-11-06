@@ -5,19 +5,18 @@
 //! [`AuthOutcome::Accepted`] moves it toward unlocking.
 
 mod notice;
-mod tween;
 
 use std::time::{Duration, Instant};
 
-use crownos_config::schema::{Lock, LockTransitions, Transition};
+use crownos_config::schema::Lock;
 
 use crate::{
     secret::Password,
-    transition::{Curve, Direction, LayerStyle, sample},
+    transition::{Moments, SpringValue},
 };
 
+pub use crate::transition::Frame;
 pub use notice::Notice;
-use tween::Tween;
 
 const BACKOFF_FREE_FAILURES: u32 = 2;
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
@@ -48,23 +47,12 @@ pub enum AuthOutcome {
     Rejected,
 }
 
-/// How to draw everything at one instant.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Frame {
-    pub clock: LayerStyle,
-    pub prompt: LayerStyle,
-    /// How far the background is blurred and dimmed in, `0..=1`.
-    pub backdrop: f32,
-    /// Horizontal offset of the password field, in logical pixels.
-    pub shake: f32,
-}
-
 pub struct LockFlow {
-    transitions: LockTransitions,
     prompt_timeout: Option<Duration>,
-    appeared: Instant,
-    reveal: Tween,
-    dismissed: Option<Instant>,
+    appear: SpringValue,
+    /// Toward 1 while the prompt is up, toward 0 while the clock is.
+    reveal: SpringValue,
+    dismiss: Option<SpringValue>,
     checking: bool,
     /// Dots shown for the password being checked or accepted, which has
     /// already left this flow.
@@ -80,11 +68,10 @@ pub struct LockFlow {
 impl LockFlow {
     pub fn new(config: &Lock, now: Instant) -> Self {
         let mut flow = Self {
-            transitions: LockTransitions::default(),
             prompt_timeout: None,
-            appeared: now,
-            reveal: Tween::at_rest(now),
-            dismissed: None,
+            appear: SpringValue::moving(0.0, 1.0, now),
+            reveal: SpringValue::resting(0.0, now),
+            dismiss: None,
             checking: false,
             submitted_chars: 0,
             password: Password::new(),
@@ -101,25 +88,23 @@ impl LockFlow {
     /// Locked already, with no entrance: for locking on the way to suspend,
     /// where nothing may still be animating in when the screen goes dark.
     pub fn settled(config: &Lock, now: Instant) -> Self {
-        let mut flow = Self::new(config, now);
-        flow.appeared = now
-            .checked_sub(duration(&flow.transitions.appear))
-            .unwrap_or(now);
-        flow
+        Self {
+            appear: SpringValue::resting(1.0, now),
+            ..Self::new(config, now)
+        }
     }
 
     pub fn configure(&mut self, config: &Lock) {
-        self.transitions = config.transitions.clone();
         self.prompt_timeout = (config.prompt_timeout_secs > 0)
             .then(|| Duration::from_secs(config.prompt_timeout_secs.into()));
     }
 
     pub fn key(&mut self, input: KeyInput, now: Instant) -> Response {
-        if self.dismissed.is_some() || self.checking {
+        if self.dismiss.is_some() || self.checking {
             return Response::Ignored;
         }
         self.last_input = now;
-        let was_revealed = self.reveal.rising();
+        let was_revealed = self.is_prompt_up();
         self.show_prompt(true, now);
         if self.is_waiting(now) {
             self.notice = Notice::Wait {
@@ -153,11 +138,11 @@ impl LockFlow {
 
     /// Any pointer activity: brings the prompt up.
     pub fn pointer(&mut self, now: Instant) -> Response {
-        if self.dismissed.is_some() {
+        if self.dismiss.is_some() {
             return Response::Ignored;
         }
         self.last_input = now;
-        if self.reveal.rising() {
+        if self.is_prompt_up() {
             return Response::Ignored;
         }
         self.show_prompt(true, now);
@@ -165,7 +150,7 @@ impl LockFlow {
     }
 
     pub fn service_message(&mut self, text: &str) {
-        if self.dismissed.is_none() {
+        if self.dismiss.is_none() {
             self.notice = Notice::service(text);
         }
     }
@@ -177,7 +162,7 @@ impl LockFlow {
             AuthOutcome::Accepted => {
                 self.notice = Notice::None;
                 self.password.clear();
-                self.dismissed = Some(now);
+                self.dismiss = Some(SpringValue::moving(0.0, 1.0, now));
             }
             AuthOutcome::Rejected => {
                 self.failures = self.failures.saturating_add(1);
@@ -206,7 +191,7 @@ impl LockFlow {
         let idle = self
             .prompt_timeout
             .is_some_and(|timeout| now.saturating_duration_since(self.last_input) >= timeout);
-        if idle && self.reveal.rising() && !self.checking && self.dismissed.is_none() {
+        if idle && self.is_prompt_up() && !self.checking && self.dismiss.is_none() {
             self.password.clear();
             self.clear_stale_notice();
             self.show_prompt(false, now);
@@ -216,44 +201,19 @@ impl LockFlow {
     }
 
     pub fn frame(&self, now: Instant) -> Frame {
-        let transitions = &self.transitions;
-        let appear = progress(self.appeared, now, &transitions.appear);
-        let reveal = self.reveal.value(now, duration(&transitions.reveal));
-        let dismiss = self
-            .dismissed
-            .map_or(0.0, |since| progress(since, now, &transitions.dismiss));
-
-        let mut clock = sample(&transitions.appear, appear, Direction::Enter);
-        clock = clock.then(sample(&transitions.reveal, reveal, Direction::Leave));
-        let mut prompt = if reveal > 0.0 {
-            sample(&transitions.reveal, reveal, Direction::Enter)
-        } else {
-            LayerStyle::HIDDEN
-        };
-        if self.dismissed.is_some() {
-            let leaving = sample(&transitions.dismiss, dismiss, Direction::Leave);
-            clock = clock.then(leaving);
-            prompt = prompt.then(leaving);
+        Moments {
+            appear: self.appear.value(now),
+            reveal: self.reveal.value(now),
+            dismiss: self.dismiss.map_or(0.0, |dismiss| dismiss.value(now)),
         }
-
-        let arrived = transitions.appear.easing.ease(appear);
-        let departed = transitions.dismiss.easing.ease(dismiss);
-        Frame {
-            clock,
-            prompt,
-            backdrop: (arrived * (1.0 - departed)).clamp(0.0, 1.0),
-            shake: self.shake(now),
-        }
+        .frame(self.shake(now))
     }
 
     /// Whether the next frame differs from this one without any input.
     pub fn is_animating(&self, now: Instant) -> bool {
-        let transitions = &self.transitions;
-        progress(self.appeared, now, &transitions.appear) < 1.0
-            || !self.reveal.is_settled(now, duration(&transitions.reveal))
-            || self
-                .dismissed
-                .is_some_and(|since| progress(since, now, &transitions.dismiss) < 1.0)
+        !self.appear.is_settled(now)
+            || !self.reveal.is_settled(now)
+            || self.dismiss.is_some_and(|dismiss| !dismiss.is_settled(now))
             || self
                 .shaken
                 .is_some_and(|since| now.saturating_duration_since(since) < SHAKE)
@@ -263,19 +223,18 @@ impl LockFlow {
     pub fn next_deadline(&self) -> Option<Instant> {
         let timeout = self
             .prompt_timeout
-            .filter(|_| self.reveal.rising() && self.dismissed.is_none())
+            .filter(|_| self.is_prompt_up() && self.dismiss.is_none())
             .map(|timeout| self.last_input + timeout);
         [timeout, self.retry_at].into_iter().flatten().min()
     }
 
     /// Unlocked, and done animating out: the host can drop the lock.
     pub fn is_finished(&self, now: Instant) -> bool {
-        self.dismissed
-            .is_some_and(|since| progress(since, now, &self.transitions.dismiss) >= 1.0)
+        self.dismiss.is_some_and(|dismiss| dismiss.is_settled(now))
     }
 
     pub fn is_unlocking(&self) -> bool {
-        self.dismissed.is_some()
+        self.dismiss.is_some()
     }
 
     pub fn is_checking(&self) -> bool {
@@ -283,7 +242,7 @@ impl LockFlow {
     }
 
     pub fn password_chars(&self) -> usize {
-        if self.checking || self.dismissed.is_some() {
+        if self.checking || self.dismiss.is_some() {
             self.submitted_chars
         } else {
             self.password.chars()
@@ -294,13 +253,14 @@ impl LockFlow {
         &self.notice
     }
 
-    pub fn transitions(&self) -> &LockTransitions {
-        &self.transitions
+    fn is_prompt_up(&self) -> bool {
+        self.reveal.target() > 0.0
     }
 
     fn show_prompt(&mut self, shown: bool, now: Instant) {
-        self.reveal
-            .head(shown, now, duration(&self.transitions.reveal));
+        if shown != self.is_prompt_up() {
+            self.reveal.retarget(if shown { 1.0 } else { 0.0 }, now);
+        }
     }
 
     fn is_waiting(&self, now: Instant) -> bool {
@@ -323,22 +283,6 @@ impl LockFlow {
         }
         SHAKE_DISTANCE * (1.0 - t) * (t * SHAKE_SWINGS * std::f32::consts::TAU).sin()
     }
-}
-
-fn duration(transition: &Transition) -> Duration {
-    if transition.is_instant() {
-        Duration::ZERO
-    } else {
-        Duration::from_millis(transition.duration_ms.into())
-    }
-}
-
-fn progress(since: Instant, now: Instant, transition: &Transition) -> f32 {
-    let total = duration(transition);
-    if total.is_zero() {
-        return 1.0;
-    }
-    (now.saturating_duration_since(since).as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0)
 }
 
 fn backoff(failures: u32) -> Option<Duration> {

@@ -2,6 +2,7 @@
 members = [
   "compositor",
   "config",
+  "depthcut",
   "lockscene",
   "lockscreen",
   "protocols",

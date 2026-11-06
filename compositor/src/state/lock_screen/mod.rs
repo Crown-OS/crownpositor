@@ -7,6 +7,7 @@
 //! blank. If the compositor dies the session dies with it — there is no
 //! unlocked state to fall back to.
 
+mod depth;
 mod idle;
 mod keys;
 mod logind;
@@ -14,7 +15,12 @@ mod scene;
 mod visuals;
 mod wake;
 
-use std::{borrow::Cow, collections::HashMap, time::Instant};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Instant,
+};
 
 use calloop::RegistrationToken;
 use lockscreen::{
@@ -65,6 +71,9 @@ pub struct LockScreenState {
     images: DecodedImages,
     /// Bumped per lock, so a decode finishing after its lock ended is dropped.
     generation: u64,
+    /// The masks of pictures the depth cut failed for, so it is neither
+    /// retried nor reported again.
+    uncuttable: HashSet<PathBuf>,
     wake: Option<RegistrationToken>,
     pub idle: IdleLock,
     pub sleep: SleepGuard,
@@ -141,19 +150,20 @@ impl State {
                 Backdrop::Color(Palette::new(&self.lock.scene.current().theme).color(token))
             }
         };
-        let (dim, blur) = (config.dim, config.blur);
+        let dim = config.dim;
 
         self.dismiss_menu();
         for monitor in self.shell.monitors_mut() {
             monitor.spacecontrol_mut().close();
             monitor.window_control_mut().dismiss();
         }
-        self.shell.lock_screen.begin(flow, backdrop, dim, blur);
+        self.shell.lock_screen.begin(flow, backdrop, dim);
         self.release_seat_for_lock();
 
         self.lock.generation = self.lock.generation.wrapping_add(1);
         self.lock.face = ClockFace::now(&self.lock.scene.current().config);
         self.load_lock_pictures();
+        self.load_lock_subject();
         self.schedule_lock_wake();
         self.announce_lock_state();
         tracing::info!(?reason, "screen locked");

@@ -370,6 +370,11 @@ pub fn compare(
                     shadow.canvases.begin_frame();
                     let content = shadow.blur.content();
                     let config = BlurConfig::new(appearance, glass);
+                    let config = if shell.lock_screen.is_active() {
+                        config.for_lock()
+                    } else {
+                        config
+                    };
                     let blur = config.enabled.then_some(BlurSession {
                         cache: &mut shadow.blur,
                         config,
@@ -452,6 +457,11 @@ pub fn compare(
                 Rectangle::from_size(monitor.geometry().size.to_physical_precise_round(scale));
             harness.blur.begin_frame();
             let config = BlurConfig::new(appearance, glass);
+            let config = if shell.lock_screen.is_active() {
+                config.for_lock()
+            } else {
+                config
+            };
             let blur = config.enabled.then_some(BlurSession {
                 cache: &mut harness.blur,
                 config,

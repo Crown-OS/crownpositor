@@ -1,15 +1,16 @@
 //! The lock screen's pixels, per output: laid out when something changed,
 //! and only the sprites whose content did rasterised again.
 
-use std::{borrow::Cow, collections::HashMap, io::Read, sync::Arc, time::Instant};
+use std::{collections::HashMap, io::Read, path::Path, sync::Arc, time::Instant};
 
-use crownos_config::schema::{Effect, LockBackground, Transition};
+use crownos_config::schema::LockBackground;
 use lockscreen::{
     clock::MORPH_BLUR,
-    image::{cover, darken, decode},
-    layout::{Content, GlyphPaint, Live, Sprite},
+    image::{background_zoom, cover, decode},
+    layout::{Content, Live, Sprite},
     lockscene::{AssetId, Limits},
     tiny_skia::Pixmap,
+    transition::LAYER_BLUR_REACH,
 };
 use smithay::{
     backend::{
@@ -20,8 +21,11 @@ use smithay::{
 };
 
 use crate::{
-    shell::lock_screen::{OutputVisuals, PreparedSprite},
-    state::{State, lock_screen::DecodedImages},
+    shell::lock_screen::{OutputPicture, OutputVisuals, PreparedSprite},
+    state::{
+        State,
+        lock_screen::{DecodedImages, depth::hides_clock},
+    },
     utils::id::OutputId,
 };
 
@@ -65,6 +69,7 @@ impl State {
         }
 
         let scene = self.lock.scene.current();
+        let zoom = background_zoom(&scene.config.background);
         let notice = lock.flow.notice();
         let notice_text = notice.text(Instant::now());
         let live = Live {
@@ -75,17 +80,7 @@ impl State {
             notice: notice_text.as_deref().map(|text| (text, notice.is_error())),
             caps_lock: lock.caps_lock,
         };
-        let blur_reach = widest_blur(&scene.config.transitions.appear)
-            .max(widest_blur(&scene.config.transitions.reveal))
-            .max(widest_blur(&scene.config.transitions.dismiss));
-
         lock.clock_warp = scene.config.clock.frame.warp;
-        lock.clock_glass = scene.config.clock.glass;
-        let morph_reach = if scene.config.clock.morph_digits {
-            MORPH_BLUR
-        } else {
-            0.0
-        };
         let now = Instant::now();
 
         let mut previous = std::mem::take(&mut lock.visuals);
@@ -95,12 +90,12 @@ impl State {
             let mut leaving = std::mem::take(&mut old.leaving);
             let mut sprites = Vec::new();
             for sprite in painter.layout(scene, live, &self.lock.images, size) {
-                let glyph_reach = if sprite.clock_group().is_some() {
-                    morph_reach
+                let morph_reach = if sprite.clock_group().is_some() {
+                    MORPH_BLUR
                 } else {
                     0.0
                 };
-                let reach = blur_reach + glyph_reach + sprite.reach();
+                let reach = LAYER_BLUR_REACH + morph_reach + sprite.reach();
                 let pad = (reach * scale as f32).ceil() as u32;
                 if let Some(reused) = same_scale
                     .then(|| take_unchanged(&mut old.sprites, &sprite, pad))
@@ -109,15 +104,11 @@ impl State {
                     sprites.push(reused);
                     continue;
                 }
-                let replaced = (same_scale && morph_reach > 0.0)
+                let replaced = same_scale
                     .then(|| take_replaced_glyph(&mut old.sprites, &sprite))
                     .flatten();
-                let painted = if lock.clock_glass {
-                    as_coverage(&sprite)
-                } else {
-                    Cow::Borrowed(&sprite)
-                };
-                let Some(pixmap) = painter.paint(&painted, scale as f32, pad, &self.lock.images)
+                let Some(pixmap) =
+                    painter.paint(&sprite.as_coverage(), scale as f32, pad, &self.lock.images)
                 else {
                     continue;
                 };
@@ -128,7 +119,13 @@ impl State {
                 }
                 sprites.push(prepared);
             }
-            let framed = old.scale == scale && old.size == size;
+            let pixels = size.map(|side| (f64::from(side) * scale).round() as u32);
+            let mut subject = old
+                .subject
+                .filter(|subject| subject.picture.pixels == pixels);
+            if let Some(subject) = &mut subject {
+                subject.hides_clock = hides_clock(subject, &sprites, size, zoom);
+            }
             lock.visuals.insert(
                 output,
                 OutputVisuals {
@@ -136,8 +133,8 @@ impl State {
                     size,
                     sprites,
                     leaving,
-                    picture: old.picture.filter(|_| framed),
-                    depth: old.depth.filter(|_| framed),
+                    picture: old.picture.filter(|picture| picture.pixels == pixels),
+                    subject,
                 },
             );
         }
@@ -159,25 +156,27 @@ impl State {
             LockBackground::Image(src) => AssetId::from_src(src),
             _ => None,
         };
-        let depth =
-            scene
-                .config
-                .clock
-                .depth
-                .as_ref()
-                .and_then(|src| match AssetId::from_src(src) {
-                    Some(id) => self.lock.scene.asset(&id).map(Source::Asset),
-                    None => Some(Source::Path(src.clone())),
-                });
-        let dim = scene.config.dim;
         let images: Vec<(AssetId, Arc<[u8]>)> = scene
             .referenced_assets()
             .into_iter()
             .filter(|id| Some(id) != background_id.as_ref())
             .filter_map(|id| self.lock.scene.asset(&id).map(|bytes| (id, bytes)))
             .collect();
-        let sizes: Vec<(OutputId, [u32; 2])> = self
-            .shell
+        let sizes = self.lock_output_pixels();
+        let generation = self.lock.generation;
+        self.common.tasks.run(
+            async move {
+                tokio::task::spawn_blocking(move || decode_all(background, &sizes, images))
+                    .await
+                    .unwrap_or_default()
+            },
+            move |state, decoded| state.lock_pictures_ready(generation, decoded),
+        );
+    }
+
+    /// Every output's size in pixels, for pictures to cover.
+    pub(super) fn lock_output_pixels(&self) -> Vec<(OutputId, [u32; 2])> {
+        self.shell
             .monitors()
             .iter()
             .map(|monitor| {
@@ -188,18 +187,7 @@ impl State {
                     .to_physical_precise_round::<_, i32>(scale);
                 (monitor.id(), [size.w as u32, size.h as u32])
             })
-            .collect();
-        let generation = self.lock.generation;
-        self.common.tasks.run(
-            async move {
-                tokio::task::spawn_blocking(move || {
-                    decode_all(background, depth, dim, &sizes, images)
-                })
-                .await
-                .unwrap_or_default()
-            },
-            move |state, decoded| state.lock_pictures_ready(generation, decoded),
-        );
+            .collect()
     }
 
     fn lock_pictures_ready(&mut self, generation: u64, decoded: Decoded) {
@@ -210,26 +198,12 @@ impl State {
             return;
         };
         for (output, pixmap) in decoded.pictures {
-            lock.visuals.entry(output).or_default().picture = Some(buffer_of(&pixmap));
-        }
-        for (output, pixmap) in decoded.depths {
-            lock.visuals.entry(output).or_default().depth = Some(buffer_of(&pixmap));
+            lock.visuals.entry(output).or_default().picture = Some(output_picture(&pixmap));
         }
         self.lock.images = DecodedImages(decoded.images);
         lock.dirty = true;
         self.queue_redraw();
     }
-}
-
-fn widest_blur(transition: &Transition) -> f32 {
-    transition
-        .effects
-        .iter()
-        .map(|effect| match effect {
-            Effect::Blur { radius } => radius.clamp(0.0, Limits::BLUR_RADIUS),
-            _ => 0.0,
-        })
-        .fold(0.0, f32::max)
 }
 
 /// The prepared sprite for `sprite`, if the last layout had it with the same
@@ -251,20 +225,6 @@ fn take_unchanged(
     prepared.layer = sprite.layer;
     prepared.part = sprite.part;
     Some(prepared)
-}
-
-/// A glyph face as the white coverage glass is cut by; anything else as is.
-fn as_coverage(sprite: &Sprite) -> Cow<'_, Sprite> {
-    match &sprite.content {
-        Content::Glyph(run) if run.paint.is_face() => {
-            let mut coverage = sprite.clone();
-            if let Content::Glyph(run) = &mut coverage.content {
-                run.paint = GlyphPaint::Coverage;
-            }
-            Cow::Owned(coverage)
-        }
-        _ => Cow::Borrowed(sprite),
-    }
 }
 
 /// The prepared clock glyph `sprite` takes the place of with a different
@@ -295,6 +255,13 @@ fn prepare(sprite: Sprite, pad: u32, pixmap: &Pixmap) -> PreparedSprite {
     }
 }
 
+pub(super) fn output_picture(pixmap: &Pixmap) -> OutputPicture {
+    OutputPicture {
+        buffer: buffer_of(pixmap),
+        pixels: [pixmap.width(), pixmap.height()],
+    }
+}
+
 /// tiny-skia's premultiplied R, G, B, A bytes are `Abgr8888` little-endian.
 fn buffer_of(pixmap: &Pixmap) -> MemoryRenderBuffer {
     MemoryRenderBuffer::from_slice(
@@ -310,25 +277,16 @@ fn buffer_of(pixmap: &Pixmap) -> MemoryRenderBuffer {
 #[derive(Default)]
 struct Decoded {
     pictures: Vec<(OutputId, Pixmap)>,
-    /// The depth cut-out, dimmed as the background will be.
-    depths: Vec<(OutputId, Pixmap)>,
     images: HashMap<AssetId, Pixmap>,
 }
 
 fn decode_all(
     background: Option<Source>,
-    depth: Option<Source>,
-    dim: f32,
     sizes: &[(OutputId, [u32; 2])],
     images: Vec<(AssetId, Arc<[u8]>)>,
 ) -> Decoded {
-    let mut depths = framed(depth, sizes, "the lock screen depth cut-out");
-    for (_, pixmap) in &mut depths {
-        darken(pixmap, dim);
-    }
     Decoded {
-        pictures: framed(background, sizes, "the lock screen picture"),
-        depths,
+        pictures: framed(background, sizes),
         images: images
             .into_iter()
             .filter_map(|(id, bytes)| Some((id, decode(&bytes).ok()?)))
@@ -337,16 +295,12 @@ fn decode_all(
 }
 
 /// `source` decoded and cut to cover each output.
-fn framed(
-    source: Option<Source>,
-    sizes: &[(OutputId, [u32; 2])],
-    what: &str,
-) -> Vec<(OutputId, Pixmap)> {
+fn framed(source: Option<Source>, sizes: &[(OutputId, [u32; 2])]) -> Vec<(OutputId, Pixmap)> {
     let Some(source) = source else {
         return Vec::new();
     };
     let Some(picture) = read_source(source).and_then(|bytes| decode(&bytes).ok()) else {
-        tracing::warn!("{what} could not be read");
+        tracing::warn!("the lock screen picture could not be read");
         return Vec::new();
     };
     sizes
@@ -358,13 +312,21 @@ fn framed(
 fn read_source(source: Source) -> Option<Arc<[u8]>> {
     match source {
         Source::Asset(bytes) => Some(bytes),
-        Source::Path(path) => {
-            let file = std::fs::File::open(&path).ok()?;
-            let mut bytes = Vec::new();
-            file.take(Limits::ASSET_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .ok()?;
-            (bytes.len() <= Limits::ASSET_BYTES).then(|| bytes.into())
-        }
+        Source::Path(path) => read_capped(Path::new(&path)).ok().map(Arc::from),
     }
+}
+
+/// The file at `path`, refused past the size any lock-screen picture may be.
+pub(super) fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(Limits::ASSET_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > Limits::ASSET_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            "larger than a lock-screen picture may be",
+        ));
+    }
+    Ok(bytes)
 }

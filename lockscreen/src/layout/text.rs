@@ -92,11 +92,11 @@ impl Shaper {
     }
 }
 
-pub(super) fn family_of(family: &FontFamily) -> Family<'_> {
+fn family_of(family: &FontFamily) -> Family<'_> {
     match family {
         FontFamily::Sans(name) | FontFamily::Mono(name) if !name.is_empty() => Family::Name(name),
         FontFamily::Mono(_) => Family::Monospace,
-        FontFamily::Sans(_) | FontFamily::Stroked(_) => Family::SansSerif,
+        FontFamily::Sans(_) => Family::SansSerif,
     }
 }
 

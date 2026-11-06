@@ -15,13 +15,15 @@ mod stock;
 mod stroked;
 mod text;
 
+use std::borrow::Cow;
+
 use lockscene::{AssetId, LockScene, Placeholder};
 use tiny_skia::Pixmap;
 
 use crate::{clock::ClockFace, palette::Palette, user::User};
 
 pub use content::{Content, FontFamily, GlyphPaint, GlyphRun, TextRun};
-pub(crate) use content::{GLOW_SPREAD, GLOW_SWELL, SHADOW_DROP, SHADOW_SPREAD};
+pub(crate) use content::{SHADOW_DROP, SHADOW_SPREAD};
 pub use stroked::StrokedFont;
 pub(crate) use text::Shaper;
 
@@ -39,6 +41,8 @@ pub enum Part {
     SecureField,
     /// One character of the clock, its face or its shadow.
     ClockGlyph(ClockGroup),
+    /// The date the clock's layout places with it.
+    ClockDate,
 }
 
 /// The parts of the clock that move on their own.
@@ -61,6 +65,13 @@ pub struct Rect {
 impl Rect {
     pub fn centre(&self) -> [f32; 2] {
         [self.x + self.width / 2.0, self.y + self.height / 2.0]
+    }
+
+    /// The whole device pixel the corner of this rect's sprite is drawn at,
+    /// `scale` device pixels to a logical one and `pad` device pixels of
+    /// padding around it: sprites land pixel for pixel, never between.
+    pub fn padded_origin(&self, scale: f32, pad: f32) -> [f32; 2] {
+        [self.x, self.y].map(|at| (at * scale - pad).round())
     }
 }
 
@@ -90,6 +101,22 @@ impl Sprite {
             Some(Part::ClockGlyph(group)) => Some(group),
             _ => None,
         }
+    }
+
+    /// The sprite as a host that draws glass itself rasterises it: a glass
+    /// face as its white coverage, anything else as it is.
+    pub fn as_coverage(&self) -> Cow<'_, Self> {
+        let Content::Glyph(run) = &self.content else {
+            return Cow::Borrowed(self);
+        };
+        if !run.paint.is_face() {
+            return Cow::Borrowed(self);
+        }
+        let mut coverage = self.clone();
+        if let Content::Glyph(run) = &mut coverage.content {
+            run.paint = GlyphPaint::Coverage;
+        }
+        Cow::Owned(coverage)
     }
 }
 
@@ -132,6 +159,8 @@ pub(crate) struct Context<'a> {
     pub family: &'a str,
     pub mono: &'a str,
     pub text_scale: f32,
+    /// The output's size, in logical pixels.
+    pub output: [f32; 2],
 }
 
 impl Context<'_> {
@@ -143,11 +172,11 @@ impl Context<'_> {
     }
 }
 
-/// Lays `scene` out on an output of `size` logical pixels.
-pub(crate) fn sprites(shaper: &mut Shaper, context: &Context<'_>, size: [f32; 2]) -> Vec<Sprite> {
+/// Lays `scene` out on its output.
+pub(crate) fn sprites(shaper: &mut Shaper, context: &Context<'_>) -> Vec<Sprite> {
     let root = match &context.scene.decoration {
         Some(tree) => node::layout_root(context, &tree.root),
-        None => stock::layout(context, size),
+        None => stock::layout(context),
     };
-    block::place(shaper, root, size)
+    block::place(shaper, root, context.output)
 }

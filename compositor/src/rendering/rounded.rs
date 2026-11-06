@@ -308,6 +308,12 @@ impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
             .map_or(1.0, |blur| blur.config.strength_for(shrink))
     }
 
+    fn blur_strength_for_sigma(&self, sigma: f32) -> f32 {
+        self.blur
+            .as_ref()
+            .map_or(1.0, |blur| blur.config.strength_for_sigma(sigma))
+    }
+
     fn blur_fingerprint(&self) -> Option<u64> {
         self.blur.as_ref().map(|blur| blur.config.fingerprint())
     }

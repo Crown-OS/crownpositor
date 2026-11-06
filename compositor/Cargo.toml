@@ -25,6 +25,7 @@ features = [
 
 [dependencies]
 config = { path = "../config" }
+depthcut = { path = "../depthcut" }
 lockscreen = { path = "../lockscreen", features = ["pam"] }
 crownplugin-view = { path = "../../crownos-plugins/view" }
 protocols = { path = "../protocols" }

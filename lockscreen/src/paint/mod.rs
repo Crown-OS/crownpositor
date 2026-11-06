@@ -47,11 +47,12 @@ impl Painter {
             live,
             palette: Palette::new(&scene.theme),
             images,
-            family: scene.config.font.as_deref().unwrap_or(&theme_font.family),
+            family: &theme_font.family,
             mono: &theme_font.mono,
             text_scale: theme_font.scale.clamp(0.5, 3.0),
+            output: size,
         };
-        layout::sprites(&mut self.shaper, &context, size)
+        layout::sprites(&mut self.shaper, &context)
     }
 
     /// `sprite` at `scale` physical pixels per logical one, with `pad`

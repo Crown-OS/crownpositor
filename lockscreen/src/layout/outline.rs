@@ -1,9 +1,10 @@
 use cosmic_text::{
-    Attrs, Buffer, CacheKeyFlags, Command, FeatureTag, FontFeatures, Metrics, Shaping, Weight,
+    Attrs, Buffer, CacheKeyFlags, Command, Family, FeatureTag, FontFeatures, Metrics, Shaping,
+    Weight,
 };
 use tiny_skia::{Path, PathBuilder};
 
-use super::{FontFamily, GlyphRun, Shaper, stroked, text::family_of};
+use super::{GlyphRun, Shaper, stroked};
 
 /// Of the ascent, the cap height of a font that does not say.
 const CAP_OF_ASCENT: f32 = 0.72;
@@ -28,16 +29,14 @@ impl GlyphShape {
 
 impl Shaper {
     pub fn glyph(&mut self, run: &GlyphRun) -> Option<GlyphShape> {
-        if let FontFamily::Stroked(font) = run.family
-            && let Some(shape) = stroked::glyph(font, run)
-        {
+        if let Some(shape) = stroked::glyph(run.font, run) {
             return Some(shape);
         }
         let mut features = FontFeatures::new();
         features.enable(TABULAR_FIGURES);
         let attrs = Attrs::new()
-            .family(family_of(&run.family))
-            .weight(Weight(run.weight))
+            .family(Family::SansSerif)
+            .weight(Weight(run.weight.round() as u16))
             .font_features(features)
             .cache_key_flags(CacheKeyFlags::DISABLE_HINTING);
         let mut utf8 = [0; 4];

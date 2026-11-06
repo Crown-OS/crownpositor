@@ -106,6 +106,18 @@ pub struct BlurConfig {
 /// surface turning into a stained-glass window.
 const VIBRANCY: f32 = 1.3;
 
+/// The variance a pyramid level adds per squared texel of its own and per
+/// squared tap spread: the downsample into it `1/2`, and the upsample out of
+/// the level below, at twice the texel, `4 · 1/3`.
+const TAP_VARIANCE: f32 = 11.0 / 6.0;
+/// What the bilinear filter behind the taps adds, in the same units: 0.7 to
+/// 1 as the taps cross texel boundaries, as simulated pass by pass.
+const FILTER_VARIANCE: f32 = 0.85;
+
+/// The pyramid depth a locked output blurs with at least: enough for the
+/// prompt's backdrop on a dense output and for a large clock's frost.
+const LOCK_PASSES: u8 = 6;
+
 /// The milky white of frosted glass over the blur, so glass over a dark
 /// backdrop still reads as a lit surface rather than as a hole.
 const SHEEN: [f32; 4] = [1.0, 1.0, 1.0, 0.15];
@@ -183,40 +195,75 @@ impl BlurConfig {
 
     /// The strength whose blur reaches `shrink` of this config's radius: the
     /// glass of a window shown at `shrink` of its size, which on the desktop
-    /// blurred that much further. Radius grows exponentially with pyramid
-    /// depth and monotonically with strength, so a bisection finds the depth. A thumbnail too
-    /// small for any blur keeps the shallowest one, so it still reads as glass
-    /// — and costs a fraction of the full pyramid over a fraction of the area.
+    /// blurred that much further.
     pub fn strength_for(&self, shrink: f64) -> f32 {
-        const SHALLOWEST: f32 = 0.05;
         if shrink >= 1.0 {
             return 1.0;
         }
-        let reach = |strength: f32| {
+        let reach = |config: &BlurConfig| f64::from(config.radius());
+        self.strength_reaching(reach(self) * shrink.max(0.0), reach)
+    }
+
+    /// The strength whose pyramid blurs most nearly like a gaussian of
+    /// `sigma` pixels, held to this config's full blur.
+    pub fn strength_for_sigma(&self, sigma: f32) -> f32 {
+        self.strength_reaching(f64::from(sigma), |config| f64::from(config.sigma()))
+    }
+
+    /// The strength whose tapered config `measure`s nearest `target`, which
+    /// grows with strength. Radius grows exponentially with pyramid depth and
+    /// monotonically with strength, so a bisection finds the depth. A target
+    /// too small for any blur keeps the shallowest one, so it still reads as
+    /// glass — and costs a fraction of the full pyramid.
+    fn strength_reaching(&self, target: f64, measure: impl Fn(&BlurConfig) -> f64) -> f32 {
+        const SHALLOWEST: f32 = 0.05;
+        let at = |strength: f32| {
             let (passes, offset) = self.taper(strength);
-            BlurConfig {
+            measure(&BlurConfig {
                 passes: passes as u8,
                 offset,
                 ..*self
-            }
-            .radius() as f64
+            })
         };
-        let target = reach(1.0) * shrink.max(0.0);
+        if at(1.0) <= target {
+            return 1.0;
+        }
         let (mut low, mut high) = (SHALLOWEST, 1.0_f32);
         for _ in 0..16 {
             let mid = (low + high) * 0.5;
-            if reach(mid) < target {
+            if at(mid) < target {
                 low = mid;
             } else {
                 high = mid;
             }
         }
-        // The reach jumps where a whole level is added, so the target can fall
-        // in a gap; take whichever side lands nearer.
-        if target - reach(low) < reach(high) - target {
+        // The measure jumps where a whole level is added, so the target can
+        // fall in a gap; take whichever side lands nearer.
+        if target - at(low) < at(high) - target {
             low
         } else {
             high
+        }
+    }
+
+    /// The sigma, in full-resolution pixels, of the gaussian this config's
+    /// pyramid blurs like. Each level adds its variance in its own texels,
+    /// four times those of the level above: `(4^passes - 1) / 3` of them
+    /// over the whole pyramid.
+    fn sigma(&self) -> f32 {
+        let texels = ((1u64 << (2 * self.passes())) - 1) as f32 / 3.0;
+        let offset = self.offset.max(0.0);
+        (texels * (TAP_VARIANCE * offset * offset + FILTER_VARIANCE)).sqrt()
+    }
+
+    /// This config as a locked output blurs with: on whatever the desktop's
+    /// says, since the lock's glass digits and prompt are made of it, and
+    /// deep enough for them.
+    pub fn for_lock(self) -> Self {
+        Self {
+            enabled: true,
+            passes: self.passes.max(LOCK_PASSES),
+            ..self
         }
     }
 
@@ -726,6 +773,68 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.passes(), 8);
+    }
+
+    #[test]
+    fn a_wider_blur_asks_for_more_strength_up_to_the_full_one() {
+        let config = BlurConfig::default();
+        let narrow = config.strength_for_sigma(2.0);
+        let wide = config.strength_for_sigma(12.0);
+        assert!(narrow < wide && wide < 1.0, "{narrow} {wide}");
+        assert_eq!(config.strength_for_sigma(1000.0), 1.0);
+    }
+
+    /// Sigmas of the pyramid simulated pass by pass, impulses at every phase.
+    const SIMULATED_SIGMAS: [(u8, f32, f32); 6] = [
+        (3, 1.5, 10.06),
+        (4, 0.75, 12.67),
+        (4, 1.0, 15.52),
+        (5, 1.5, 40.56),
+        (6, 0.75, 50.86),
+        (6, 1.5, 81.14),
+    ];
+
+    #[test]
+    fn the_pyramid_blurs_by_the_simulated_sigma() {
+        for (passes, offset, simulated) in SIMULATED_SIGMAS {
+            let sigma = BlurConfig {
+                passes,
+                offset,
+                ..Default::default()
+            }
+            .sigma();
+            assert!(
+                (sigma / simulated - 1.0).abs() < 0.03,
+                "{passes} {offset}: {sigma}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_lock_blurs_by_the_sigma_it_asks_for() {
+        let config = BlurConfig::default().for_lock();
+        for sigma in [12.9_f32, 16.1, 40.0, 50.0] {
+            let (passes, offset) = config.taper(config.strength_for_sigma(sigma));
+            let achieved = BlurConfig {
+                passes: passes as u8,
+                offset,
+                ..config
+            }
+            .sigma();
+            assert!((achieved / sigma - 1.0).abs() < 0.03, "{sigma}: {achieved}");
+        }
+    }
+
+    #[test]
+    fn a_locked_output_blurs_even_with_the_desktop_blur_off() {
+        let off = BlurConfig {
+            enabled: false,
+            passes: 2,
+            ..Default::default()
+        };
+        let locked = off.for_lock();
+        assert!(locked.enabled);
+        assert_eq!(locked.passes(), LOCK_PASSES as usize);
     }
 
     fn logical(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {

@@ -1,22 +1,12 @@
 use chrono::format::{Item, StrftimeItems};
-use crownos_config::schema::{
-    Effect, Lock, LockBackground, Theme, Transition, theme::is_color_token, theme::parse_hex,
-};
+use crownos_config::schema::{Lock, LockBackground, Theme, theme::is_color_token, theme::parse_hex};
 
 use crate::{AssetId, Limits, SceneError};
 
 pub(super) fn check(config: &Lock, theme: &Theme) -> Result<(), SceneError> {
     unit("lock.dim", config.dim)?;
-    unit("lock.blur", config.blur)?;
     strftime("lock.time_format", &config.time_format)?;
     strftime("lock.date_format", &config.date_format)?;
-    if config
-        .font
-        .as_ref()
-        .is_some_and(|font| font.chars().count() > Limits::FONT_CHARS)
-    {
-        return Err(SceneError::OutOfRange { key: "lock.font" });
-    }
     background(&config.background)?;
     check_offset(config.auth_field.offset)?;
     for slot in &config.slots {
@@ -26,14 +16,6 @@ pub(super) fn check(config: &Lock, theme: &Theme) -> Result<(), SceneError> {
         return Err(SceneError::OutOfRange {
             key: "lock.prompt_timeout_secs",
         });
-    }
-    let transitions = &config.transitions;
-    for transition in [
-        &transitions.appear,
-        &transitions.reveal,
-        &transitions.dismiss,
-    ] {
-        check_transition(transition)?;
     }
     check_theme(theme)
 }
@@ -83,24 +65,6 @@ fn background(background: &LockBackground) -> Result<(), SceneError> {
         }
         LockBackground::Token(token) if is_color_token(token) => Ok(()),
         LockBackground::Token(token) => Err(SceneError::BadToken(token.clone())),
-    }
-}
-
-fn check_transition(transition: &Transition) -> Result<(), SceneError> {
-    let key = "lock.transitions";
-    if transition.effects.len() > Limits::EFFECTS || transition.duration_ms > Limits::DURATION_MS {
-        return Err(SceneError::OutOfRange { key });
-    }
-    let bounded = transition.effects.iter().all(|effect| match *effect {
-        Effect::Fade => true,
-        Effect::Blur { radius } => (0.0..=Limits::BLUR_RADIUS).contains(&radius),
-        Effect::Slide { distance, .. } => (0.0..=Limits::SLIDE_DISTANCE).contains(&distance),
-        Effect::Zoom { from } => Limits::ZOOM.contains(&from),
-    });
-    if bounded {
-        Ok(())
-    } else {
-        Err(SceneError::OutOfRange { key })
     }
 }
 
