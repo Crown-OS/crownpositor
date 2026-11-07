@@ -8,12 +8,12 @@ use smithay::{
         renderer::{
             Bind, Offscreen, Texture,
             damage::OutputDamageTracker,
-            element::Id,
+            element::{Id, Kind, RenderElement},
             gles::{GlesRenderer, GlesTexture, ffi},
             utils::CommitCounter,
         },
     },
-    utils::{Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Size, Transform},
+    utils::{Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
 };
 
 use crate::{
@@ -21,9 +21,10 @@ use crate::{
         corners::CornerMemory,
         morph::{Content, morph_elements},
         rounded::GlesDecorator,
+        surface_tree::transformed_surface_elements,
         warp::{WarpRequest, carried::CarriedIcons},
     },
-    shell::morph::Morph,
+    shell::{morph::Morph, tile::Tile},
     utils::id::WindowId,
 };
 
@@ -82,50 +83,85 @@ impl WarpCanvases {
         let size = window.size.to_physical_precise_round(scale) + Size::from((2 * PAD, 2 * PAD));
         let buffer = Size::<i32, BufferCoords>::from((size.w, size.h));
 
-        let id = request.tile.id();
+        let canvas = self.sized(gles, request.tile.id(), buffer)?;
+        if matches!(request.content, Content::Live) || !canvas.painted {
+            render_window(gles, &mut canvas.texture, request, size, animated.loc)?;
+            canvas.painted = true;
+        }
+
+        let origin = window.loc.to_physical_precise_round(scale) - Point::from((PAD, PAD));
+        Some(canvas.drawn(Rectangle::new(origin, size).to_f64()))
+    }
+
+    /// `tile`'s client content alone, at the size the client last drew it,
+    /// to be drawn over `rect`.
+    pub(super) fn paint_content(
+        &mut self,
+        gles: &mut GlesRenderer,
+        tile: &Tile,
+        scale: Scale<f64>,
+        rect: Rectangle<i32, Physical>,
+    ) -> Option<Painted> {
+        let size = tile
+            .window()
+            .geometry()
+            .size
+            .to_physical_precise_round(scale);
+        if size.is_empty() {
+            return None;
+        }
+        let canvas = self.sized(gles, tile.id(), (size.w, size.h).into())?;
+        render_content(gles, &mut canvas.texture, tile, size, scale)?;
+        Some(canvas.drawn(rect.to_f64()))
+    }
+
+    /// `window`'s canvas, reallocated when it is not `size` texels big.
+    fn sized(
+        &mut self,
+        gles: &mut GlesRenderer,
+        window: WindowId,
+        size: Size<i32, BufferCoords>,
+    ) -> Option<&mut Canvas> {
         if self
             .canvases
-            .get(&id)
-            .is_none_or(|canvas| canvas.texture.size() != buffer)
+            .get(&window)
+            .is_none_or(|canvas| canvas.texture.size() != size)
         {
-            let texture = gles.create_buffer(Fourcc::Abgr8888, buffer).ok()?;
-            let element_id = self
+            let texture = gles.create_buffer(Fourcc::Abgr8888, size).ok()?;
+            let id = self
                 .canvases
-                .get(&id)
+                .get(&window)
                 .map_or_else(Id::new, |canvas| canvas.id.clone());
             self.canvases.insert(
-                id,
+                window,
                 Canvas {
                     texture,
-                    id: element_id,
+                    id,
                     commit: CommitCounter::default(),
                     painted: false,
                     used: false,
                 },
             );
         }
-        let canvas = self.canvases.get_mut(&id)?;
+        self.canvases.get_mut(&window)
+    }
+}
 
-        if matches!(request.content, Content::Live) || !canvas.painted {
-            render_window(gles, &mut canvas.texture, request, size, animated.loc)?;
-            canvas.painted = true;
+impl Canvas {
+    fn drawn(&mut self, rect: Rectangle<f64, Physical>) -> Painted {
+        self.used = true;
+        self.commit.increment();
+        Painted {
+            texture: self.texture.clone(),
+            id: self.id.clone(),
+            commit: self.commit,
+            rect,
         }
-        canvas.used = true;
-        canvas.commit.increment();
-
-        let origin = window.loc.to_physical_precise_round(scale) - Point::from((PAD, PAD));
-        Some(Painted {
-            texture: canvas.texture.clone(),
-            id: canvas.id.clone(),
-            commit: canvas.commit,
-            rect: Rectangle::new(origin, size).to_f64(),
-        })
     }
 }
 
 /// Draws the window at rest, frame and all, with its top left `PAD` into
-/// `texture`, then builds the mipmaps a warp shrinking it to an icon samples.
-/// Glass is left out: there is no scene behind a canvas to blur.
+/// `texture`. Glass is left out: there is no scene behind a canvas to blur.
 fn render_window(
     gles: &mut GlesRenderer,
     texture: &mut GlesTexture,
@@ -155,9 +191,41 @@ fn render_window(
         request.style,
     );
 
+    fill(gles, texture, &elements, size, scale)
+}
+
+/// Draws the client's surfaces with its window geometry's corner at the
+/// texture's.
+fn render_content(
+    gles: &mut GlesRenderer,
+    texture: &mut GlesTexture,
+    tile: &Tile,
+    size: Size<i32, Physical>,
+    scale: Scale<f64>,
+) -> Option<()> {
+    let origin = Point::default()
+        - tile
+            .window()
+            .geometry()
+            .loc
+            .to_physical_precise_round(scale);
+    let elements =
+        transformed_surface_elements(gles, tile.surface(), origin, scale, 1.0, Kind::Unspecified);
+    fill(gles, texture, &elements, size, scale)
+}
+
+/// Replaces `texture` with `elements`, then builds the mipmaps a shrinking
+/// or blurring draw samples.
+fn fill<E: RenderElement<GlesRenderer>>(
+    gles: &mut GlesRenderer,
+    texture: &mut GlesTexture,
+    elements: &[E],
+    size: Size<i32, Physical>,
+    scale: Scale<f64>,
+) -> Option<()> {
     let mut target = gles.bind(texture).ok()?;
     OutputDamageTracker::new(size, scale, Transform::Normal)
-        .render_output(gles, &mut target, 0, &elements, TRANSPARENT)
+        .render_output(gles, &mut target, 0, elements, TRANSPARENT)
         .ok()?;
     drop(target);
 

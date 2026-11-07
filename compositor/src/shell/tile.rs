@@ -18,6 +18,7 @@ use crate::{
     shell::{
         decoration::{DecorationCommit, DecorationIds, FRAME_RIM, Insets},
         morph::{Choreography, IconOrigin, Morph, MorphEnd},
+        resize_blur::{ResizeBlur, ResizeProgress},
     },
     utils::id::WindowId,
 };
@@ -134,6 +135,7 @@ pub struct Tile {
     centered: bool,
 
     anim: TileAnim,
+    resize_blur: ResizeBlur,
     /// Turning into its application's icon, or back out of it.
     morph: Option<Morph>,
     /// Out of the layout and off the screen until it is restored. Still drawn
@@ -211,6 +213,7 @@ impl Tile {
             dialog: false,
             centered: false,
             anim: TileAnim::new(Rectangle::default()),
+            resize_blur: ResizeBlur::default(),
             morph: None,
             minimized: false,
             placed: false,
@@ -502,8 +505,26 @@ impl Tile {
             self.anim.follow(rect);
         } else {
             self.anim.retarget(rect);
+            if self.needs_configure() && self.content_size() != self.window.geometry().size {
+                self.resize_blur.start();
+            }
         }
         resized
+    }
+
+    pub fn resize_blur(&self) -> &ResizeBlur {
+        &self.resize_blur
+    }
+
+    pub fn step_resize_blur(&mut self, dt: f32) {
+        let progress = if !self.anim.is_sized() {
+            ResizeProgress::Moving
+        } else if self.window.geometry().size == self.content_size() {
+            ResizeProgress::Arrived
+        } else {
+            ResizeProgress::AwaitingClient
+        };
+        self.resize_blur.step(dt, progress);
     }
 
     /// Places a window without animating, for its first frame.
@@ -800,6 +821,13 @@ impl TileAnim {
         for spring in self.springs_mut() {
             spring.step(dt);
         }
+    }
+
+    /// Whether the size has arrived to within a pixel, wherever the window is
+    /// still gliding.
+    pub fn is_sized(&self) -> bool {
+        (self.w.position - self.w.target).abs() < 1.0
+            && (self.h.position - self.h.target).abs() < 1.0
     }
 
     pub fn at_rest(&self) -> bool {
