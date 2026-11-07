@@ -193,6 +193,18 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_rules_let_proton_games_tear_with_vrr() {
+        let defaults = crownos_config::schema::Compositor::default();
+        let rules = WindowRules::compile(&defaults.window_rules);
+
+        let game = rules.resolve(Some("steam_app_1091500"), Some("Cyberpunk 2077"));
+        assert_eq!((game.tearing, game.vrr), (Some(true), Some(true)));
+
+        let browser = rules.resolve(Some("chromium"), None);
+        assert_eq!((browser.tearing, browser.vrr), (None, None));
+    }
+
+    #[test]
     fn later_rules_win_per_field() {
         let broad = WindowRule {
             app_id: Some("foot".into()),

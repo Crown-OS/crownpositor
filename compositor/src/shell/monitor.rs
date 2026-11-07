@@ -558,7 +558,7 @@ impl Monitor {
             changed = true;
         }
 
-        self.config.vrr = setting.and_then(|s| s.vrr).unwrap_or(Vrr::OnDemand);
+        self.config.vrr = setting.and_then(|s| s.vrr).unwrap_or_default();
         self.config.default_mode = setting.and_then(|s| s.layout);
         if let Some(mode) = self.config.default_mode {
             self.default_mode = mode;
