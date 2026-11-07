@@ -55,6 +55,12 @@ uniform vec2 resample;
 // so the colour-managed variant of this shader can share the one copy.
 float rounded_box(in vec2 p, in vec2 b, in vec4 r);
 
+#if defined(COLOR_CONVERT)
+// Defined in `shaders/color/color_convert.glsl`, appended to the variant that
+// converts a described surface into the output's encoding.
+vec4 convert_color(vec4 premultiplied);
+#endif
+
 #if defined(GL_OES_standard_derivatives)
 // One axis of an area filter. An output pixel `width` texels wide centred on
 // `centre` covers up to three texels; each is weighted by how much of it the
@@ -103,6 +109,10 @@ void main() {
 
 #if defined(NO_ALPHA)
     color = vec4(color.rgb, 1.0);
+#endif
+
+#if defined(COLOR_CONVERT)
+    color = convert_color(color);
 #endif
 
     vec2 half_size = shape_size * 0.5;

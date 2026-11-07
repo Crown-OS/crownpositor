@@ -66,18 +66,17 @@ pub struct Capabilities {
     pub primaries: Vec<NamedPrimaries>,
 }
 
-/// The intents implemented.
+/// The intents implemented: the renderer maps every surface onto the output's
+/// SDR encoding by clipping out-of-gamut colour and compressing highlights
+/// above reference white, which is relative colorimetry with a perceptual
+/// shoulder.
 ///
 /// `Saturation` is absent: it is a genuinely different gamut-mapping
-/// algorithm aimed at business graphics, and this compositor does not
-/// implement one. `Absolute` and `AbsoluteNoAdaptation` are absent until the
-/// renderer can suppress chromatic adaptation and rescale to the source
-/// white's absolute luminance.
-const INTENTS: &[RenderIntent] = &[
-    RenderIntent::Perceptual,
-    RenderIntent::Relative,
-    RenderIntent::RelativeBpc,
-];
+/// algorithm aimed at business graphics. `RelativeBpc` is absent because
+/// nothing compensates for black points. `Absolute` and
+/// `AbsoluteNoAdaptation` are absent until the renderer can suppress
+/// chromatic adaptation and rescale to the source white's absolute luminance.
+const INTENTS: &[RenderIntent] = &[RenderIntent::Perceptual, RenderIntent::Relative];
 
 /// The features implemented.
 ///
@@ -94,8 +93,11 @@ const FEATURES: &[Feature] = &[
     Feature::WindowsBt2100,
 ];
 
-/// The named curves implemented. See [`NamedTransferFunction`] for why the two
-/// logarithmic curves are missing.
+/// The named curves the renderer's colour shader decodes. Accepting an HDR
+/// curve is not a claim that the output is HDR: such a surface is tone-mapped
+/// down to the output's SDR encoding, and the output's own description says
+/// SDR. See [`NamedTransferFunction`] for why the two logarithmic curves are
+/// missing.
 const TRANSFER_FUNCTIONS: &[NamedTransferFunction] = &[
     NamedTransferFunction::Bt1886,
     NamedTransferFunction::Gamma22,
@@ -218,6 +220,54 @@ mod tests {
         assert!(!capabilities.supports_feature(Feature::ExtendedTargetVolume));
         // But what we do implement is offered.
         assert!(capabilities.supports_transfer(NamedTransferFunction::Bt1886));
+    }
+
+    #[test]
+    fn black_point_compensation_is_not_advertised() {
+        for version in 1..=3 {
+            assert!(
+                !Capabilities::for_version(version).supports_intent(RenderIntent::RelativeBpc),
+                "nothing compensates black points, so version {version} must not offer it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_version_three_burst_is_exactly_what_the_renderer_honours() {
+        let capabilities = Capabilities::for_version(3);
+        assert_eq!(
+            capabilities.intents,
+            [RenderIntent::Perceptual, RenderIntent::Relative]
+        );
+        assert_eq!(
+            capabilities.features,
+            [
+                Feature::Parametric,
+                Feature::SetPrimaries,
+                Feature::SetTfPower,
+                Feature::SetLuminances,
+                Feature::SetMasteringDisplayPrimaries,
+                Feature::WindowsScrgb,
+                Feature::WindowsBt2100,
+            ]
+        );
+        assert!(!capabilities.supports_feature(Feature::IccV2V4));
+        assert_eq!(
+            capabilities.transfer_functions,
+            [
+                NamedTransferFunction::Bt1886,
+                NamedTransferFunction::Gamma22,
+                NamedTransferFunction::Gamma28,
+                NamedTransferFunction::St240,
+                NamedTransferFunction::ExtLinear,
+                NamedTransferFunction::Xvycc,
+                NamedTransferFunction::St2084Pq,
+                NamedTransferFunction::St428,
+                NamedTransferFunction::Hlg,
+                NamedTransferFunction::CompoundPower2_4,
+            ]
+        );
+        assert_eq!(capabilities.primaries, NamedPrimaries::ALL);
     }
 
     #[test]

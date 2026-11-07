@@ -1,34 +1,39 @@
 //! Turning a surface's image description into shader uniforms.
 //!
-//! # The compositing space
+//! # The output encoding
 //!
-//! BT.2020 primaries, linear light, with `1.0` meaning *the output's reference
-//! white*. Every surface is brought into it before anything is blended, and
-//! the output pass takes it back out again.
+//! Outputs are driven 8-bit SDR, and the framebuffer holds what undescribed
+//! surfaces are defined to be: sRGB primaries, a `gamma22` curve, `1.0` at
+//! reference white. Undescribed surfaces are blended in it as they are, with
+//! no conversion at all, and [`output_encoding`] is what the output and every
+//! surface's preferred description report, so a well-behaved client renders
+//! straight into it.
 //!
-//! BT.2020 because it contains every real display gamut, so gamut mapping
-//! happens once on the way out rather than per surface, and because values
-//! stay non-negative — which the alternative, BT.709-primaried scRGB, cannot
-//! promise.
+//! A surface described as anything else is converted into that encoding as it
+//! is drawn: decoded to linear light with its reference white on `1.0`, moved
+//! onto the output's primaries, its highlights compressed into SDR by
+//! [`super::tone_map`], and re-encoded. That is one fused shader per draw, not
+//! an extra pass, and only for the surfaces that need it.
 //!
 //! Reference white as the unit because that is exactly the anchor the protocol
 //! defines: content is "anchored" at its reference white, so a surface's
 //! reference white must land on the output's whatever curve it arrived in.
-//! That single rule is the whole of SDR-to-HDR handling — an SDR window on an
-//! HDR screen is diffuse white, not a searchlight.
 
 use protocols::color_management::{
-    math::{self, Primaries, named},
+    math::{self, named},
     record::{
-        DescriptionKind, ImageDescription, NamedTransferFunction, PrimariesSpec, TransferFunction,
+        DescriptionKind, ImageDescription, NamedPrimaries, NamedTransferFunction,
+        ParametricDescription, PrimariesSpec, TransferFunction,
     },
 };
 
+use super::tone_map::OUTPUT_GAMMA;
+
 /// Which curve the shader should decode with.
 ///
-/// The values are shared with `color_window.frag`; changing one means changing
-/// both, which is why they are written out rather than derived from the enum's
-/// discriminant.
+/// The values are shared with `color_convert.glsl`; changing one means
+/// changing both, which is why they are written out rather than derived from
+/// the enum's discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum TransferKind {
@@ -45,7 +50,7 @@ pub enum TransferKind {
     St428 = 7,
 }
 
-/// What one surface needs to reach the compositing space.
+/// What one surface needs to reach the output encoding.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurfaceTransform {
     pub transfer: TransferKind,
@@ -53,66 +58,82 @@ pub struct SurfaceTransform {
     pub transfer_param: f32,
     /// Multiplies decoded light so the source's reference white lands on 1.0.
     pub luminance_scale: f32,
-    /// Source primaries to BT.2020, column-major as GLSL wants a `mat3`.
+    /// The content's peak over its reference white: what the tone map has to
+    /// fit under 1.0.
+    pub headroom: f32,
+    /// Source primaries to the output's, column-major as GLSL wants a `mat3`.
     pub primaries: [[f32; 3]; 3],
 }
 
-/// The transform for content that is already in the compositing space.
 const IDENTITY_MATRIX: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
-impl SurfaceTransform {
-    /// What an undescribed surface gets.
-    ///
-    /// The protocol defines this exactly: sRGB primaries, `gamma22`, at the
-    /// reference white — so a legacy client, a cursor and a rasterised
-    /// titlebar all take the same path as a client that said so explicitly.
-    pub fn default_srgb() -> Self {
-        Self::from_parts(
-            PrimariesSpec::Named(protocols::color_management::record::NamedPrimaries::Srgb),
-            TransferFunction::Named(NamedTransferFunction::Gamma22),
-            80.0,
-            80.0,
-        )
-    }
+/// How far a transform may stray from the output encoding and still be drawn
+/// untouched: well under one 8-bit code anywhere on the curve.
+const PASSTHROUGH_TOLERANCE: f32 = 1e-3;
 
+/// The cd/m² a description's light is measured against.
+#[derive(Debug, Clone, Copy)]
+struct Levels {
+    /// Where a relative curve's `1.0` lands.
+    max: f64,
+    reference: f64,
+    /// The brightest the content gets.
+    peak: f64,
+}
+
+/// What the output scans out, and so what every surface should render into.
+pub fn output_encoding() -> DescriptionKind {
+    let luminances = NamedTransferFunction::Gamma22.default_luminances();
+    DescriptionKind::Parametric(ParametricDescription {
+        primaries: PrimariesSpec::Named(NamedPrimaries::Srgb),
+        transfer: TransferFunction::Named(NamedTransferFunction::Gamma22),
+        luminances,
+        target_primaries: named::SRGB,
+        target_luminance: (luminances.min_scaled, luminances.max),
+        max_cll: None,
+        max_fall: None,
+    })
+}
+
+impl SurfaceTransform {
     /// The transform for a surface with `description`.
     ///
     /// `None` for a description this compositor cannot decode — an ICC
-    /// profile, for now — which the caller must treat as a reason not to draw
-    /// the surface wrong rather than a reason to drop it.
+    /// profile, which is refused at creation anyway.
     pub fn for_description(description: &ImageDescription) -> Option<Self> {
         match description.kind() {
             DescriptionKind::Parametric(parametric) => Some(Self::from_parts(
                 parametric.primaries,
                 parametric.transfer,
-                f64::from(parametric.luminances.max),
-                f64::from(parametric.luminances.reference),
+                parametric_levels(parametric),
             )),
-            // scRGB: BT.709 primaries, linear, with 1.0 at 80 cd/m².
+            // scRGB: BT.709 primaries, linear, 1.0 at 80 cd/m² and 125.0 at
+            // 10000, with the protocol's suggested reference white of 203.
             DescriptionKind::WindowsScrgb => Some(Self::from_parts(
-                PrimariesSpec::Raw(named::SRGB),
+                PrimariesSpec::Named(NamedPrimaries::Srgb),
                 TransferFunction::Named(NamedTransferFunction::ExtLinear),
-                80.0,
-                80.0,
+                Levels {
+                    max: 80.0,
+                    reference: 203.0,
+                    peak: 10_000.0,
+                },
             )),
             DescriptionKind::WindowsBt2100 => Some(Self::from_parts(
-                PrimariesSpec::Raw(named::BT2020),
+                PrimariesSpec::Named(NamedPrimaries::Bt2020),
                 TransferFunction::Named(NamedTransferFunction::St2084Pq),
-                10_000.0,
-                203.0,
+                Levels {
+                    max: 10_000.0,
+                    reference: 203.0,
+                    peak: 10_000.0,
+                },
             )),
             DescriptionKind::Icc(_) => None,
         }
     }
 
-    fn from_parts(
-        primaries: PrimariesSpec,
-        transfer: TransferFunction,
-        max_luminance: f64,
-        reference_luminance: f64,
-    ) -> Self {
+    fn from_parts(primaries: PrimariesSpec, transfer: TransferFunction, levels: Levels) -> Self {
         let (kind, param) = kind_of(transfer);
-        let reference = reference_luminance.max(1.0);
+        let reference = levels.reference.max(1.0);
 
         // Absolute curves already produce cd/m², so the scale only has to
         // divide by the reference. A relative curve produces `[0, 1]` across
@@ -120,11 +141,10 @@ impl SurfaceTransform {
         //
         // The source's *black* level is deliberately not added back: it
         // describes the display the content was mastered for, and the output
-        // has a black level of its own. Lifting by both would wash out
-        // shadows twice over.
+        // has a black level of its own.
         let luminance_scale = match kind {
-            TransferKind::St2084Pq | TransferKind::Hlg => 1.0 / reference,
-            _ => max_luminance / reference,
+            TransferKind::St2084Pq | TransferKind::Hlg => reference.recip(),
+            _ => levels.max / reference,
         };
 
         Self {
@@ -132,22 +152,48 @@ impl SurfaceTransform {
             // HLG's system gamma depends on the peak it is shown at, which is
             // the description's maximum.
             transfer_param: match kind {
-                TransferKind::Hlg => max_luminance as f32,
+                TransferKind::Hlg => levels.max as f32,
                 _ => param,
             },
             luminance_scale: luminance_scale as f32,
-            primaries: to_bt2020(primaries),
+            headroom: (levels.peak / reference) as f32,
+            primaries: to_output_primaries(primaries),
         }
     }
 
-    /// Whether this transform would change nothing.
-    ///
-    /// The renderer uses it to keep a surface that is already in the
-    /// compositing space off the slow path even when the output is not.
-    pub fn is_identity(&self) -> bool {
-        self.transfer == TransferKind::Linear
-            && (self.luminance_scale - 1.0).abs() < f32::EPSILON
-            && self.primaries == IDENTITY_MATRIX
+    /// Whether the surface is already in the output encoding, so it can be
+    /// drawn exactly as an undescribed one is.
+    pub fn is_passthrough(&self) -> bool {
+        let close = |value: f32, expected: f32| (value - expected).abs() < PASSTHROUGH_TOLERANCE;
+        self.transfer == TransferKind::Power
+            && close(self.transfer_param, OUTPUT_GAMMA as f32)
+            && close(self.luminance_scale, 1.0)
+            && self.headroom <= 1.0 + PASSTHROUGH_TOLERANCE
+            && self
+                .primaries
+                .iter()
+                .flatten()
+                .zip(IDENTITY_MATRIX.iter().flatten())
+                .all(|(value, expected)| close(*value, *expected))
+    }
+}
+
+/// The light levels of a parametric description. The peak is the brightest
+/// the content claims to reach — its MaxCLL, else its mastering display's
+/// peak — and never more than its encoding can carry.
+fn parametric_levels(parametric: &ParametricDescription) -> Levels {
+    let luminances = parametric.luminances;
+    let mastered = Some(parametric.target_luminance.1).filter(|peak| *peak > 0);
+    let claimed = parametric
+        .max_cll
+        .filter(|peak| *peak > 0)
+        .or(mastered)
+        .unwrap_or(luminances.max)
+        .min(luminances.max);
+    Levels {
+        max: f64::from(luminances.max),
+        reference: f64::from(luminances.reference),
+        peak: f64::from(claimed),
     }
 }
 
@@ -171,21 +217,34 @@ fn kind_of(transfer: TransferFunction) -> (TransferKind, f32) {
     }
 }
 
-/// The matrix from `primaries` into the compositing space.
+/// The matrix from `primaries` onto the output's sRGB primaries, adapted to
+/// its D65 white.
 ///
-/// Falls back to the identity when the volume is degenerate: a panel that
-/// reported nonsense should look untouched, not inverted.
-fn to_bt2020(primaries: PrimariesSpec) -> [[f32; 3]; 3] {
-    let source = primaries.resolve();
-    let Some(matrix) = convert_to_bt2020(source) else {
-        tracing::debug!(?source, "degenerate primaries; leaving the colours alone");
-        return IDENTITY_MATRIX;
-    };
-    matrix
+/// Falls back to the identity when the volume is degenerate: a client that
+/// sent nonsense should look untouched, not inverted.
+fn to_output_primaries(primaries: PrimariesSpec) -> [[f32; 3]; 3] {
+    convert_to_output(primaries).unwrap_or_else(|| {
+        tracing::debug!(
+            ?primaries,
+            "degenerate primaries; leaving the colours alone"
+        );
+        IDENTITY_MATRIX
+    })
 }
 
-fn convert_to_bt2020(source: Primaries) -> Option<[[f32; 3]; 3]> {
-    let matrix = math::convert(source, named::BT2020, true)?;
+fn convert_to_output(primaries: PrimariesSpec) -> Option<[[f32; 3]; 3]> {
+    let source = primaries.to_xyz_matrix()?;
+    let output = math::invert(math::rgb_to_xyz(named::SRGB)?)?;
+    let source_white = primaries.resolve().white;
+    let adapted = if source_white == named::SRGB.white {
+        source
+    } else {
+        math::multiply(
+            math::chromatic_adaptation(source_white, named::SRGB.white)?,
+            source,
+        )
+    };
+    let matrix = math::multiply(output, adapted);
 
     // GLSL's `mat3` is column-major, and the maths here is row-major.
     Some(std::array::from_fn(|column| {
@@ -196,19 +255,33 @@ fn convert_to_bt2020(source: Primaries) -> Option<[[f32; 3]; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocols::color_management::record::{Luminances, NamedPrimaries, ParametricDescription};
+    use crate::color::tone_map::{encode, tone_map};
+    use protocols::color_management::{
+        math::Primaries,
+        record::{IccData, Luminances},
+        registry::Registry,
+    };
 
     fn transform(primaries: NamedPrimaries, transfer: NamedTransferFunction) -> SurfaceTransform {
         let luminances = transfer.default_luminances();
         SurfaceTransform::from_parts(
             PrimariesSpec::Named(primaries),
             TransferFunction::Named(transfer),
-            f64::from(luminances.max),
-            f64::from(luminances.reference),
+            Levels {
+                max: f64::from(luminances.max),
+                reference: f64::from(luminances.reference),
+                peak: f64::from(luminances.max),
+            },
         )
     }
 
-    /// Applies a transform the way the shader will, on the CPU.
+    fn described(kind: DescriptionKind) -> SurfaceTransform {
+        let description = Registry::new().intern(kind);
+        SurfaceTransform::for_description(&description).expect("a transform")
+    }
+
+    /// Decodes and converts the way the shader does, on the CPU: linear light
+    /// on the output's primaries, 1.0 at reference white, before tone mapping.
     fn apply(transform: SurfaceTransform, signal: [f64; 3]) -> [f64; 3] {
         let decoded = match transform.transfer {
             TransferKind::Hlg => {
@@ -225,6 +298,12 @@ mod tests {
                 .map(|column| f64::from(transform.primaries[column][row]) * scaled[column])
                 .sum()
         })
+    }
+
+    /// The whole shader: what reaches the framebuffer.
+    fn output_signal(transform: SurfaceTransform, signal: [f64; 3]) -> [f64; 3] {
+        let light = apply(transform, signal).map(|channel| channel.max(0.0));
+        tone_map(light, f64::from(transform.headroom)).map(encode)
     }
 
     fn decode(kind: TransferKind, param: f32, signal: f64) -> f64 {
@@ -246,29 +325,74 @@ mod tests {
         eotf(transfer, signal)
     }
 
+    fn pq_signal(nits: f64) -> f64 {
+        super::super::transfer::inverse_eotf(
+            TransferFunction::Named(NamedTransferFunction::St2084Pq),
+            nits,
+        )
+    }
+
+    #[test]
+    fn the_output_encoding_is_sdr_srgb() {
+        let DescriptionKind::Parametric(output) = output_encoding() else {
+            panic!("the output must be described parametrically");
+        };
+        assert_eq!(output.primaries, PrimariesSpec::Named(NamedPrimaries::Srgb));
+        assert_eq!(
+            output.transfer,
+            TransferFunction::Named(NamedTransferFunction::Gamma22)
+        );
+        assert_eq!(output.luminances.max, output.luminances.reference);
+        assert_eq!(output.target_luminance.1, output.luminances.reference);
+        assert_eq!(output.target_primaries, named::SRGB);
+    }
+
+    #[test]
+    fn a_surface_in_the_output_encoding_is_drawn_untouched() {
+        assert!(described(output_encoding()).is_passthrough());
+        assert!(transform(NamedPrimaries::Srgb, NamedTransferFunction::Gamma22).is_passthrough());
+    }
+
+    #[test]
+    fn anything_else_is_converted() {
+        for (primaries, transfer) in [
+            (NamedPrimaries::Bt2020, NamedTransferFunction::St2084Pq),
+            (NamedPrimaries::Bt2020, NamedTransferFunction::Hlg),
+            (NamedPrimaries::DisplayP3, NamedTransferFunction::Gamma22),
+            (
+                NamedPrimaries::Srgb,
+                NamedTransferFunction::CompoundPower2_4,
+            ),
+            (NamedPrimaries::Srgb, NamedTransferFunction::Bt1886),
+            (NamedPrimaries::Srgb, NamedTransferFunction::ExtLinear),
+        ] {
+            assert!(
+                !transform(primaries, transfer).is_passthrough(),
+                "{primaries:?} {transfer:?} must go through the colour shader"
+            );
+        }
+        assert!(!described(DescriptionKind::WindowsScrgb).is_passthrough());
+        assert!(!described(DescriptionKind::WindowsBt2100).is_passthrough());
+    }
+
     #[test]
     fn srgb_white_lands_on_reference_white() {
-        let white = apply(SurfaceTransform::default_srgb(), [1.0, 1.0, 1.0]);
+        let white = apply(
+            transform(NamedPrimaries::Srgb, NamedTransferFunction::Gamma22),
+            [1.0, 1.0, 1.0],
+        );
         for channel in white {
-            assert!(
-                (channel - 1.0).abs() < 1e-6,
-                "sRGB white must be 1.0 in the compositing space, got {channel}"
-            );
+            assert!((channel - 1.0).abs() < 1e-6, "got {channel}");
         }
     }
 
     #[test]
     fn pq_reference_white_also_lands_on_one() {
         // The protocol's anchoring rule: 203 cd/m² of PQ is diffuse white, and
-        // must sit exactly where an SDR window's white sits.
+        // must sit exactly where an SDR window's white sits before tone mapping.
         let transform = transform(NamedPrimaries::Bt2020, NamedTransferFunction::St2084Pq);
-        let signal = super::super::transfer::inverse_eotf(
-            TransferFunction::Named(NamedTransferFunction::St2084Pq),
-            203.0,
-        );
-
-        let white = apply(transform, [signal, signal, signal]);
-        for channel in white {
+        let signal = pq_signal(203.0);
+        for channel in apply(transform, [signal; 3]) {
             assert!(
                 (channel - 1.0).abs() < 1e-4,
                 "PQ reference white must be 1.0, got {channel}"
@@ -277,16 +401,51 @@ mod tests {
     }
 
     #[test]
-    fn pq_peak_is_far_above_reference_white() {
-        // 10000 nits against a 203 nit reference: HDR highlights must survive
-        // into the compositing space rather than clipping at one.
+    fn pq_headroom_is_the_peak_over_reference_white() {
         let transform = transform(NamedPrimaries::Bt2020, NamedTransferFunction::St2084Pq);
-        let peak = apply(transform, [1.0, 1.0, 1.0]);
-        assert!(
-            peak[0] > 40.0,
-            "PQ peak should be ~10000/203 = 49, got {}",
-            peak[0]
-        );
+        assert!((f64::from(transform.headroom) - 10_000.0 / 203.0).abs() < 1e-3);
+        assert!(apply(transform, [1.0; 3])[0] > 40.0);
+    }
+
+    #[test]
+    fn mastering_metadata_narrows_the_headroom() {
+        let luminances = NamedTransferFunction::St2084Pq.default_luminances();
+        let hdr10 = |max_cll| {
+            described(DescriptionKind::Parametric(ParametricDescription {
+                primaries: PrimariesSpec::Named(NamedPrimaries::Bt2020),
+                transfer: TransferFunction::Named(NamedTransferFunction::St2084Pq),
+                luminances,
+                target_primaries: named::DISPLAY_P3,
+                target_luminance: (luminances.min_scaled, 1_000),
+                max_cll,
+                max_fall: None,
+            }))
+        };
+        assert!((f64::from(hdr10(None).headroom) - 1_000.0 / 203.0).abs() < 1e-4);
+        assert!((f64::from(hdr10(Some(600)).headroom) - 600.0 / 203.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pq_content_never_washes_out_on_the_sdr_output() {
+        // The bug this pipeline exists for: PQ code values scanned out as if
+        // they were gamma22. Reference white must come out near full white,
+        // not the ~58% grey its PQ code value would show as.
+        let transform = transform(NamedPrimaries::Bt2020, NamedTransferFunction::St2084Pq);
+        let reference_signal = pq_signal(203.0);
+        let white = output_signal(transform, [reference_signal; 3]);
+        assert!(reference_signal < 0.6);
+        for channel in white {
+            assert!(channel > 0.9, "reference white came out at {channel}");
+        }
+
+        let peak = output_signal(transform, [1.0; 3]);
+        for channel in peak {
+            assert!((channel - 1.0).abs() < 1e-6, "the peak must reach 1.0");
+        }
+
+        // A dark grey stays dark rather than being lifted toward the PQ code.
+        let shadow = output_signal(transform, [pq_signal(5.0); 3]);
+        assert!(shadow[0] < 0.2, "5 cd/m² came out at {}", shadow[0]);
     }
 
     #[test]
@@ -302,52 +461,82 @@ mod tests {
     }
 
     #[test]
+    fn scrgb_one_is_eighty_nits_under_a_203_nit_reference() {
+        let transform = described(DescriptionKind::WindowsScrgb);
+        let one = apply(transform, [1.0; 3]);
+        assert!((one[0] - 80.0 / 203.0).abs() < 1e-5);
+        assert!((f64::from(transform.headroom) - 10_000.0 / 203.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn white_stays_neutral_through_the_primaries_matrix() {
         for primaries in [
             NamedPrimaries::Srgb,
             NamedPrimaries::DisplayP3,
             NamedPrimaries::Bt2020,
             NamedPrimaries::AdobeRgb,
+            NamedPrimaries::DciP3,
         ] {
             let white = apply(
                 transform(primaries, NamedTransferFunction::Gamma22),
                 [1.0, 1.0, 1.0],
             );
+            for channel in white {
+                assert!(
+                    (channel - 1.0).abs() < 1e-3,
+                    "{primaries:?}: white must stay neutral white, got {white:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bt2020_red_falls_outside_srgb_and_is_clipped() {
+        let transform = transform(NamedPrimaries::Bt2020, NamedTransferFunction::Gamma22);
+        let red = apply(transform, [1.0, 0.0, 0.0]);
+        assert!(red[0] > 1.0, "BT.2020 red is more saturated than sRGB red");
+        assert!(red[1] < 0.0 && red[2] < 0.0);
+
+        let shown = output_signal(transform, [1.0, 0.0, 0.0]);
+        assert!(shown.iter().all(|channel| (0.0..=1.0).contains(channel)));
+    }
+
+    #[test]
+    fn the_bt2020_to_srgb_matrix_matches_bt2087() {
+        // ITU-R BT.2087's published BT.2020 to BT.709 matrix, row by row.
+        let expected = [
+            [1.6605, -0.5876, -0.0728],
+            [-0.1246, 1.1329, -0.0083],
+            [-0.0182, -0.1006, 1.1187],
+        ];
+        let matrix = transform(NamedPrimaries::Bt2020, NamedTransferFunction::ExtLinear).primaries;
+        for (row, values) in expected.iter().enumerate() {
+            for (column, value) in values.iter().enumerate() {
+                assert!(
+                    (f64::from(matrix[column][row]) - value).abs() < 1e-3,
+                    "[{row}][{column}] was {}, BT.2087 says {value}",
+                    matrix[column][row]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn srgb_content_needs_no_primaries_conversion() {
+        let transform = transform(NamedPrimaries::Srgb, NamedTransferFunction::ExtLinear);
+        let identity = IDENTITY_MATRIX.iter().flatten();
+        for (value, expected) in transform.primaries.iter().flatten().zip(identity) {
             assert!(
-                (white[0] - white[1]).abs() < 1e-4 && (white[1] - white[2]).abs() < 1e-4,
-                "{primaries:?}: white must stay neutral, got {white:?}"
+                (value - expected).abs() < 1e-5,
+                "sRGB to sRGB must be the identity"
             );
         }
     }
 
     #[test]
-    fn srgb_content_fits_inside_the_compositing_space() {
-        let transform = SurfaceTransform::default_srgb();
-        for corner in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
-            for channel in apply(transform, corner) {
-                assert!(
-                    channel > -1e-4,
-                    "sRGB is inside BT.2020, so nothing may go negative"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn bt2020_content_needs_no_primaries_conversion() {
-        // Derived in f64 and stored as f32, so this is the identity to within
-        // rounding rather than exactly.
-        let transform = transform(NamedPrimaries::Bt2020, NamedTransferFunction::ExtLinear);
-        for column in 0..3 {
-            for row in 0..3 {
-                let expected = IDENTITY_MATRIX[column][row];
-                assert!(
-                    (transform.primaries[column][row] - expected).abs() < 1e-5,
-                    "BT.2020 to BT.2020 must be the identity, [{column}][{row}] was {}",
-                    transform.primaries[column][row]
-                );
-            }
-        }
+    fn xyz_content_is_converted_rather_than_left_alone() {
+        let transform = transform(NamedPrimaries::Cie1931Xyz, NamedTransferFunction::St428);
+        assert_ne!(transform.primaries, IDENTITY_MATRIX);
     }
 
     #[test]
@@ -359,7 +548,7 @@ mod tests {
             NamedTransferFunction::CompoundPower2_4,
             NamedTransferFunction::ExtLinear,
         ] {
-            let black = apply(transform(NamedPrimaries::Bt2020, transfer), [0.0; 3]);
+            let black = output_signal(transform(NamedPrimaries::Bt2020, transfer), [0.0; 3]);
             for channel in black {
                 assert!(channel.abs() < 1e-6, "{transfer:?} must map black to black");
             }
@@ -367,17 +556,14 @@ mod tests {
     }
 
     #[test]
-    fn an_icc_description_has_no_transform_yet() {
-        use protocols::color_management::record::IccData;
-        let mut registry = protocols::color_management::registry::Registry::new();
-        let description = registry.intern(DescriptionKind::Icc(IccData::new(vec![1, 2, 3])));
+    fn an_icc_description_has_no_transform() {
+        let description = Registry::new().intern(DescriptionKind::Icc(IccData::new(vec![1, 2, 3])));
         assert_eq!(SurfaceTransform::for_description(&description), None);
     }
 
     #[test]
     fn a_parametric_description_becomes_a_transform() {
-        let mut registry = protocols::color_management::registry::Registry::new();
-        let description = registry.intern(DescriptionKind::Parametric(ParametricDescription {
+        let transform = described(DescriptionKind::Parametric(ParametricDescription {
             primaries: PrimariesSpec::Named(NamedPrimaries::DisplayP3),
             transfer: TransferFunction::Named(NamedTransferFunction::Gamma22),
             luminances: Luminances {
@@ -390,11 +576,14 @@ mod tests {
             max_cll: None,
             max_fall: None,
         }));
-
-        let transform = SurfaceTransform::for_description(&description).expect("a transform");
         assert_eq!(transform.transfer, TransferKind::Power);
         assert!((transform.transfer_param - 2.2).abs() < 1e-6);
         assert!((transform.luminance_scale - 1.0).abs() < 1e-6);
+        assert!((transform.headroom - 1.0).abs() < 1e-6);
+        assert!(
+            !transform.is_passthrough(),
+            "P3 primaries still need converting"
+        );
     }
 
     #[test]
@@ -405,6 +594,9 @@ mod tests {
             blue: math::Chromaticity::new(0.5, 0.5),
             white: math::Chromaticity::new(0.3127, 0.3290),
         };
-        assert_eq!(to_bt2020(PrimariesSpec::Raw(degenerate)), IDENTITY_MATRIX);
+        assert_eq!(
+            to_output_primaries(PrimariesSpec::Raw(degenerate)),
+            IDENTITY_MATRIX
+        );
     }
 }

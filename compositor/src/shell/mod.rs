@@ -48,6 +48,7 @@ use protocols::{crownos_app_icons::IconRef, crownos_surface_animation::SurfaceAn
 use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
+    color::surfaces::DescribedSurfaces,
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
     layout::{Direction, Gaps, LayoutOp, SnapBounds, SnapZone, WorkspaceMode, placement},
     menu::Menus,
@@ -288,6 +289,9 @@ pub struct Shell {
     pub surface_animations: SurfaceAnimations,
     /// The `xdg-toplevel-drag-v1` drag in progress, and the window it carries.
     toplevel_drag: Option<ToplevelDragSession>,
+    /// Surfaces that set an image description, which the renderer converts
+    /// into the output's encoding where it differs.
+    pub described_surfaces: DescribedSurfaces,
 }
 
 impl Shell {
@@ -317,6 +321,7 @@ impl Shell {
             cascade: 0,
             snap_previews: SnapPreviews::default(),
             toplevel_drag: None,
+            described_surfaces: DescribedSurfaces::default(),
             session_lock: SessionLock::default(),
             lock_screen: LockScreen::default(),
             menus: Menus::default(),
