@@ -69,8 +69,8 @@ mod tests {
     use crate::color_management::{
         math::named,
         record::{
-            Luminances, NamedPrimaries, NamedTransferFunction, ParametricDescription,
-            PrimariesSpec, TransferFunction,
+            NamedPrimaries, NamedTransferFunction, ParametricDescription, PrimariesSpec,
+            TransferFunction,
         },
     };
 

@@ -1,5 +1,7 @@
 use chrono::format::{Item, StrftimeItems};
-use crownos_config::schema::{Lock, LockBackground, Theme, theme::is_color_token, theme::parse_hex};
+use crownos_config::schema::{
+    Lock, LockBackground, Theme, theme::is_color_token, theme::parse_hex,
+};
 
 use crate::{AssetId, Limits, SceneError};
 

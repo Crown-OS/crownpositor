@@ -334,8 +334,10 @@ mod tests {
     fn a_description_needs_both_a_curve_and_primaries() {
         assert_eq!(validate(&Params::default()), Err(ParamsError::Incomplete));
 
-        let mut only_curve = Params::default();
-        only_curve.transfer = Some(TransferFunction::Named(NamedTransferFunction::Gamma22));
+        let only_curve = Params {
+            transfer: Some(TransferFunction::Named(NamedTransferFunction::Gamma22)),
+            ..Params::default()
+        };
         assert_eq!(validate(&only_curve), Err(ParamsError::Incomplete));
 
         assert_eq!(validate(&complete()), Ok(()));

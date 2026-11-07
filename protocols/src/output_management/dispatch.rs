@@ -436,7 +436,6 @@ impl<D: ManagementDispatch> Dispatch<ZwlrOutputConfigurationHeadV1, PendingHeadC
                 if set_once(resource, pending.scale.is_some()) {
                     return;
                 }
-                let scale = scale.into();
                 if scale <= 0.0 {
                     resource.post_error(
                         zwlr_output_configuration_head_v1::Error::InvalidScale,

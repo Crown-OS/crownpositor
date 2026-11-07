@@ -20,7 +20,6 @@ use wayland_server::{
 use super::{
     capabilities::{Capabilities, Feature, RenderIntent},
     creator::{self, IccCreator, IccCreatorData, IccFile, Params, ParamsData},
-    info,
     math::Primaries,
     record::{
         DescriptionKind, IccData, ImageDescription, Luminances, ParametricDescription,
@@ -585,7 +584,12 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
                 }
                 set_once!(
                     params.primaries,
-                    PrimariesSpec::Raw(primaries_from_wire(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y))
+                    PrimariesSpec::Raw(primaries_from_wire([
+                        (r_x, r_y),
+                        (g_x, g_y),
+                        (b_x, b_y),
+                        (w_x, w_y)
+                    ]))
                 );
             }
 
@@ -631,7 +635,7 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
                 }
                 set_once!(
                     params.mastering_primaries,
-                    primaries_from_wire(r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y)
+                    primaries_from_wire([(r_x, r_y), (g_x, g_y), (b_x, b_y), (w_x, w_y)])
                 );
             }
 
@@ -707,21 +711,12 @@ impl<D: ColorDispatch> Dispatch<WpImageDescriptionCreatorParamsV1, ParamsData, D
     }
 }
 
-fn primaries_from_wire(
-    r_x: i32,
-    r_y: i32,
-    g_x: i32,
-    g_y: i32,
-    b_x: i32,
-    b_y: i32,
-    w_x: i32,
-    w_y: i32,
-) -> Primaries {
+fn primaries_from_wire([red, green, blue, white]: [(i32, i32); 4]) -> Primaries {
     Primaries {
-        red: chromaticity_from_wire(r_x, r_y),
-        green: chromaticity_from_wire(g_x, g_y),
-        blue: chromaticity_from_wire(b_x, b_y),
-        white: chromaticity_from_wire(w_x, w_y),
+        red: chromaticity_from_wire(red.0, red.1),
+        green: chromaticity_from_wire(green.0, green.1),
+        blue: chromaticity_from_wire(blue.0, blue.1),
+        white: chromaticity_from_wire(white.0, white.1),
     }
 }
 

@@ -155,7 +155,9 @@ mod tests {
 
     use super::*;
 
-    fn region(rects: &[(RectangleKind, (i32, i32, i32, i32))]) -> RegionAttributes {
+    type RectSpec = (RectangleKind, (i32, i32, i32, i32));
+
+    fn region(rects: &[RectSpec]) -> RegionAttributes {
         RegionAttributes {
             rects: rects
                 .iter()
