@@ -180,7 +180,7 @@ where
             bounds.loc.to_f64(),
             &sprite.buffer,
             Some(combined.opacity),
-            None,
+            Some(sprite.whole_buffer()),
             Some(Size::<i32, Logical>::from((
                 (bounds.size.w as f32 / scale).round() as i32,
                 (bounds.size.h as f32 / scale).round() as i32,
@@ -244,7 +244,7 @@ where
                 origin,
                 &sprite.buffer,
                 Some(style.opacity),
-                None,
+                size.map(|_| sprite.whole_buffer()),
                 size,
                 Kind::Unspecified,
             )

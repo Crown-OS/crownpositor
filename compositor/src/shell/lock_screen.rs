@@ -19,6 +19,7 @@ use lockscreen::{
 use smithay::{
     backend::renderer::{element::Id, element::memory::MemoryRenderBuffer},
     output::Output,
+    utils::{Logical, Rectangle},
 };
 
 use crate::utils::id::OutputId;
@@ -40,6 +41,16 @@ pub struct PreparedSprite {
     pub born: Option<Instant>,
     /// Names the sprite's glass, should it be drawn as glass, for its life.
     pub glass_id: Id,
+}
+
+impl PreparedSprite {
+    /// The whole buffer as a memory element's source: without one, a sized
+    /// element samples its logical size in buffer pixels, cropping the
+    /// buffer at a fractional scale.
+    pub fn whole_buffer(&self) -> Rectangle<f64, Logical> {
+        let [width, height] = self.pixels.map(f64::from);
+        Rectangle::from_size((width, height).into())
+    }
 }
 
 /// What one output shows of the lock.
