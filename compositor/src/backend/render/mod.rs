@@ -41,7 +41,7 @@ use smithay::backend::{
 use crate::{
     rendering::{decorate::TileDecorator, rounded::GlesDecorator},
     shaders::{
-        blur::BlurShaders, border::BorderShader, color::ColorWindowShader, glazed::GlazedShader,
+        blur::BlurShaders, border::BorderShader, color::ColorConvertShader, glazed::GlazedShader,
         lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader, shadow::ShadowShader,
         sprite_blur::SpriteBlurShader, title_bar::TitleBarShader, warp::WarpShaders,
     },
@@ -140,7 +140,7 @@ impl CrownRenderer for GlesRenderer {
 
     fn compile_shaders(&mut self) -> Result<(), RenderInitError> {
         RoundedCornerShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
-        ColorWindowShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
+        ColorConvertShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BlurShaders::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BorderShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         ShadowShader::init(self).map_err(|err| RenderInitError::Shader(err.to_string()))?;
@@ -160,7 +160,7 @@ impl<'render> CrownRenderer for KmsRenderer<'render> {
         // persist per GPU, not per `MultiRenderer` instance.
         RoundedCornerShader::init(self.as_mut())
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
-        ColorWindowShader::init(self.as_mut())
+        ColorConvertShader::init(self.as_mut())
             .map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BlurShaders::init(self.as_mut()).map_err(|err| RenderInitError::Shader(err.to_string()))?;
         BorderShader::init(self.as_mut())

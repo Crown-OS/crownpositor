@@ -1,48 +1,17 @@
-#version 100
 
-// Replaced by the renderer with the `#define`s for the variant being compiled:
-// EXTERNAL, NO_ALPHA and DEBUG_FLAGS. Must stay on a line of its own.
-//_DEFINES_
-
-#if defined(EXTERNAL)
-#extension GL_OES_EGL_image_external : require
-#endif
-
-#extension GL_OES_standard_derivatives : enable
-
-// Colour work needs the headroom far more than the distance field does: PQ's
-// inverse is a pair of chained `pow`s over four decades of luminance, and
-// mediump would quantise the result visibly in shadows.
-#if defined(GL_FRAGMENT_PRECISION_HIGH)
-precision highp float;
-#else
-precision mediump float;
-#endif
-
-#if defined(EXTERNAL)
-uniform samplerExternalOES tex;
-#else
-uniform sampler2D tex;
-#endif
-
-uniform float alpha;
-varying vec2 v_coords;
-
-#if defined(DEBUG_FLAGS)
-uniform float tint;
-#endif
-
-uniform vec2 shape_origin;
-uniform vec2 shape_size;
-uniform vec4 radius;
+// The colour-converting variant's half of `rounded_corner.frag`: a surface's
+// own encoding to the output's 8-bit SDR one. Every constant here has a CPU
+// reference in `color::transfer` and `color::tone_map`.
 
 // Which curve to decode with. Must match `color::pipeline::TransferKind`.
 uniform int tf_kind;
 // The power curve's exponent, or HLG's peak luminance in cd/m².
 uniform float tf_param;
-// Brings decoded light onto "1.0 is the output's reference white".
+// Brings decoded light onto "1.0 is reference white".
 uniform float luminance_scale;
-// Source primaries into the compositing space, column-major.
+// The content's peak over its reference white.
+uniform float headroom;
+// Source primaries onto the output's, column-major.
 uniform mat3 primaries;
 
 #define TF_LINEAR         0
@@ -54,7 +23,8 @@ uniform mat3 primaries;
 #define TF_HLG            6
 #define TF_ST428          7
 
-float rounded_box(in vec2 p, in vec2 b, in vec4 r);
+const float TONE_KNEE = 0.75;
+const float OUTPUT_GAMMA = 2.2;
 
 // A power curve mirrored through the origin, so a wide-gamut encoding's
 // negative channels stay negative instead of becoming NaN.
@@ -99,8 +69,8 @@ vec3 hlg_to_scene(vec3 v) {
     );
 }
 
-// The opto-optical transfer HLG needs, which is why it cannot be per-channel:
-// the gain depends on the pixel's luminance, not on each channel alone.
+// HLG's opto-optical transfer is cross-channel: the gain depends on the
+// pixel's luminance, not on each channel alone.
 vec3 hlg_to_nits(vec3 v, float peak) {
     vec3 scene = hlg_to_scene(v);
     float luma = dot(scene, vec3(0.2627, 0.6780, 0.0593));
@@ -133,42 +103,30 @@ vec3 decode(vec3 v) {
     return v;
 }
 
-void main() {
-    vec4 color = texture2D(tex, v_coords);
+// Identity up to the knee, then an extended Reinhard shoulder joined with
+// matching slope that lands the content's peak on 1.0. Driven by the
+// brightest channel so all three scale alike and hue survives.
+vec3 tone_map(vec3 light) {
+    float brightest = max(max(light.r, light.g), light.b);
+    if (headroom <= 1.0 || brightest <= TONE_KNEE) {
+        return light;
+    }
+    float span = 1.0 - TONE_KNEE;
+    float over = (brightest - TONE_KNEE) / span;
+    float white = (headroom - TONE_KNEE) / span;
+    float mapped = TONE_KNEE + span * over * (1.0 + over / (white * white)) / (1.0 + over);
+    return light * (mapped / brightest);
+}
 
-#if defined(NO_ALPHA)
-    color = vec4(color.rgb, 1.0);
-#endif
-
-    // Un-premultiply before anything non-linear. Decoding a premultiplied
-    // channel applies the curve to `colour × alpha` rather than to the colour,
-    // which darkens every translucent pixel — the classic first-HDR bug.
-    float a = max(color.a, 1e-5);
-    vec3 linear = decode(color.rgb / a) * luminance_scale;
-    // Column-major, so this is the matrix times the colour.
-    color = vec4(primaries * linear, color.a);
-    color.rgb *= color.a;
-
-    vec2 half_size = shape_size * 0.5;
-    float limit = min(half_size.x, half_size.y);
-    vec4 r = min(radius, vec4(limit));
-    float distance = rounded_box(gl_FragCoord.xy - shape_origin - half_size, half_size, r);
-
-    // The same edge as rounded_corner.frag: one pixel along the gradient, ramped
-    // linearly.
-#if defined(GL_OES_standard_derivatives)
-    float aa = max(length(vec2(dFdx(distance), dFdy(distance))), 0.0001);
-#else
-    float aa = 1.0;
-#endif
-    float mask = clamp(0.5 - distance / aa, 0.0, 1.0);
-
-    color = color * (alpha * mask);
-
-#if defined(DEBUG_FLAGS)
-    if (tint == 1.0)
-        color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
-#endif
-
-    gl_FragColor = color;
+// Un-premultiplied before anything non-linear: a curve applied to
+// `colour × alpha` darkens every translucent pixel.
+vec4 convert_color(vec4 premultiplied) {
+    float a = premultiplied.a;
+    if (a <= 0.0) {
+        return vec4(0.0);
+    }
+    vec3 light = primaries * (decode(premultiplied.rgb / a) * luminance_scale);
+    light = tone_map(max(light, 0.0));
+    vec3 encoded = pow(clamp(light, 0.0, 1.0), vec3(1.0 / OUTPUT_GAMMA));
+    return vec4(encoded * a, a);
 }

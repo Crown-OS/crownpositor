@@ -175,6 +175,7 @@ where
     D: TileDecorator<R>,
 {
     let mut elements = Elements::<R, D>::new();
+    decorator.convert_colors(shell.described_surfaces.conversions());
 
     // First in the list is nearest the eye: the cursor is over everything,
     // fullscreen windows included.

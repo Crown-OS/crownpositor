@@ -8,6 +8,7 @@
 
 use crate::rendering::{
     blur::{Glass, GlassKind, ShadowPiece},
+    color::ColorConversions,
     decoration::{Border, TitleBarParams},
     snapshot::SnapshotElement,
     surface_tree::TransformedSurface,
@@ -282,6 +283,20 @@ where
         None
     }
 
+    /// The surfaces whose image description this frame has to convert into
+    /// the output's encoding. Ignored — the default — by a decorator that
+    /// cannot convert, which then draws them as undescribed.
+    fn convert_colors(&mut self, conversions: ColorConversions) {
+        let _ = conversions;
+    }
+
+    /// Whether the surface drawn as `id` is converted, so it must be
+    /// decorated rather than handed to a plane as it is.
+    fn converts_color(&self, id: &Id) -> bool {
+        let _ = id;
+        false
+    }
+
     /// The material this decorator makes the compositor's own glass out of —
     /// window frames, menus, snap previews — at one output's scale. A surface
     /// that asked for its own through `crownos_background_effects` gets that
@@ -332,12 +347,25 @@ where
 {
     surfaces
         .into_iter()
-        .filter_map(|surface| {
-            let geometry = surface.geometry(scale);
-            let cropped = CropRenderElement::from_element(surface, scale, geometry)?;
-            decorator.decorate(renderer, cropped, geometry, [0.0; 4])
-        })
+        .filter_map(|surface| unclipped_one(renderer, decorator, surface, scale))
         .collect()
+}
+
+/// One surface as [`unclipped`] decorates it.
+pub fn unclipped_one<R, D>(
+    renderer: &mut R,
+    decorator: &mut D,
+    surface: TransformedSurface<R>,
+    scale: Scale<f64>,
+) -> Option<D::Element>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+    D: TileDecorator<R>,
+{
+    let geometry = surface.geometry(scale);
+    let cropped = CropRenderElement::from_element(surface, scale, geometry)?;
+    decorator.decorate(renderer, cropped, geometry, [0.0; 4])
 }
 
 /// Draws windows as they are. What a renderer without custom shaders uses.

@@ -2,12 +2,13 @@
 //!
 //! No rounding, opacity, glass, frame or panels, so the client's buffer is a
 //! candidate for the primary plane and a game's frame reaches the screen with
-//! no composition at all.
+//! no composition at all — unless its image description is not the output's,
+//! when the decorator converts it and it is composited like any other window.
 
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
-        element::{Kind, Wrap},
+        element::{Element, Kind, Wrap},
     },
     utils::{Physical, Point, Scale},
 };
@@ -45,16 +46,22 @@ pub fn fullscreen_elements<R, D>(
             .into_iter()
             .map(|popup| CrownElement::Tile(Wrap::from(popup))),
     );
-    elements.extend(
-        transformed_surface_elements(
-            renderer,
-            tile.surface(),
-            origin,
-            scale,
-            1.0,
-            Kind::ScanoutCandidate,
-        )
-        .into_iter()
-        .map(CrownElement::Transformed),
+    let surfaces = transformed_surface_elements(
+        renderer,
+        tile.surface(),
+        origin,
+        scale,
+        1.0,
+        Kind::ScanoutCandidate,
     );
+    for surface in surfaces {
+        if decorator.converts_color(surface.id()) {
+            elements.extend(
+                decorate::unclipped_one(renderer, decorator, surface, scale)
+                    .map(|converted| CrownElement::Tile(Wrap::from(converted))),
+            );
+        } else {
+            elements.push(CrownElement::Transformed(surface));
+        }
+    }
 }

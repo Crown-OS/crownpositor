@@ -1,45 +1,52 @@
-use smithay::{
-    backend::renderer::gles::{
-        GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, UniformValue,
-    },
-    utils::{Physical, Rectangle},
+use smithay::backend::renderer::gles::{
+    GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, UniformValue,
 };
 
-use crate::color::pipeline::SurfaceTransform;
+use crate::{
+    color::pipeline::SurfaceTransform,
+    shaders::rounded_corner::{CLIPPING_SHADER, RoundedCornerShader},
+};
 
-/// The rounded-corner shader with colour decoding fused in.
+const DEFINES_MARKER: &str = "//_DEFINES_";
+
+/// The rounded-corner program with colour conversion fused in.
 ///
 /// Fused rather than run as a second pass: `override_default_tex_program` is
 /// one program per draw, so a separate colour pass would mean drawing every
-/// window twice.
-pub static COLOR_WINDOW_SHADER: &str = concat!(
-    include_str!("./color_window.frag"),
-    include_str!("../common/rounded_box.glsl"),
-);
+/// described window twice. It keeps the corner clip and the area filter, so a
+/// converted window is shaped and sampled exactly like any other.
+pub fn color_convert_source() -> String {
+    let converting = CLIPPING_SHADER.replacen(
+        DEFINES_MARKER,
+        &format!("#define COLOR_CONVERT\n{DEFINES_MARKER}"),
+        1,
+    );
+    converting + include_str!("./color_convert.glsl")
+}
 
-pub struct ColorWindowShader(pub GlesTexProgram);
+pub struct ColorConvertShader(pub GlesTexProgram);
 
-impl ColorWindowShader {
-    fn uniforms() -> [UniformName<'static>; 7] {
-        [
-            UniformName::new("shape_origin", UniformType::_2f),
-            UniformName::new("shape_size", UniformType::_2f),
-            UniformName::new("radius", UniformType::_4f),
+impl ColorConvertShader {
+    fn uniforms() -> Vec<UniformName<'static>> {
+        let mut uniforms = RoundedCornerShader::uniforms().to_vec();
+        uniforms.extend([
             UniformName::new("tf_kind", UniformType::_1i),
             UniformName::new("tf_param", UniformType::_1f),
             UniformName::new("luminance_scale", UniformType::_1f),
+            UniformName::new("headroom", UniformType::_1f),
             UniformName::new("primaries", UniformType::Matrix3x3),
-        ]
+        ]);
+        uniforms
     }
 
     pub fn init(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
         let program =
-            renderer.compile_custom_texture_shader(COLOR_WINDOW_SHADER, &Self::uniforms())?;
+            renderer.compile_custom_texture_shader(color_convert_source(), &Self::uniforms())?;
 
         renderer
             .egl_context()
             .user_data()
-            .insert_if_missing(|| ColorWindowShader(program));
+            .insert_if_missing(|| ColorConvertShader(program));
 
         Ok(())
     }
@@ -50,29 +57,23 @@ impl ColorWindowShader {
         renderer
             .egl_context()
             .user_data()
-            .get::<ColorWindowShader>()
+            .get::<ColorConvertShader>()
             .map(|shader| shader.0.clone())
     }
 
-    /// `shape` and `radius` are in framebuffer pixels, as for
-    /// [`RoundedCornerShader`](crate::shaders::rounded_corner::RoundedCornerShader).
-    pub fn uniform_values(
-        shape: Rectangle<i32, Physical>,
-        radius: [f32; 4],
-        transform: SurfaceTransform,
-    ) -> [Uniform<'static>; 7] {
+    /// The uniforms on top of [`RoundedCornerShader::uniform_values`].
+    pub fn uniform_values(transform: SurfaceTransform) -> [Uniform<'static>; 5] {
         [
-            Uniform::new("shape_origin", (shape.loc.x as f32, shape.loc.y as f32)),
-            Uniform::new("shape_size", (shape.size.w as f32, shape.size.h as f32)),
-            Uniform::new("radius", radius),
             Uniform::new("tf_kind", transform.transfer as i32),
             Uniform::new("tf_param", transform.transfer_param),
             Uniform::new("luminance_scale", transform.luminance_scale),
+            Uniform::new("headroom", transform.headroom),
             Uniform::new(
                 "primaries",
-                // No `From<[f32; 9]>` exists, so the variant is built directly.
                 UniformValue::Matrix3x3 {
-                    matrices: vec![flatten(transform.primaries)],
+                    matrices: vec![std::array::from_fn(|index| {
+                        transform.primaries[index / 3][index % 3]
+                    })],
                     transpose: false,
                 },
             ),
@@ -80,52 +81,108 @@ impl ColorWindowShader {
     }
 }
 
-/// Column-major, which is what `UniformMatrix3fv` reads without transposing.
-fn flatten(matrix: [[f32; 3]; 3]) -> [f32; 9] {
-    let mut out = [0.0; 9];
-    for (column, values) in matrix.iter().enumerate() {
-        out[column * 3..column * 3 + 3].copy_from_slice(values);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::{
+        pipeline::TransferKind,
+        tone_map::{KNEE, OUTPUT_GAMMA},
+    };
+
+    #[test]
+    fn the_variant_is_switched_on_before_any_code() {
+        let source = color_convert_source();
+        let mut lines = source.lines();
+        assert_eq!(lines.next(), Some("#version 100"));
+        let define = source
+            .find("#define COLOR_CONVERT")
+            .expect("the variant's define");
+        let marker = source.find(DEFINES_MARKER).expect("smithay's marker");
+        assert!(define < marker, "the define must precede smithay's own");
+        assert!(define < source.find("#extension").unwrap_or(usize::MAX));
+    }
+
+    #[test]
+    fn the_plain_program_never_converts() {
+        assert!(!CLIPPING_SHADER.contains("#define COLOR_CONVERT"));
+        assert!(!CLIPPING_SHADER.contains("vec4 convert_color(vec4 premultiplied) {"));
+    }
+
+    #[test]
+    fn the_converter_is_declared_before_use_and_defined_after() {
+        let source = color_convert_source();
+        let declared = source
+            .find("vec4 convert_color(vec4 premultiplied);")
+            .expect("a prototype");
+        let used = source
+            .find("color = convert_color(color);")
+            .expect("a call");
+        let defined = source
+            .find("vec4 convert_color(vec4 premultiplied) {")
+            .expect("a body");
+        assert!(declared < used && used < defined);
+    }
+
+    #[test]
+    fn the_shader_constants_match_the_cpu_reference() {
+        let source = color_convert_source();
+        assert!(source.contains(&format!("const float TONE_KNEE = {KNEE:?};")));
+        assert!(source.contains(&format!("const float OUTPUT_GAMMA = {OUTPUT_GAMMA:?};")));
+    }
+
+    #[test]
+    fn every_extra_uniform_has_a_value() {
+        let transform = SurfaceTransform {
+            transfer: TransferKind::St2084Pq,
+            transfer_param: 1.0,
+            luminance_scale: 1.0 / 203.0,
+            headroom: 10_000.0 / 203.0,
+            primaries: [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
+        };
+        let declared = ColorConvertShader::uniforms();
+        let values = ColorConvertShader::uniform_values(transform);
+        for value in &values {
+            assert!(
+                declared.iter().any(|name| name.name == value.name),
+                "{} is set but never declared",
+                value.name
+            );
+        }
+        assert_eq!(
+            declared.len(),
+            RoundedCornerShader::uniforms().len() + values.len()
+        );
+    }
 
     #[test]
     fn the_matrix_is_flattened_column_by_column() {
-        let matrix = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
+        let transform = SurfaceTransform {
+            transfer: TransferKind::Linear,
+            transfer_param: 1.0,
+            luminance_scale: 1.0,
+            headroom: 1.0,
+            primaries: [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
+        };
+        let [.., matrix] = ColorConvertShader::uniform_values(transform);
         assert_eq!(
-            flatten(matrix),
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+            matrix.value,
+            UniformValue::Matrix3x3 {
+                matrices: vec![[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]],
+                transpose: false,
+            }
         );
     }
 
     #[test]
     fn both_programs_share_one_copy_of_the_distance_field() {
-        use crate::shaders::rounded_corner::CLIPPING_SHADER;
-
         let body = include_str!("../common/rounded_box.glsl");
-        assert!(COLOR_WINDOW_SHADER.ends_with(body));
         assert!(CLIPPING_SHADER.ends_with(body));
-
-        // And each declares the prototype, without which GLSL ES 1.00 would
-        // reject the call that comes before the body.
-        for shader in [COLOR_WINDOW_SHADER, CLIPPING_SHADER] {
-            assert!(
-                shader.contains("float rounded_box(in vec2 p, in vec2 b, in vec4 r);"),
-                "the prototype must precede the call"
-            );
-        }
+        assert_eq!(color_convert_source().matches(body).count(), 1);
     }
 
     #[test]
     fn the_shader_defines_match_the_rust_enum() {
-        use crate::color::pipeline::TransferKind;
-
-        // The two lists are written out separately on purpose — the shader
-        // cannot see the enum — so this is what keeps them honest.
+        let source = color_convert_source();
         for (kind, define) in [
             (TransferKind::Linear, "#define TF_LINEAR         0"),
             (TransferKind::Power, "#define TF_POWER          1"),
@@ -137,7 +194,7 @@ mod tests {
             (TransferKind::St428, "#define TF_ST428          7"),
         ] {
             assert!(
-                COLOR_WINDOW_SHADER.contains(define),
+                source.contains(define),
                 "{kind:?} is missing its `{define}`"
             );
             let value = define

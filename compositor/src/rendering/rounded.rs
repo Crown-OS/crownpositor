@@ -25,8 +25,10 @@ use smithay::{
 };
 
 use crate::{
+    color::pipeline::SurfaceTransform,
     rendering::{
         blur::{BlurBackdrop, BlurSession, Glass, GlassGlyph, GlassHandoff, GlassKind},
+        color::ColorConversions,
         corners::CornerMemory,
         decorate::{Backdrop, Cropped, Glaze, Glazing, GlyphDraw, Shadow, TileDecorator},
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
@@ -39,8 +41,8 @@ use crate::{
         warp::{self, WarpCanvases, WarpElement, WarpRequest},
     },
     shaders::{
-        glazed::GlazedShader, lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader,
-        sprite_blur::SpriteBlurShader,
+        color::ColorConvertShader, glazed::GlazedShader, lock_glyph::LockGlyphShader,
+        rounded_corner::RoundedCornerShader, sprite_blur::SpriteBlurShader,
     },
 };
 
@@ -61,6 +63,9 @@ pub struct Rounded<E> {
     /// The last frame clipped this element to a different shape, so pixels the
     /// client never damaged changed: the whole element is repainted.
     reshaped: bool,
+    /// Set when `program` is the colour-converting variant, which this
+    /// surface's image description needs to reach the output's encoding.
+    color: Option<SurfaceTransform>,
 }
 
 impl<E> Rounded<E> {
@@ -77,7 +82,14 @@ impl<E> Rounded<E> {
             shape,
             radius,
             reshaped,
+            color: None,
         }
+    }
+
+    fn converting(mut self, program: GlesTexProgram, transform: SurfaceTransform) -> Self {
+        self.program = Some(program);
+        self.color = Some(transform);
+        self
     }
 
     /// Binds the override for drawing `src` into `dst` on `frame` and returns
@@ -96,15 +108,19 @@ impl<E> Rounded<E> {
         let Ok(space) = FramebufferSpace::current(frame) else {
             return false;
         };
-        frame.override_default_tex_program(
-            program.clone(),
-            RoundedCornerShader::uniform_values(
-                space.rect(self.shape),
-                space.corners(self.radius),
-                RoundedCornerShader::resample(src, dst, transform),
-            )
-            .to_vec(),
+        let clip = RoundedCornerShader::uniform_values(
+            space.rect(self.shape),
+            space.corners(self.radius),
+            RoundedCornerShader::resample(src, dst, transform),
         );
+        let uniforms = match self.color {
+            Some(color) => clip
+                .into_iter()
+                .chain(ColorConvertShader::uniform_values(color))
+                .collect(),
+            None => clip.to_vec(),
+        };
+        frame.override_default_tex_program(program.clone(), uniforms);
         true
     }
 
@@ -194,7 +210,8 @@ impl<R: GlesBacked, E: RenderElement<R>> RenderElement<R> for Rounded<E> {
 
     fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         // Withheld on purpose: handing this to a DRM plane would scan the buffer
-        // out directly and skip the shader, so the corners would come back.
+        // out directly and skip the shader, so the corners would come back and
+        // a described surface would reach the screen unconverted.
         None
     }
 }
@@ -229,6 +246,7 @@ pub struct GlesDecorator<'a> {
     blur: Option<BlurSession<'a>>,
     corners: &'a mut CornerMemory,
     canvases: &'a mut WarpCanvases,
+    colors: ColorConversions,
 }
 
 impl<'a> GlesDecorator<'a> {
@@ -241,6 +259,7 @@ impl<'a> GlesDecorator<'a> {
             blur,
             corners,
             canvases,
+            colors: ColorConversions::default(),
         }
     }
 }
@@ -255,13 +274,21 @@ impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
         shape: Rectangle<i32, Physical>,
         radius: [f32; 4],
     ) -> Option<Self::Element> {
-        // A missing program (shader never compiled) squares the corners; it
-        // must not drop the window.
+        // A missing program (shader never compiled) squares the corners, and
+        // a missing colour program leaves the colours unconverted; neither may
+        // drop the window.
+        let conversion = self.colors.get(element.id());
+        let description = conversion.map_or(0, |conversion| conversion.description);
+        let reshaped = self
+            .corners
+            .reshaped(element.id(), shape.size, radius, description);
         let program = RoundedCornerShader::get(renderer.gles());
-        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
-        Some(Decorated::Window(Rounded::new(
-            element, program, shape, radius, reshaped,
-        )))
+        let rounded = Rounded::new(element, program, shape, radius, reshaped);
+        let rounded = match conversion.zip(ColorConvertShader::get(renderer.gles())) {
+            Some((conversion, program)) => rounded.converting(program, conversion.transform),
+            None => rounded,
+        };
+        Some(Decorated::Window(rounded))
     }
 
     fn glaze(
@@ -272,13 +299,17 @@ impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
         radius: [f32; 4],
         glaze: Glaze,
     ) -> Glazing<Self::Element> {
-        let Some(program) = GlazedShader::get(renderer.gles()) else {
+        // The glazed program cannot convert colour, so a described surface is
+        // decorated instead and its glass drawn under it the old way.
+        let glazed =
+            GlazedShader::get(renderer.gles()).filter(|_| self.colors.get(element.id()).is_none());
+        let Some(program) = glazed else {
             return Glazing::Decorated(self.decorate(renderer, element, shape, radius));
         };
         let clip = Clip {
             shape,
             radius,
-            reshaped: self.corners.reshaped(element.id(), shape.size, radius),
+            reshaped: self.corners.reshaped(element.id(), shape.size, radius, 0),
         };
         let handoff = GlassHandoff::default();
         let lift = glaze
@@ -300,6 +331,14 @@ impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
             )),
             lift: lift.map(Decorated::Backdrop),
         }
+    }
+
+    fn convert_colors(&mut self, conversions: ColorConversions) {
+        self.colors = conversions;
+    }
+
+    fn converts_color(&self, id: &Id) -> bool {
+        self.colors.get(id).is_some()
     }
 
     fn blur_strength_for(&self, shrink: f64) -> f32 {
@@ -332,7 +371,7 @@ impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
         radius: [f32; 4],
     ) -> Option<Self::Element> {
         let program = RoundedCornerShader::get(renderer.gles());
-        let reshaped = self.corners.reshaped(element.id(), shape.size, radius);
+        let reshaped = self.corners.reshaped(element.id(), shape.size, radius, 0);
         Some(Decorated::Snapshot(Rounded::new(
             element, program, shape, radius, reshaped,
         )))
