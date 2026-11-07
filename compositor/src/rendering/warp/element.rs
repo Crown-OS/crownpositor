@@ -27,6 +27,10 @@ enum Bend {
         uniforms: LiquidUniforms,
         icon: Option<GlesTexture>,
     },
+    ResizeBlur {
+        strength: f32,
+        radius: f32,
+    },
 }
 
 #[derive(Debug)]
@@ -82,6 +86,22 @@ impl WarpElement {
         }
     }
 
+    pub(super) fn resize_blur(
+        shaders: WarpShaders,
+        canvas: Painted,
+        strength: f32,
+        radius: f32,
+        alpha: f32,
+    ) -> Self {
+        Self {
+            shaders,
+            geometry: canvas.rect.to_i32_round(),
+            bend: Bend::ResizeBlur { strength, radius },
+            canvas,
+            alpha,
+        }
+    }
+
     fn draw_gles(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -111,6 +131,9 @@ impl WarpElement {
                 Bend::Dust(uniforms) => self.shaders.dust.draw(gl, &draw, uniforms),
                 Bend::Liquid { uniforms, icon } => {
                     self.shaders.liquid.draw(gl, &draw, icon.as_ref(), uniforms)
+                }
+                Bend::ResizeBlur { strength, radius } => {
+                    self.shaders.resize_blur.draw(gl, &draw, *strength, *radius)
                 }
             }
         })

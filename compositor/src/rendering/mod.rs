@@ -64,7 +64,7 @@ use crate::{
         element::CrownElement,
         frame::{Frame, client_area},
         unstretched::Unstretched,
-        warp::{Motion, WarpRequest},
+        warp::{Motion, ResizeBlurRequest, WarpRequest},
     },
     shell::{
         Shell,
@@ -595,14 +595,34 @@ fn tile_elements<R, D>(
         None => content_radii(radius, rim as f32),
     };
 
-    let surfaces = surface_tree::transformed_surface_elements(
-        renderer,
-        tile.surface(),
-        surface_origin,
-        scale,
-        alpha,
-        Kind::Unspecified,
-    );
+    let frosted = (tile.resize_blur().strength() > 0.0)
+        .then(|| {
+            decorator.resize_blur(
+                renderer,
+                ResizeBlurRequest {
+                    tile,
+                    rect: clip,
+                    radius: radii[0],
+                    alpha,
+                    scale,
+                },
+            )
+        })
+        .flatten();
+    let surfaces = match frosted {
+        Some(frosted) => {
+            elements.push(CrownElement::Tile(Wrap::from(frosted)));
+            Vec::new()
+        }
+        None => surface_tree::transformed_surface_elements(
+            renderer,
+            tile.surface(),
+            surface_origin,
+            scale,
+            alpha,
+            Kind::Unspecified,
+        ),
+    };
 
     for scaled in surfaces {
         // A client's buffer is whatever size it last committed — during a shrink

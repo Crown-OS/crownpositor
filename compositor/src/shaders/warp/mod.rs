@@ -23,11 +23,17 @@ static LIQUID_FRAGMENT_SHADER: &str = concat!(
     include_str!("./liquid.frag"),
     include_str!("../common/rounded_box.glsl"),
 );
+static RESIZE_BLUR_VERTEX_SHADER: &str = include_str!("./resize_blur.vert");
+static RESIZE_BLUR_FRAGMENT_SHADER: &str = concat!(
+    include_str!("./resize_blur.frag"),
+    include_str!("../common/rounded_box.glsl"),
+);
 
 /// Vertices in the genie's grid: 16 columns by 64 rows of two triangles.
 pub const GENIE_VERTICES: i32 = 16 * 64 * 6;
 /// Vertices in the liquid shape's grid: 16 by 16 quads of two triangles.
 pub const LIQUID_VERTICES: i32 = 16 * 16 * 6;
+const QUAD_VERTICES: i32 = 6;
 
 type Location = ffi::types::GLint;
 
@@ -83,6 +89,12 @@ pub struct LiquidProgram {
     corners_bottom: Location,
     content: Location,
     shape: Location,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResizeBlurProgram {
+    common: Common,
+    blur: Location,
 }
 
 /// Everything a liquid frame needs, in output-local physical pixels.
@@ -141,6 +153,7 @@ pub struct WarpShaders {
     pub genie: GenieProgram,
     pub dust: DustProgram,
     pub liquid: LiquidProgram,
+    pub resize_blur: ResizeBlurProgram,
 }
 
 impl WarpShaders {
@@ -158,6 +171,8 @@ impl WarpShaders {
             let genie = Common::link(gl, GENIE_SHADER, WARP_SHADER)?;
             let dust = Common::link(gl, DUST_SHADER, WARP_SHADER)?;
             let liquid = Common::link(gl, LIQUID_VERTEX_SHADER, LIQUID_FRAGMENT_SHADER)?;
+            let resize_blur =
+                Common::link(gl, RESIZE_BLUR_VERTEX_SHADER, RESIZE_BLUR_FRAGMENT_SHADER)?;
             Ok::<_, GlesError>(WarpShaders {
                 genie: GenieProgram {
                     common: genie,
@@ -181,6 +196,10 @@ impl WarpShaders {
                     corners_bottom: location(gl, liquid.program, c"corners_bottom"),
                     content: location(gl, liquid.program, c"content"),
                     shape: location(gl, liquid.program, c"shape"),
+                },
+                resize_blur: ResizeBlurProgram {
+                    common: resize_blur,
+                    blur: location(gl, resize_blur.program, c"blur"),
                 },
             })
         })??;
@@ -289,6 +308,22 @@ impl LiquidProgram {
             gl.ActiveTexture(ffi::TEXTURE1);
             gl.BindTexture(ffi::TEXTURE_2D, 0);
             gl.ActiveTexture(ffi::TEXTURE0);
+        }
+    }
+}
+
+impl ResizeBlurProgram {
+    /// Draws the canvas flat over `draw.window`, blurred by `strength` from 0
+    /// to 1 and cut to corners `radius` physical pixels round.
+    ///
+    /// # Safety
+    ///
+    /// `gl` must belong to the current frame's context.
+    pub unsafe fn draw(&self, gl: &ffi::Gles2, draw: &WarpDraw<'_>, strength: f32, radius: f32) {
+        unsafe {
+            run(gl, &self.common, draw, QUAD_VERTICES, || {
+                gl.Uniform2f(self.blur, strength, radius);
+            });
         }
     }
 }

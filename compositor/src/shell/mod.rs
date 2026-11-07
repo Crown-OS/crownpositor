@@ -12,6 +12,7 @@ pub mod monitor;
 pub mod morph;
 pub mod overview;
 pub mod popup;
+pub mod resize_blur;
 pub mod scale;
 pub mod session_lock;
 pub mod snap;
@@ -1796,6 +1797,7 @@ impl Shell {
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().step(dt);
+                    tile.step_resize_blur(dt);
                     tile.step_morph(dt, &self.choreography);
                 }
                 workspace
@@ -1829,10 +1831,11 @@ impl Shell {
                     || monitor.window_control().is_active()
                     || monitor.workspaces().iter().any(|workspace| {
                         !workspace.closing().is_empty()
-                            || workspace
-                                .tiles()
-                                .iter()
-                                .any(|tile| tile.morph().is_some() || !tile.anim().at_rest())
+                            || workspace.tiles().iter().any(|tile| {
+                                tile.morph().is_some()
+                                    || !tile.anim().at_rest()
+                                    || tile.resize_blur().is_animating()
+                            })
                     })
             })
     }

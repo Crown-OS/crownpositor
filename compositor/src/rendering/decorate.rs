@@ -12,7 +12,7 @@ use crate::rendering::{
     decoration::{Border, TitleBarParams},
     snapshot::SnapshotElement,
     surface_tree::TransformedSurface,
-    warp::WarpRequest,
+    warp::{ResizeBlurRequest, WarpRequest},
 };
 
 use smithay::{
@@ -208,6 +208,17 @@ where
     /// `None` — the default — makes the caller draw the flat morph, or let a
     /// crumbling window go.
     fn warp(&mut self, renderer: &mut R, request: WarpRequest<'_, '_>) -> Option<Self::Element> {
+        let _ = (renderer, request);
+        None
+    }
+
+    /// A window's content frosted while it changes size. `None` — the
+    /// default — draws it sharp.
+    fn resize_blur(
+        &mut self,
+        renderer: &mut R,
+        request: ResizeBlurRequest<'_>,
+    ) -> Option<Self::Element> {
         let _ = (renderer, request);
         None
     }

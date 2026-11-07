@@ -32,7 +32,7 @@ use smithay::{
 
 use crate::{
     rendering::cursor::Cursor,
-    shell::{Shell, workspace::Workspace},
+    shell::{Shell, tile::Tile, workspace::Workspace},
     state::State,
 };
 
@@ -71,10 +71,22 @@ fn for_each_surface(
     shell: &Shell,
     output: &Output,
     cursor: &Cursor,
+    processor: impl FnMut(&WlSurface, &SurfaceData),
+) {
+    for_each_surface_of(shell, output, cursor, |_| true, processor);
+}
+
+/// [`for_each_surface`], leaving out the windows `tiles` turns down.
+fn for_each_surface_of(
+    shell: &Shell,
+    output: &Output,
+    cursor: &Cursor,
+    tiles: impl Fn(&Tile) -> bool,
     mut processor: impl FnMut(&WlSurface, &SurfaceData),
 ) {
     if let Some(monitor) = shell.monitor(output) {
-        for tile in monitor.workspaces().iter().flat_map(Workspace::tiles) {
+        let windows = monitor.workspaces().iter().flat_map(Workspace::tiles);
+        for tile in windows.filter(|tile| tiles(tile)) {
             tile.window().with_surfaces(&mut processor);
         }
     }
@@ -90,14 +102,18 @@ fn for_each_surface(
 }
 
 /// Records which output each surface was mainly shown on this frame. A
-/// surface this frame did not show loses this output.
+/// surface this frame did not show loses this output. A window frosted over
+/// its resize is drawn from a canvas instead of its surfaces, and keeps the
+/// output it had: a client throttled to the occluded rate would take a second
+/// to draw at the size the frost is waiting for.
 pub fn track_primary_scanout(
     shell: &Shell,
     output: &Output,
     cursor: &Cursor,
     states: &RenderElementStates,
 ) {
-    for_each_surface(shell, output, cursor, |surface, data| {
+    let drawn_live = |tile: &Tile| tile.resize_blur().strength() == 0.0;
+    for_each_surface_of(shell, output, cursor, drawn_live, |surface, data| {
         update_surface_primary_scanout_output(
             surface,
             output,
