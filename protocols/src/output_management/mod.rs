@@ -18,7 +18,7 @@
 //!   door in, one door out" rule for outputs survives — an output that is off
 //!   is simply not there, rather than being a zombie with its global removed,
 //! * a head is not tied to a DRM connector, so the winit backend and the
-//!   virtual outputs crownconnect will create are ordinary heads.
+//!   virtual outputs crownlink will create are ordinary heads.
 
 mod config;
 mod dispatch;
