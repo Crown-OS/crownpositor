@@ -11,6 +11,7 @@ mod crownos_screencast;
 mod crownos_surface_animation;
 mod crownos_surface_visibility;
 mod crownos_virtual_output;
+mod crownos_workspace_mode;
 mod dmabuf;
 mod drm_lease;
 pub mod drm_syncobj;

@@ -71,6 +71,7 @@ use protocols::{
     crownos_surface_animation::SurfaceAnimationState,
     crownos_surface_visibility::SurfaceVisibilityState,
     crownos_virtual_output::VirtualOutputState,
+    crownos_workspace_mode::WorkspaceModeState,
     ext_workspace::ExtWorkspaceState,
     gamma_control::GammaControlState,
     output_management::OutputManagementState,
@@ -141,6 +142,9 @@ pub struct WaylandState {
     pub foreign_toplevels: ForeignToplevels,
     /// `ext_workspace_v1`. Privileged: it switches workspaces.
     pub ext_workspace_state: ExtWorkspaceState,
+    /// `crownos_workspace_mode_v1`. Privileged: it rearranges every window
+    /// on the focused workspace.
+    pub workspace_mode_state: WorkspaceModeState,
     /// `crownos_virtual_output_v1`. Privileged: it adds outputs windows can
     /// be moved onto, out of the user's sight.
     pub virtual_output_state: VirtualOutputState,
@@ -300,6 +304,7 @@ impl WaylandState {
             ),
             foreign_toplevels: ForeignToplevels::default(),
             ext_workspace_state: ExtWorkspaceState::new::<State, _>(display, is_privileged),
+            workspace_mode_state: WorkspaceModeState::new::<State, _>(display, is_privileged),
             output_capture_source_state: OutputCaptureSourceState::new_with_filter::<State, _>(
                 display,
                 is_privileged,

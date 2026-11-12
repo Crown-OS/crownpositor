@@ -21,6 +21,7 @@ pub mod crownos_screencast;
 pub mod crownos_surface_animation;
 pub mod crownos_surface_visibility;
 pub mod crownos_virtual_output;
+pub mod crownos_workspace_mode;
 pub mod ext_workspace;
 pub mod gamma_control;
 pub mod output_management;
