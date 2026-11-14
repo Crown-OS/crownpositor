@@ -33,6 +33,25 @@ pub fn is_trusted_agent(client: &Client, trusted: &TrustedExecutables) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the client is crownlink, the remote desktop's media engine, by the name of its
+/// executable. A name is no proof, but every privileged client can inject into the user's own
+/// seat through `crownos_input_v1`, which is more than a guest seat allows.
+pub fn is_media_engine(client: &Client) -> bool {
+    is_privileged(client)
+        && client
+            .get_data::<ClientState>()
+            .and_then(|state| {
+                state
+                    .executable
+                    .as_ref()?
+                    .file_name()
+                    .map(|name| name == MEDIA_ENGINE)
+            })
+            .unwrap_or(false)
+}
+
+const MEDIA_ENGINE: &str = "crownlink-linux";
+
 /// The executables `agents.ron` trusts, shared with the global filters that
 /// outlive any one config.
 pub type TrustedExecutables = Arc<RwLock<HashSet<PathBuf>>>;

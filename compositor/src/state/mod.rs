@@ -9,6 +9,8 @@ mod common;
 mod config;
 mod cursor;
 mod display;
+pub mod driven_seat;
+pub mod guest_seats;
 mod idle;
 mod input;
 pub mod launch_target;
@@ -78,6 +80,8 @@ pub struct State {
     pub agent_prompts: agent_access::PendingPrompts,
     /// The seats behind `crownos_agent_cursor_v1`, one per agent.
     pub agent_seats: agent_seats::AgentSeats,
+    /// The seats behind `crownos_guest_seat_v1`, one per remote desktop guest.
+    pub guest_seats: guest_seats::GuestSeats,
 }
 
 impl State {
@@ -190,6 +194,7 @@ impl State {
             windows: windows::WindowDirectory::new(&visual_context_rules),
             agent_prompts: agent_access::PendingPrompts::default(),
             agent_seats: agent_seats::AgentSeats::default(),
+            guest_seats: guest_seats::GuestSeats::default(),
         };
         state.arm_activity_flush();
         // The global was created advertising everything the renderer can do;

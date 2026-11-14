@@ -151,6 +151,7 @@ impl State {
     /// comparison per window when nothing changed, and nothing at all with nobody watching.
     pub fn sync_window_directory(&mut self) {
         self.revoke_agents_if_locked();
+        self.revoke_lost_guests();
         if !self.windows_are_watched() {
             return;
         }

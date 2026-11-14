@@ -71,6 +71,7 @@ use protocols::{
     },
     crownos_capture_privacy::CapturePrivacyState,
     crownos_context::ContextState,
+    crownos_guest_seat::GuestSeatState,
     crownos_input::InputState as CrownosInputState,
     crownos_plugin_host::PluginHostState,
     crownos_screencast::ScreencastState,
@@ -94,7 +95,10 @@ use crate::{
     state::{State, agent_access::AgentAccessPolicy},
     utils::{
         id::OutputId,
-        privilege::{TrustedExecutables, is_privileged, is_trusted_agent, trusted_executables},
+        privilege::{
+            TrustedExecutables, is_media_engine, is_privileged, is_trusted_agent,
+            trusted_executables,
+        },
     },
 };
 use crownos_config::schema::Agents;
@@ -116,6 +120,8 @@ pub struct WaylandState {
     pub window_control_state: WindowControlState,
     /// `crownos_agent_cursor_v1`. Trusted agent daemon only.
     pub agent_cursor_state: AgentCursorState,
+    /// `crownos_guest_seat_v1`. crownlink only.
+    pub guest_seat_state: GuestSeatState,
     /// `crownos_context_v1`. Trusted context engine only.
     pub context_state: ContextState,
     /// `crownos_capture_privacy_v1`. Any client: it only hides its own surfaces.
@@ -289,6 +295,7 @@ impl WaylandState {
                 agent_filter.clone(),
             ),
             agent_cursor_state: AgentCursorState::new::<State, _>(display, agent_filter.clone()),
+            guest_seat_state: GuestSeatState::new::<State, _>(display, is_media_engine),
             context_state: ContextState::new::<State, _>(display, agent_filter),
             capture_privacy_state: CapturePrivacyState::new::<State>(display),
             agent_access_policy: AgentAccessPolicy::from_env(),
