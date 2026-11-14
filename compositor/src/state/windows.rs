@@ -139,6 +139,7 @@ impl State {
 
     /// Describes every window once and hands the description to each watcher.
     pub fn sync_window_directory(&mut self) {
+        self.revoke_agents_if_locked();
         let now = Instant::now();
         self.windows.flagged.retain(|_, until| *until > now);
         let focus = self.shell.focused_window_id();

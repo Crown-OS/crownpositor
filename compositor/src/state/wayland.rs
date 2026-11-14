@@ -63,6 +63,7 @@ use protocols::{
     background_effect::{BackgroundEffectState, Capability as BackgroundEffectCapability},
     color_management::ColorManagementState,
     crownos_agent_access::AgentAccessState,
+    crownos_agent_cursor::AgentCursorState,
     crownos_app_icons::{AppIconsState, Launches},
     crownos_background_effects::{
         BackgroundEffectsState as CrownosBackgroundEffectsState,
@@ -113,6 +114,8 @@ pub struct WaylandState {
     pub trusted_executables: TrustedExecutables,
     /// `crownos_window_control_v1`. Trusted agent daemon only.
     pub window_control_state: WindowControlState,
+    /// `crownos_agent_cursor_v1`. Trusted agent daemon only.
+    pub agent_cursor_state: AgentCursorState,
     /// `crownos_context_v1`. Trusted context engine only.
     pub context_state: ContextState,
     /// `crownos_capture_privacy_v1`. Any client: it only hides its own surfaces.
@@ -285,6 +288,7 @@ impl WaylandState {
                 display,
                 agent_filter.clone(),
             ),
+            agent_cursor_state: AgentCursorState::new::<State, _>(display, agent_filter.clone()),
             context_state: ContextState::new::<State, _>(display, agent_filter),
             capture_privacy_state: CapturePrivacyState::new::<State>(display),
             agent_access_policy: AgentAccessPolicy::from_env(),

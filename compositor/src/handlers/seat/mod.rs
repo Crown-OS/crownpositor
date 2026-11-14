@@ -34,8 +34,12 @@ impl SeatHandler for State {
     /// screen: the shape only changes on a client's say-so, and if it does not
     /// force a frame the pointer keeps the previous image until something else
     /// happens to damage the output.
-    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
-        if self.input.cursor.dragging || self.input.cursor.status == image {
+    fn cursor_image(&mut self, seat: &Seat<Self>, image: CursorImageStatus) {
+        // An agent's cursor is the compositor's drawing, not the client's.
+        if seat.name() != self.wayland.seat.name()
+            || self.input.cursor.dragging
+            || self.input.cursor.status == image
+        {
             return;
         }
         self.input.cursor.status = image;
@@ -48,6 +52,9 @@ impl SeatHandler for State {
     /// its configure are `Shell::refresh`'s job, so exactly one pass decides
     /// what every window is told.
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {
+        if seat.name() != self.wayland.seat.name() {
+            return;
+        }
         self.shell.activated = match focused {
             Some(KeyboardFocusTarget::Window(window)) => Some(window.clone()),
             _ => None,

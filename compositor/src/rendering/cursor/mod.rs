@@ -18,7 +18,10 @@
 //! about file formats. Hyprcursor is tried first, XCursor after it, and the
 //! built-in arrow last.
 
-pub mod builtin;
+pub mod agent;
+mod builtin;
+
+pub use agent::AgentOverlay;
 pub mod drag_icon;
 pub mod hyprcursor;
 pub mod source;
@@ -85,6 +88,9 @@ pub struct Cursor {
     /// What the drag in progress carries under the pointer.
     pub drag_icon: Option<DragIcon>,
     animation: Animation,
+    /// The agents' cursors, drawn over everything like the user's own. Their
+    /// positions are in layout coordinates; the compositor keeps them current.
+    pub agents: Vec<AgentOverlay>,
 }
 
 /// A rasterised shape, ready to draw one image pixel per output pixel.
@@ -139,6 +145,7 @@ impl Cursor {
             suppressed: false,
             dragging: false,
             drag_icon: None,
+            agents: Vec::new(),
             animation: Animation::idle(),
         }
     }
@@ -313,6 +320,10 @@ impl Cursor {
         let local = pointer - output_location.to_f64();
         self.render_pointer(elements, renderer, local, scale);
         self.render_drag_icon(elements, renderer, local, scale);
+        for agent in &mut self.agents {
+            let local = agent.position - output_location.to_f64();
+            agent.render(elements, renderer, local, scale);
+        }
     }
 
     fn render_pointer<R, E>(

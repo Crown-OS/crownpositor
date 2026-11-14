@@ -1,6 +1,7 @@
 mod actions;
 mod activity;
 pub mod agent_access;
+pub mod agent_seats;
 mod app_icons;
 mod backend;
 mod client;
@@ -75,6 +76,8 @@ pub struct State {
     pub windows: windows::WindowDirectory,
     /// Apps waiting for the user's answer about agent access.
     pub agent_prompts: agent_access::PendingPrompts,
+    /// The seats behind `crownos_agent_cursor_v1`, one per agent.
+    pub agent_seats: agent_seats::AgentSeats,
 }
 
 impl State {
@@ -186,6 +189,7 @@ impl State {
             screensaver_holds: idle::ScreenSaverHolds::default(),
             windows: windows::WindowDirectory::new(&visual_context_rules),
             agent_prompts: agent_access::PendingPrompts::default(),
+            agent_seats: agent_seats::AgentSeats::default(),
         };
         state.arm_activity_flush();
         // The global was created advertising everything the renderer can do;

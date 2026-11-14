@@ -13,7 +13,7 @@ use crate::rendering::cursor::source::{CursorSource, RawImage, RawShape};
 /// A left-pointing arrow in the unit square, so one path serves every size:
 /// the tip, down the vertical left edge, around the tail, and back up the
 /// diagonal.
-const ARROW: &[(f32, f32)] = &[
+pub(super) const ARROW: &[(f32, f32)] = &[
     (0.00, 0.00),
     (0.00, 0.72),
     (0.19, 0.55),
