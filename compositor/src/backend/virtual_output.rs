@@ -36,6 +36,8 @@ struct VirtualHead {
     owner: Owner,
     output: Output,
     frame_requested: bool,
+    /// What the owner was last told the window in front is called.
+    front_title: Option<String>,
 }
 
 #[derive(Default)]
@@ -141,6 +143,7 @@ impl State {
             owner,
             output: output.clone(),
             frame_requested: true,
+            front_title: None,
         });
         self.refresh_output_heads();
         tracing::info!(output = name, ?mode, "virtual output created");
@@ -222,6 +225,33 @@ impl State {
 /// timed commits due by now, steps the animations and marks its capture
 /// sessions, which render next. Returns the outputs whose surfaces are owed
 /// frame callbacks once they have.
+impl State {
+    /// Tells each client-owned virtual output what the window in front on it is called, when
+    /// that changed. A string comparison per virtual output when nothing did.
+    pub fn refresh_virtual_output_titles(&mut self) {
+        for head in &mut self.virtual_outputs.heads {
+            let Owner::Client(protocol) = &head.owner else {
+                continue;
+            };
+            let title = self
+                .shell
+                .monitor(&head.output)
+                .map(|monitor| monitor.active())
+                .and_then(|workspace| {
+                    workspace
+                        .focus()
+                        .and_then(|id| workspace.tile(id))
+                        .or_else(|| workspace.tiles().last())
+                })
+                .map_or("", |tile| tile.title());
+            if head.front_title.as_deref() != Some(title) {
+                protocol.titled(title);
+                head.front_title = Some(title.to_owned());
+            }
+        }
+    }
+}
+
 pub fn begin_frames(state: &mut State) -> Vec<Output> {
     let outputs: Vec<Output> = state
         .virtual_outputs

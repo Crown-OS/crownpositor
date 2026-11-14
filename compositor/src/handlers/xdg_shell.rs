@@ -272,7 +272,11 @@ impl State {
         let target = self.launch_target(surface);
         let location = carried
             .and_then(|_| self.carried_location())
-            .or_else(|| target.and_then(|target| self.launch_location(target)))
+            .or_else(|| {
+                target
+                    .as_ref()
+                    .and_then(|target| self.launch_location(target))
+            })
             .or_else(|| self.shell.default_location())?;
         let area = self
             .shell
@@ -285,7 +289,13 @@ impl State {
                 .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         // Structural heuristics apply only where the config is silent, so a rule
         // can always force a dialog back into the tiling.
-        let chrome = requested_chrome(&toplevel);
+        let streamed = matches!(target, Some(LaunchTarget::Output(_)));
+        // A window streamed to a guest fills its output; the guest's own frame titles it.
+        let chrome = if streamed {
+            Chrome::Client
+        } else {
+            requested_chrome(&toplevel)
+        };
         let dialog = rules.floating.is_none()
             && (auto_float(
                 app_id.as_deref(),
@@ -302,6 +312,11 @@ impl State {
         if target == Some(LaunchTarget::Headless) {
             rules.floating = Some(true);
             rules.focus = Some(false);
+        }
+        if streamed {
+            rules.floating = Some(false);
+            rules.fullscreen = Some(false);
+            rules.maximized = Some(true);
         }
         // A window born mid-drag rides the cursor until it is dropped.
         if carried.is_some() {

@@ -24,7 +24,7 @@ pub use dispatch::VirtualOutputDispatch;
 pub use mode::{ModeError, NAME_PREFIX, VirtualMode, full_name, is_valid_name};
 
 /// The protocol version this module speaks.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// What the compositor provides for this protocol to be delegated to
 /// [`VirtualOutputState`].
@@ -139,6 +139,13 @@ impl VirtualOutput {
             .is_some_and(|data| data.advance(&[Lifecycle::Pending], Lifecycle::Live))
         {
             self.0.created(full_name.to_owned());
+        }
+    }
+
+    /// The window in front on the output is now titled `title`; empty for none.
+    pub fn titled(&self, title: &str) {
+        if self.is_live() && self.0.version() >= 2 {
+            self.0.title(title.to_owned());
         }
     }
 

@@ -1,7 +1,8 @@
 //! `WORKSPACE` in a client's environment picks where its windows map:
-//! a workspace number on the focused monitor, or `headless` for the hidden
-//! output. An agent sets it once and everything it launches stays out of the
-//! way.
+//! a workspace number on the focused monitor, `headless` for the hidden
+//! output, or `output:NAME` for one output by its full name. An agent sets it
+//! once and everything it launches stays out of the way; a remote desktop
+//! guest's app fills the output streamed to the guest.
 
 use std::str::FromStr;
 
@@ -12,17 +13,20 @@ use crate::{shell::Location, state::State, utils::process_env};
 pub const VARIABLE: &str = "WORKSPACE";
 /// Past this a number is a typo, not a workspace anyone means to create.
 const MAX_WORKSPACE: usize = 32;
+const OUTPUT_PREFIX: &str = "output:";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchTarget {
     /// Zero-based, though the variable counts from one like the shortcuts do.
     Workspace(usize),
     Headless,
+    /// The active workspace of the output with this full name, filled by the window.
+    Output(String),
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LaunchTargetError {
-    #[error("expected a workspace number or `headless`, got {0:?}")]
+    #[error("expected a workspace number, `headless` or `output:NAME`, got {0:?}")]
     Unknown(String),
     #[error("workspace {0} is outside 1..={MAX_WORKSPACE}")]
     OutOfRange(usize),
@@ -34,6 +38,11 @@ impl FromStr for LaunchTarget {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         if value.eq_ignore_ascii_case("headless") {
             return Ok(Self::Headless);
+        }
+        if let Some(name) = value.strip_prefix(OUTPUT_PREFIX)
+            && !name.is_empty()
+        {
+            return Ok(Self::Output(name.to_owned()));
         }
         let number: usize = value
             .parse()
@@ -61,14 +70,21 @@ impl State {
             .ok()
     }
 
-    pub fn launch_location(&mut self, target: LaunchTarget) -> Option<Location> {
+    pub fn launch_location(&mut self, target: &LaunchTarget) -> Option<Location> {
         match target {
+            LaunchTarget::Output(name) => {
+                let monitor = self.shell.monitor_by_name(name)?;
+                Some(Location {
+                    output: monitor.id(),
+                    workspace: monitor.active().id(),
+                })
+            }
             LaunchTarget::Headless => self.headless_location(),
             LaunchTarget::Workspace(index) => {
                 let monitor = self.shell.focused_monitor_mut()?;
                 Some(Location {
                     output: monitor.id(),
-                    workspace: monitor.ensure_workspace(index),
+                    workspace: monitor.ensure_workspace(*index),
                 })
             }
         }
@@ -92,6 +108,16 @@ mod tests {
     }
 
     #[test]
+    fn outputs_are_named_in_full() {
+        assert_eq!(
+            "output:VIRTUAL-crownlink-ab12cd34".parse(),
+            Ok(LaunchTarget::Output(
+                "VIRTUAL-crownlink-ab12cd34".to_owned()
+            ))
+        );
+    }
+
+    #[test]
     fn rejects_what_is_not_a_target() {
         assert_eq!(
             "0".parse::<LaunchTarget>(),
@@ -101,7 +127,7 @@ mod tests {
             "33".parse::<LaunchTarget>(),
             Err(LaunchTargetError::OutOfRange(33))
         );
-        for value in ["", "-1", "agent", " 2"] {
+        for value in ["", "-1", "agent", " 2", "output:"] {
             assert_eq!(
                 value.parse::<LaunchTarget>(),
                 Err(LaunchTargetError::Unknown(value.to_owned()))
