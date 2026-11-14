@@ -16,6 +16,7 @@ use protocols::{
     crownos_context::{
         ContentType, ContextRecord, ContextWindowFlags, Sandbox, Sensitivity, SessionState,
     },
+    crownos_plugin_host::WATCH_WINDOWS,
     crownos_window_control::{Placement, WindowFlags, WindowRecord},
 };
 use regex::Regex;
@@ -137,9 +138,22 @@ impl State {
             .is_some_and(|location| location.output == agent)
     }
 
-    /// Describes every window once and hands the description to each watcher.
+    /// Whether anyone needs the window directory this iteration: a protocol client, a plugin
+    /// watching windows, or a window capture whose sensitivity has to be known.
+    fn windows_are_watched(&self) -> bool {
+        self.wayland.window_control_state.has_watchers()
+            || self.wayland.context_state.is_bound()
+            || self.wayland.plugin_host_state.watching() & WATCH_WINDOWS != 0
+            || !self.capture.copies.is_empty()
+    }
+
+    /// Describes every window once and hands the description to each watcher. Costs a
+    /// comparison per window when nothing changed, and nothing at all with nobody watching.
     pub fn sync_window_directory(&mut self) {
         self.revoke_agents_if_locked();
+        if !self.windows_are_watched() {
+            return;
+        }
         let now = Instant::now();
         self.windows.flagged.retain(|_, until| *until > now);
         let focus = self.shell.focused_window_id();

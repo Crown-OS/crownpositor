@@ -109,6 +109,13 @@ impl WindowControlState {
         self.global.clone()
     }
 
+    /// Whether any client is listening.
+    pub fn has_watchers(&self) -> bool {
+        self.managers
+            .iter()
+            .any(|manager| manager.resource.is_alive())
+    }
+
     /// Whether a window the protocol announced still exists.
     pub fn knows(&self, key: WindowKey) -> bool {
         self.known.contains_key(&key)
