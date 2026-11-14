@@ -99,13 +99,19 @@ impl ImageCopyCaptureHandler for State {
         }
     }
 
+    /// A frame of a sensitive window fails instead of waiting: a password
+    /// field or a private window is never handed out, whoever asks.
     fn frame(&mut self, session: &SessionRef, frame: Frame) {
+        let sensitive = &self.windows;
         match self
             .capture
             .copies
             .iter_mut()
             .find(|copy| copy.session == *session)
         {
+            Some(copy) if matches!(copy.source, CaptureSource::Window(id) if sensitive.is_sensitive(id)) => {
+                frame.fail(CaptureFailureReason::Stopped)
+            }
             Some(copy) => copy.pending.push(frame),
             None => frame.fail(CaptureFailureReason::Stopped),
         }

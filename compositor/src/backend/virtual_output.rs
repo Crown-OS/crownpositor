@@ -54,7 +54,7 @@ impl VirtualOutputs {
         )
     }
 
-    pub(super) fn compositor_owned(&self) -> Option<&Output> {
+    pub fn compositor_owned(&self) -> Option<&Output> {
         self.heads
             .iter()
             .find(|head| matches!(head.owner, Owner::Compositor))

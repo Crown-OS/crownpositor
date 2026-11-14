@@ -22,6 +22,7 @@ impl State {
             InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
         ) {
             self.note_user_activity();
+            self.windows.activity.observe(&event);
         }
         if self.capture_input_event(&event) {
             return;

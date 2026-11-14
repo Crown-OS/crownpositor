@@ -4,6 +4,7 @@ pub mod constraint_region;
 pub mod edid;
 pub mod id;
 pub mod pixels;
+pub mod portal;
 pub mod privilege;
 pub mod process_env;
 pub mod raster;

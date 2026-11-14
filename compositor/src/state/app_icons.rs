@@ -48,14 +48,24 @@ impl State {
     /// icons windows' motions carry out of them.
     pub fn refresh_app_icons(&mut self) {
         let focused = self.shell.focused_window_id();
+        let agent_output = self.agent_output_id();
         let mut apps = Vec::new();
         for tile in self.shell.tiles() {
             if surface::has_parent(tile.surface()) {
                 continue;
             }
+            let for_agent = self
+                .shell
+                .location(tile.id())
+                .is_some_and(|location| Some(location.output) == agent_output);
             surface::with_app_id(tile.surface(), |app_id| {
                 if !app_id.is_empty() {
-                    AppWindows::count_into(&mut apps, app_id, Some(tile.id()) == focused);
+                    AppWindows::count_into(
+                        &mut apps,
+                        app_id,
+                        Some(tile.id()) == focused,
+                        for_agent,
+                    );
                 }
             });
         }
@@ -77,7 +87,7 @@ impl State {
         })
     }
 
-    /// How a closed window leaves: an application window crumbles to dust or
+    /// How a closed window leaves: an application window dissolves to dust or
     /// shrinks into its icon, as configured; a dialog shrinks away where it
     /// stands.
     fn farewell(&self, id: WindowId) -> Option<Farewell> {

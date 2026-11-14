@@ -3,9 +3,9 @@ pub mod startup;
 pub mod watch;
 
 pub use crownos_config::schema::{
-    AnimationProfile, Binding, CloseAnimation, Compositor, EdgeGlow, GamingOptions,
-    Glass as GlassSettings, Lock, MinimizeAnimation, OutputLayout, OutputSetting, OutputTransform,
-    Theme, Vrr, WindowRule, WorkspaceMode,
+    AccessDecision, Agents, AnimationProfile, Binding, CloseAnimation, Compositor, EdgeGlow,
+    GamingOptions, Glass as GlassSettings, Lock, MinimizeAnimation, OutputLayout, OutputSetting,
+    OutputTransform, Theme, VisualContext, Vrr, WindowRule, WorkspaceMode,
 };
 pub use crownos_config::{Appearance, Display, Keybinds};
 pub use rules::{ResolvedRule, WindowRules};
@@ -24,6 +24,8 @@ pub struct Config {
     pub lock: Lock,
     pub theme: Theme,
     pub window_rules: WindowRules,
+    pub agents: Agents,
+    pub visual_context: VisualContext,
 }
 
 impl Config {
@@ -40,6 +42,8 @@ impl Config {
             glass: load(GlassSettings::SECTION),
             lock: load(Lock::SECTION),
             theme: load(Theme::SECTION),
+            agents: load(Agents::SECTION),
+            visual_context: load(VisualContext::SECTION),
         }
     }
 

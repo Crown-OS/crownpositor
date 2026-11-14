@@ -31,7 +31,7 @@ pub use windows::AppWindows;
 use windows::Published;
 
 /// The protocol version this module speaks.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// What the compositor provides for this protocol to be delegated to
 /// [`AppIconsState`].
@@ -212,4 +212,7 @@ fn placed(icon: &AppIcon) -> Option<PlacedIcon> {
 
 fn send_windows(manager: &CrownosAppIconManagerV1, app: &AppWindows) {
     manager.app_windows(app.app_id.clone(), app.count, u32::from(app.focused));
+    if manager.version() >= crownos_app_icon_manager_v1::EVT_AGENT_WINDOWS_SINCE {
+        manager.agent_windows(app.app_id.clone(), app.agent_count);
+    }
 }

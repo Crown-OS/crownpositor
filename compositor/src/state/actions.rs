@@ -16,6 +16,7 @@ use protocols::{
 use spacecontrol::animations::spring::SpringProfile;
 use windowcontrol::Direction as Cycle;
 
+use crate::utils::privilege::trusted_executables;
 use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
@@ -375,6 +376,16 @@ impl State {
             Update::Lock(lock) => {
                 config.lock = *lock;
                 self.lock_scene_changed();
+            }
+            Update::Agents(agents) => {
+                if let Ok(mut trusted) = self.wayland.trusted_executables.write() {
+                    *trusted = trusted_executables(&agents.trusted_executables);
+                }
+                config.agents = *agents;
+            }
+            Update::VisualContext(rules) => {
+                self.windows.set_rules(&rules);
+                config.visual_context = *rules;
             }
             Update::Theme(theme) => {
                 config.theme = *theme;

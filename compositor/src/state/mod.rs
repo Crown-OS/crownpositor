@@ -1,4 +1,5 @@
 mod actions;
+mod activity;
 pub mod agent_access;
 mod app_icons;
 mod backend;
@@ -17,6 +18,7 @@ pub mod session_env;
 mod visibility;
 mod wayland;
 mod windowcontrol;
+pub mod windows;
 
 use calloop::EventLoop;
 use smithay::{
@@ -66,6 +68,13 @@ pub struct State {
     pub virtual_outputs: VirtualOutputs,
     /// The built-in lock screen's scene, fonts and password checker.
     pub lock: lock_screen::LockScreenState,
+    /// What `org.freedesktop.ScreenSaver` clients hold the screen on for.
+    pub screensaver_holds: idle::ScreenSaverHolds,
+    /// Every mapped window as the agent daemon, the context engine and
+    /// crownplugind see it, and which windows are off limits to captures.
+    pub windows: windows::WindowDirectory,
+    /// Apps waiting for the user's answer about agent access.
+    pub agent_prompts: agent_access::PendingPrompts,
 }
 
 impl State {
@@ -157,6 +166,7 @@ impl State {
         let wayland =
             WaylandState::try_new(&common.display_handle, common.event_loop_handle.clone())?;
         let shell = Shell::try_new(&common.display_handle, &config.current)?;
+        let visual_context_rules = config.current.visual_context.clone();
         let xwayland = Xwayland::start(&common.event_loop_handle);
 
         let mut state = Self {
@@ -173,7 +183,11 @@ impl State {
             capture: CaptureState::default(),
             virtual_outputs: VirtualOutputs::default(),
             lock: lock_screen::LockScreenState::default(),
+            screensaver_holds: idle::ScreenSaverHolds::default(),
+            windows: windows::WindowDirectory::new(&visual_context_rules),
+            agent_prompts: agent_access::PendingPrompts::default(),
         };
+        state.arm_activity_flush();
         // The global was created advertising everything the renderer can do;
         // the config gets the first word on what it will actually do.
         state.sync_background_effect_capabilities();

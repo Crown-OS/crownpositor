@@ -15,6 +15,11 @@ macro_rules! id_type {
             pub const fn raw(self) -> u64 {
                 self.0
             }
+
+            /// The id a protocol handed back, which may name a window that is gone.
+            pub const fn from_raw(raw: u64) -> Self {
+                Self(raw)
+            }
         }
 
         impl std::fmt::Display for $name {

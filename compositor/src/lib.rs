@@ -62,6 +62,7 @@ pub fn run() -> anyhow::Result<()> {
             state.refresh_foreign_toplevels();
             state.refresh_ext_workspaces();
             state.refresh_workspace_mode();
+            state.sync_window_directory();
             // Frames queued during dispatch render here, after the burst of
             // events that requested them has been fully drained.
             backend::kms::redraw_queued_outputs(state);

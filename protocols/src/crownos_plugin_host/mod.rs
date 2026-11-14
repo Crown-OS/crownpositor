@@ -17,6 +17,14 @@ pub use payload::PayloadError;
 
 pub const VERSION: u32 = 1;
 
+/// The `watch` bit for window events.
+pub const WATCH_WINDOWS: u32 = 2;
+
+/// Window ids are u64 in the compositor and uint on this wire.
+fn narrow(id: u64) -> u32 {
+    u32::try_from(id).unwrap_or(u32::MAX)
+}
+
 /// Payload caps, as the protocol states them.
 pub const SCENE_BYTES: usize = 256 * 1024;
 pub const SLOT_BYTES: usize = 256 * 1024;
@@ -96,6 +104,37 @@ impl PluginHostState {
     /// The event classes the client asked for, as the `watch` bitfield.
     pub fn watching(&self) -> u32 {
         self.watching
+    }
+
+    pub fn window_opened(&self, id: u64, app_id: &str, title: &str, workspace: u32) {
+        if let Some(host) = self.window_watcher() {
+            host.window_opened(narrow(id), app_id.to_owned(), title.to_owned(), workspace);
+        }
+    }
+
+    pub fn window_changed(&self, id: u64, app_id: &str, title: &str) {
+        if let Some(host) = self.window_watcher() {
+            host.window_changed(narrow(id), app_id.to_owned(), title.to_owned());
+        }
+    }
+
+    pub fn window_closed(&self, id: u64) {
+        if let Some(host) = self.window_watcher() {
+            host.window_closed(narrow(id));
+        }
+    }
+
+    /// `id` 0 means no window has focus.
+    pub fn window_focused(&self, id: u64) {
+        if let Some(host) = self.window_watcher() {
+            host.window_focused(narrow(id));
+        }
+    }
+
+    fn window_watcher(&self) -> Option<&CrownosPluginHostV1> {
+        self.bound
+            .as_ref()
+            .filter(|host| host.is_alive() && self.watching & WATCH_WINDOWS != 0)
     }
 
     fn is_bound(&self) -> bool {

@@ -1,4 +1,7 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::{Arc, RwLock},
+};
 
 use anyhow::Context;
 use calloop::LoopHandle;
@@ -65,12 +68,15 @@ use protocols::{
         BackgroundEffectsState as CrownosBackgroundEffectsState,
         Capability as CrownosEffectCapability,
     },
+    crownos_capture_privacy::CapturePrivacyState,
+    crownos_context::ContextState,
     crownos_input::InputState as CrownosInputState,
     crownos_plugin_host::PluginHostState,
     crownos_screencast::ScreencastState,
     crownos_surface_animation::SurfaceAnimationState,
     crownos_surface_visibility::SurfaceVisibilityState,
     crownos_virtual_output::VirtualOutputState,
+    crownos_window_control::WindowControlState,
     crownos_workspace_mode::WorkspaceModeState,
     ext_workspace::ExtWorkspaceState,
     gamma_control::GammaControlState,
@@ -85,8 +91,13 @@ use crate::{
     handlers::foreign_toplevel_list::ForeignToplevels,
     shell::morph::IconOrigin,
     state::{State, agent_access::AgentAccessPolicy},
-    utils::{id::OutputId, privilege::is_privileged},
+    utils::{
+        id::OutputId,
+        privilege::{TrustedExecutables, is_privileged, is_trusted_agent, trusted_executables},
+    },
 };
+use crownos_config::schema::Agents;
+use wayland_server::Client;
 
 pub struct WaylandState {
     /// `crownos_agent_access_v1`. Privileged: a grant lets an app hand its
@@ -97,6 +108,15 @@ pub struct WaylandState {
     /// `crownos_plugin_host_v1`. Privileged: crownplugind's lock scene and
     /// compositor actions.
     pub plugin_host_state: PluginHostState,
+    /// The programs `agents.ron` trusts to bind the agent protocols, shared
+    /// with their global filters and refreshed when the config changes.
+    pub trusted_executables: TrustedExecutables,
+    /// `crownos_window_control_v1`. Trusted agent daemon only.
+    pub window_control_state: WindowControlState,
+    /// `crownos_context_v1`. Trusted context engine only.
+    pub context_state: ContextState,
+    /// `crownos_capture_privacy_v1`. Any client: it only hides its own surfaces.
+    pub capture_privacy_state: CapturePrivacyState,
     pub appmenu_state: AppmenuState,
     pub background_effect_state: BackgroundEffectState,
     /// `wp_color_management_v1`. Unprivileged: any client may describe its own
@@ -249,8 +269,24 @@ impl WaylandState {
             .with_context(|| "Failed to add a keyboard to the seat")?;
         seat.add_pointer();
 
+        let agents: Agents = crownos_config::load(Agents::SECTION);
+        let trusted: TrustedExecutables = Arc::new(RwLock::new(trusted_executables(
+            &agents.trusted_executables,
+        )));
+        let agent_filter = {
+            let trusted = Arc::clone(&trusted);
+            move |client: &Client| is_trusted_agent(client, &trusted)
+        };
+
         Ok(Self {
             agent_access_state: AgentAccessState::new::<State, _>(display, is_privileged),
+            trusted_executables: trusted,
+            window_control_state: WindowControlState::new::<State, _>(
+                display,
+                agent_filter.clone(),
+            ),
+            context_state: ContextState::new::<State, _>(display, agent_filter),
+            capture_privacy_state: CapturePrivacyState::new::<State>(display),
             agent_access_policy: AgentAccessPolicy::from_env(),
             plugin_host_state: PluginHostState::new::<State, _>(display, is_privileged),
             // Everything the renderer can do, which the config then narrows

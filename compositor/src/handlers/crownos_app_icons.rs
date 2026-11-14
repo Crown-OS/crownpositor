@@ -55,7 +55,8 @@ impl AppIconsHandler for State {
 
 impl State {
     /// Restores every minimized window of `windows` out of its icon and
-    /// focuses the most recently used, the last of them if none was.
+    /// focuses the most recently used, the last of them if none was,
+    /// switching to its workspace when it lives on another.
     fn bring_forward(&mut self, windows: &[WindowId]) {
         let Some(&last) = windows.last() else {
             return;
@@ -73,7 +74,16 @@ impl State {
                 self.shell.unminimize_window(id, origin);
             }
         }
-        self.shell.focus_window(recent.unwrap_or(last));
+        let target = recent.unwrap_or(last);
+        // An agent's window comes onto the user's screen when its icon is
+        // activated; switching to the invisible output would show nothing.
+        if self.is_on_agent_workspace(target)
+            && let Some(to) = self.shell.default_location()
+        {
+            self.shell.move_tile(target, to);
+        }
+        self.shell.switch_to_workspace_of(target);
+        self.shell.focus_window(target);
         self.shell.refresh();
         self.update_keyboard_focus();
         self.queue_redraw();

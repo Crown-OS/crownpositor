@@ -37,6 +37,13 @@ impl ForeignToplevels {
             .map(|(id, _)| *id)
     }
 
+    /// The identifier `id`'s handle carries, once it has been announced.
+    pub fn identifier(&self, id: WindowId) -> Option<String> {
+        self.handles
+            .get(&id)
+            .map(|announced| announced.handle.identifier().to_owned())
+    }
+
     /// The window behind a handle, e.g. one an image capture source names.
     pub fn window_of(&self, handle: &ForeignToplevelHandle) -> Option<WindowId> {
         self.handles

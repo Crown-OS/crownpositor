@@ -9,21 +9,26 @@ pub struct AppWindows {
     pub app_id: String,
     pub count: u32,
     pub focused: bool,
+    /// Of `count`, the windows on the agent workspace.
+    pub agent_count: u32,
 }
 
 impl AppWindows {
     /// Counts one window of `app_id` into `apps`, which keeps one entry per
     /// application in order of first appearance.
-    pub fn count_into(apps: &mut Vec<Self>, app_id: &str, focused: bool) {
+    pub fn count_into(apps: &mut Vec<Self>, app_id: &str, focused: bool, for_agent: bool) {
+        let agent = u32::from(for_agent);
         match apps.iter_mut().find(|app| same_app(&app.app_id, app_id)) {
             Some(app) => {
                 app.count += 1;
                 app.focused |= focused;
+                app.agent_count += agent;
             }
             None => apps.push(Self {
                 app_id: app_id.to_owned(),
                 count: 1,
                 focused,
+                agent_count: agent,
             }),
         }
     }
@@ -33,6 +38,7 @@ impl AppWindows {
             app_id: app_id.to_owned(),
             count: 0,
             focused: false,
+            agent_count: 0,
         }
     }
 }
@@ -74,6 +80,7 @@ mod tests {
             app_id: app_id.into(),
             count,
             focused,
+            agent_count: 0,
         }
     }
 
@@ -81,7 +88,7 @@ mod tests {
     fn windows_of_one_application_are_counted_together_whatever_the_case() {
         let mut apps = Vec::new();
         for (app_id, focused) in [("kitty", false), ("firefox", true), ("Kitty", false)] {
-            AppWindows::count_into(&mut apps, app_id, focused);
+            AppWindows::count_into(&mut apps, app_id, focused, false);
         }
         assert_eq!(apps, [app("kitty", 2, false), app("firefox", 1, true)]);
     }
