@@ -1,6 +1,12 @@
 use smithay::{
-    reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
-    wayland::shell::xdg::{ToplevelSurface, decoration::XdgDecorationHandler},
+    reexports::{
+        wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+        wayland_server::protocol::wl_surface::WlSurface,
+    },
+    wayland::{
+        compositor::with_states,
+        shell::xdg::{SurfaceCachedState, ToplevelSurface, decoration::XdgDecorationHandler},
+    },
 };
 
 use super::kde_decoration;
@@ -39,12 +45,26 @@ impl State {
     /// window that changes its mind loses or gains our titlebar at once, and
     /// the relayout resizes its client area to match.
     pub(super) fn follow_decoration_request(&mut self, toplevel: &ToplevelSurface) {
-        if self
-            .shell
-            .set_window_chrome(toplevel.wl_surface(), requested_chrome(toplevel))
-        {
+        let chrome = requested_chrome(toplevel);
+        if self.shell.set_window_chrome(toplevel.wl_surface(), chrome) {
+            if chrome == Chrome::Compositor {
+                forget_window_geometry(toplevel.wl_surface());
+            }
             self.shell.refresh();
             self.queue_redraw();
         }
     }
+}
+
+/// Drops the window geometry a client set around its own shadows. Chrome
+/// keeps that geometry when it gives the frame to us and then fills its whole
+/// buffer, so the stale inset moves the content up-left and crops it. The
+/// geometry is cached in both halves because a commit copies pending into
+/// current, and a geometry the client sends after this still applies.
+fn forget_window_geometry(surface: &WlSurface) {
+    with_states(surface, |states| {
+        let mut cached = states.cached_state.get::<SurfaceCachedState>();
+        cached.pending().geometry = None;
+        cached.current().geometry = None;
+    });
 }
