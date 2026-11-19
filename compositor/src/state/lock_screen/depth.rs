@@ -6,7 +6,10 @@
 //! the live background shows. A picture without a mask yet is cut by the
 //! helper, waited on off the compositor thread; the model never loads here.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail};
 use crownos_config::schema::LockBackground;
@@ -26,6 +29,9 @@ use crate::{
 
 /// How many times smaller than its output a subject's coverage is measured.
 const PROBE_SHRINK: u32 = 8;
+/// The longest the entrance waits for its subject, which rises in with the
+/// clock, before it starts without it.
+pub(super) const SUBJECT_WAIT: Duration = Duration::from_millis(800);
 
 /// One output's subject, as cut off-thread.
 struct Cut {
@@ -36,20 +42,20 @@ struct Cut {
 
 impl State {
     /// Cuts the background's subject out for every output, off-thread, when
-    /// the clock has depth.
-    pub(super) fn load_lock_subject(&mut self) {
+    /// the clock has depth. Returns whether a cut is on its way.
+    pub(super) fn load_lock_subject(&mut self) -> bool {
         let Some(picture) = self.depth_picture() else {
-            return;
+            return false;
         };
         let mask = match depthcut::mask_path(&picture) {
             Ok(mask) => mask,
             Err(err) => {
                 tracing::debug!(%err, "the lock screen background has no depth");
-                return;
+                return false;
             }
         };
         if self.lock.uncuttable.contains(&mask) {
-            return;
+            return false;
         }
         let sizes = self.lock_output_pixels();
         let dim = self.lock.scene.current().config.dim;
@@ -63,6 +69,19 @@ impl State {
             },
             move |state, (mask, cut)| state.lock_subjects_ready(generation, mask, cut),
         );
+        true
+    }
+
+    /// Starts an entrance held for its subject now that the cut is done,
+    /// with the subject or without it.
+    fn start_held_entrance(&mut self) {
+        let now = Instant::now();
+        if let Some(lock) = self.shell.lock_screen.active_mut()
+            && lock.flow.is_entrance_held(now)
+        {
+            lock.flow.enter_at(now);
+            self.queue_redraw();
+        }
     }
 
     /// The picture file behind the lock, when its clock has depth.
@@ -80,18 +99,20 @@ impl State {
     }
 
     fn lock_subjects_ready(&mut self, generation: u64, mask: PathBuf, cut: Result<Vec<Cut>>) {
-        let cuts = match cut {
-            Ok(cuts) => cuts,
-            Err(err) => {
+        let cuts = cut
+            .inspect_err(|err| {
                 if self.lock.uncuttable.insert(mask) {
                     tracing::warn!("the lock screen clock has no depth: {err:#}");
                 }
-                return;
-            }
-        };
+            })
+            .ok();
         if generation != self.lock.generation {
             return;
         }
+        self.start_held_entrance();
+        let Some(cuts) = cuts else {
+            return;
+        };
         let zoom = background_zoom(&self.lock.scene.current().config.background);
         let Some(lock) = self.shell.lock_screen.active_mut() else {
             return;
@@ -100,6 +121,7 @@ impl State {
             let visuals = lock.visuals.entry(cut.output).or_default();
             let mut subject = OutputSubject {
                 picture: output_picture(&cut.subject),
+                middle: image::middle(&cut.probe, zoom),
                 probe: cut.probe,
                 hides_clock: false,
             };
@@ -112,7 +134,7 @@ impl State {
 
 /// Whether `subject` would hide too much of the clock `sprites` lay out on
 /// an output `size` logical pixels big, the background zoomed `zoom` past
-/// covering it, as ColorOS keeps the time legible.
+/// covering it, so the time stays legible.
 pub(super) fn hides_clock(
     subject: &OutputSubject,
     sprites: &[PreparedSprite],
@@ -208,6 +230,7 @@ mod tests {
             picture: output_picture(&Pixmap::new(OUTPUT[0], OUTPUT[1]).expect("size")),
             probe: probe(&mask, OUTPUT).expect("size"),
             hides_clock: false,
+            middle: None,
         }
     }
 

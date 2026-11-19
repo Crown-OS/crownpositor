@@ -12,7 +12,7 @@ use crownos_config::schema::Lock;
 
 use crate::{
     secret::Password,
-    transition::{Moments, SpringValue},
+    transition::{Moments, Spring, SpringValue},
 };
 
 pub use crate::transition::Frame;
@@ -49,7 +49,9 @@ pub enum AuthOutcome {
 
 pub struct LockFlow {
     prompt_timeout: Option<Duration>,
-    appear: SpringValue,
+    rise: SpringValue,
+    /// Wells up once the rise has arrived.
+    flood: SpringValue,
     /// Toward 1 while the prompt is up, toward 0 while the clock is.
     reveal: SpringValue,
     dismiss: Option<SpringValue>,
@@ -69,7 +71,8 @@ impl LockFlow {
     pub fn new(config: &Lock, now: Instant) -> Self {
         let mut flow = Self {
             prompt_timeout: None,
-            appear: SpringValue::moving(0.0, 1.0, now),
+            rise: SpringValue::resting(0.0, now),
+            flood: SpringValue::resting(0.0, now),
             reveal: SpringValue::resting(0.0, now),
             dismiss: None,
             checking: false,
@@ -82,16 +85,16 @@ impl LockFlow {
             last_input: now,
         };
         flow.configure(config);
+        flow.enter_at(now);
         flow
     }
 
     /// Locked already, with no entrance: for locking on the way to suspend,
     /// where nothing may still be animating in when the screen goes dark.
     pub fn settled(config: &Lock, now: Instant) -> Self {
-        Self {
-            appear: SpringValue::resting(1.0, now),
-            ..Self::new(config, now)
-        }
+        let mut flow = Self::new(config, now);
+        flow.land(now);
+        flow
     }
 
     pub fn configure(&mut self, config: &Lock) {
@@ -202,7 +205,8 @@ impl LockFlow {
 
     pub fn frame(&self, now: Instant) -> Frame {
         Moments {
-            appear: self.appear.value(now),
+            rise: self.rise.value(now),
+            flood: self.flood.value(now),
             reveal: self.reveal.value(now),
             dismiss: self.dismiss.map_or(0.0, |dismiss| dismiss.value(now)),
         }
@@ -211,7 +215,8 @@ impl LockFlow {
 
     /// Whether the next frame differs from this one without any input.
     pub fn is_animating(&self, now: Instant) -> bool {
-        !self.appear.is_settled(now)
+        self.is_arriving(now)
+            || !self.rise.is_settled(now)
             || !self.reveal.is_settled(now)
             || self.dismiss.is_some_and(|dismiss| !dismiss.is_settled(now))
             || self
@@ -231,6 +236,30 @@ impl LockFlow {
     /// Unlocked, and done animating out: the host can drop the lock.
     pub fn is_finished(&self, now: Instant) -> bool {
         self.dismiss.is_some_and(|dismiss| dismiss.is_settled(now))
+    }
+
+    /// Starts the entrance at `start`, which may be later than now: until
+    /// then nothing of the lock shows over the desktop.
+    pub fn enter_at(&mut self, start: Instant) {
+        self.rise = SpringValue::moving(0.0, 1.0, start).on(Spring::RISE);
+        self.flood =
+            SpringValue::moving(0.0, 1.0, start + Spring::RISE.arrival_time()).on(Spring::FLOOD);
+    }
+
+    /// The entrance has been put off and has not started yet.
+    pub fn is_entrance_held(&self, now: Instant) -> bool {
+        !self.rise.has_started(now)
+    }
+
+    /// Still rising or flooding in, the desktop showing around it.
+    pub fn is_arriving(&self, now: Instant) -> bool {
+        !self.flood.is_settled(now)
+    }
+
+    /// Covers the screen at once: for a suspend that lands mid-entrance.
+    pub fn land(&mut self, now: Instant) {
+        self.rise = SpringValue::resting(1.0, now);
+        self.flood = SpringValue::resting(1.0, now);
     }
 
     pub fn is_unlocking(&self) -> bool {

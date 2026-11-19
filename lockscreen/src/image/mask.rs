@@ -97,7 +97,7 @@ pub fn subject(background: &Pixmap, mask: &Mask) -> Pixmap {
 }
 
 /// The most of the clock a subject may hide before the depth effect gives
-/// way and the clock is drawn in front, as ColorOS keeps the time legible.
+/// way and the clock is drawn in front, so the time stays legible.
 pub const MAX_DEPTH_OCCLUSION: f32 = 0.35;
 
 /// How much of `area`, in the subject's pixels, the subject covers: 0 for
@@ -145,6 +145,26 @@ pub fn clock_occlusion(subject: &Pixmap, clock: Rect, output: [f32; 2], zoom: f3
 /// effect then gives way and the clock is drawn in front.
 pub fn hides_clock(subject: &Pixmap, clock: Rect, output: [f32; 2], zoom: f32) -> bool {
     clock_occlusion(subject, clock, output, zoom) > MAX_DEPTH_OCCLUSION
+}
+
+/// Where the middle of a `subject` covering the output lands, as a fraction
+/// of the output across and down, once drawn `zoom` times larger about the
+/// output's centre: its coverage's centre of mass. `None` when it covers
+/// nothing.
+pub fn middle(subject: &Pixmap, zoom: f32) -> Option<[f32; 2]> {
+    let width = subject.width() as usize;
+    let [mass, across, down] = subject.pixels().iter().enumerate().fold(
+        [0.0_f64; 3],
+        |[mass, across, down], (index, pixel)| {
+            let weight = f64::from(pixel.alpha());
+            let [column, row] = [index % width, index / width].map(|at| at as f64 + 0.5);
+            [mass + weight, across + weight * column, down + weight * row]
+        },
+    );
+    (mass > 0.0).then(|| {
+        let land = |sum: f64, side: u32| 0.5 + ((sum / mass / f64::from(side)) as f32 - 0.5) * zoom;
+        [land(across, subject.width()), land(down, subject.height())]
+    })
 }
 
 #[cfg(test)]
@@ -218,6 +238,15 @@ mod tests {
         assert!((occlusion(&subject, rect(10, 20)) - 0.5).abs() < 1e-6);
         assert!((occlusion(&subject, rect(30, 20)) - 0.0).abs() < 1e-6);
         assert!((occlusion(&subject, rect(-20, 40)) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_middle_is_the_coverage_centre_where_the_zoom_lands_it() {
+        let probe = subject(&opaque(40, 20), &left_half(40, 20));
+        assert_eq!(middle(&probe, 1.0), Some([0.25, 0.5]));
+        assert_eq!(middle(&probe, 2.0), Some([0.0, 0.5]));
+        let empty = Pixmap::new(4, 4).expect("size");
+        assert_eq!(middle(&empty, 1.0), None);
     }
 
     #[test]

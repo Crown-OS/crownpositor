@@ -4,8 +4,10 @@
 //! darkening; the clock, its digits frosted glass; the background's subject,
 //! cut out for depth; and the prompt.
 //!
-//! Once the password is accepted the floor goes and the desktop is drawn
-//! beneath, so the background fades off the real desktop.
+//! While the lock arrives, and once the password is accepted, the floor goes
+//! and the desktop is drawn beneath: the clock and subject rise in over the
+//! real desktop and the background floods out from behind the subject, and
+//! on unlock the background fades off it.
 
 mod background;
 mod sprites;
@@ -31,6 +33,9 @@ use background::Background;
 use sprites::Sprites;
 
 const FLOOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+/// Where the background floods out from with neither a subject nor a clock
+/// to well up behind, as a fraction of the output across and down.
+const BOTTOM_MIDDLE: [f32; 2] = [0.5, 1.0];
 /// The least of the frost the pyramid may have kept through a darkening it
 /// lifted, so brightening it back never divides by a near-black.
 const LEAST_FROST_KEPT: f32 = 0.25;
@@ -40,7 +45,7 @@ const VISIBLE_BLUR: f32 = 0.5;
 const STEPS: f32 = 1024.0;
 
 /// Pushes the lock for `monitor`. Returns whether the desktop should be drawn
-/// beneath it: only while the unlock animates away.
+/// beneath it: only while the lock arrives or the unlock animates away.
 pub fn lock_screen_elements<R, D>(
     elements: &mut Elements<R, D>,
     lock: &ActiveLock,
@@ -55,13 +60,20 @@ where
     D: TileDecorator<R>,
 {
     let now = Instant::now();
-    let frame = lock.flow.frame(now);
+    let height = monitor.geometry().size.h as f32;
+    let frame = lock.flow.frame(now).risen(height);
     let visuals = lock.visuals.get(&monitor.id());
+    let [across, down] = visuals
+        .and_then(sprites::flood_source)
+        .unwrap_or(BOTTOM_MIDDLE);
     let background = Background {
         lock,
         monitor,
+        visuals,
         scale,
         style: frame.wallpaper,
+        flood: lock.flow.is_arriving(now).then_some(frame.flood),
+        source: [across, down + 1.0 - frame.rise],
     };
     let output = background.output();
     let darkening = frame.darkening(lock.dim);
@@ -81,7 +93,7 @@ where
         };
         sprites.layer(Layer::Prompt, frame.prompt, frame.shake);
         sprites.subject(
-            frame.subject(),
+            frame.subject,
             background.subject_zoom(),
             background.logical_size(),
         );
@@ -92,9 +104,9 @@ where
         elements.push(solid(&lock.ids.dim, output, [0.0, 0.0, 0.0, darkening]));
     }
     elements.extend(blur.map(|blur| CrownElement::Tile(Wrap::from(blur))));
-    background.draw(elements, renderer, visuals);
+    let floods = background.draw(elements, renderer, decorator);
 
-    if lock.flow.is_unlocking() {
+    if floods || lock.flow.is_unlocking() {
         return true;
     }
     elements.push(solid(&lock.ids.base, output, FLOOR));

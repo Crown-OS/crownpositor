@@ -105,7 +105,7 @@ fn the_prompt_times_out_and_forgets_what_was_typed() {
 fn layers_trade_places_on_reveal() {
     let now = Instant::now();
     let mut flow = flow(now);
-    let rested = later(now, 1000);
+    let rested = later(now, 4000);
     let frame = flow.frame(rested);
     assert_eq!(frame.clock, LayerStyle::REST);
     assert!(!frame.prompt.is_visible());
@@ -121,16 +121,40 @@ fn layers_trade_places_on_reveal() {
 }
 
 #[test]
-fn locking_covers_the_desktop_at_once_and_lands_at_rest() {
+fn locking_rises_in_then_floods_out_and_lands_at_rest() {
     let now = Instant::now();
     let flow = flow(now);
     let start = flow.frame(now);
-    assert!(!start.clock.is_visible());
-    assert_eq!(start.wallpaper.opacity, 1.0);
-    assert!(flow.is_animating(later(now, 100)));
-    let landed = later(now, 600);
-    assert!(!flow.is_animating(landed));
+    assert_eq!((start.rise, start.flood), (0.0, 0.0));
+    assert!(flow.is_arriving(now));
+    let arrived = now + Spring::RISE.arrival_time();
+    assert!(flow.frame(arrived).rise >= 0.999);
+    assert_eq!(flow.frame(arrived).flood, 0.0, "it floods once they are in");
+    assert!(flow.frame(later(arrived, 100)).flood > 0.0);
+    let landed = arrived + Spring::FLOOD.settle_time();
+    assert!(!flow.is_animating(landed) && !flow.is_arriving(landed));
     assert_eq!(flow.frame(landed), Moments::CLOCK.frame(0.0));
+}
+
+#[test]
+fn a_held_entrance_shows_nothing_until_it_starts() {
+    let now = Instant::now();
+    let mut flow = flow(now);
+    flow.enter_at(later(now, 1000));
+    assert!(flow.is_entrance_held(later(now, 500)) && flow.is_arriving(later(now, 500)));
+    assert_eq!(flow.frame(later(now, 500)).rise, 0.0);
+    flow.enter_at(later(now, 500));
+    assert!(!flow.is_entrance_held(later(now, 500)));
+    assert!(flow.frame(later(now, 600)).rise > 0.0);
+}
+
+#[test]
+fn a_suspend_mid_flood_covers_the_desktop_at_once() {
+    let now = Instant::now();
+    let mut flow = flow(now);
+    flow.land(later(now, 100));
+    assert!(!flow.is_arriving(later(now, 100)));
+    assert_eq!(flow.frame(later(now, 100)).flood, 1.0);
 }
 
 #[test]

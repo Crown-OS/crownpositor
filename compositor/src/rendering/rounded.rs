@@ -30,8 +30,11 @@ use crate::{
         blur::{BlurBackdrop, BlurSession, Glass, GlassGlyph, GlassHandoff, GlassKind},
         color::ColorConversions,
         corners::CornerMemory,
-        decorate::{Backdrop, Cropped, Glaze, Glazing, GlyphDraw, Shadow, TileDecorator},
+        decorate::{
+            Backdrop, Cropped, Flood, Flooding, Glaze, Glazing, GlyphDraw, Shadow, TileDecorator,
+        },
         decoration::{Border, GlassShadow, TitleBar, TitleBarParams, WindowDecoration},
+        flood::Flooded,
         framebuffer::FramebufferSpace,
         glazed::{Clip, Glazed},
         gles::GlesBacked,
@@ -41,8 +44,9 @@ use crate::{
         warp::{self, ResizeBlurRequest, WarpCanvases, WarpElement, WarpRequest},
     },
     shaders::{
-        color::ColorConvertShader, glazed::GlazedShader, lock_glyph::LockGlyphShader,
-        rounded_corner::RoundedCornerShader, sprite_blur::SpriteBlurShader,
+        color::ColorConvertShader, flood::FloodShader, glazed::GlazedShader,
+        lock_glyph::LockGlyphShader, rounded_corner::RoundedCornerShader,
+        sprite_blur::SpriteBlurShader,
     },
 };
 
@@ -233,6 +237,8 @@ smithay::backend::renderer::element::render_elements! {
     Warp = WarpElement,
     Sprite = ShadedSprite<Sprite<R>>,
     GlassGlyph = GlassGlyph<Sprite<R>>,
+    FloodSurface = Flooded<Cropped<R>>,
+    FloodPicture = Flooded<Sprite<R>>,
 }
 
 /// Rounds corners with the GLES texture-program override, and materialises
@@ -443,5 +449,24 @@ impl<R: GlesBacked> TileDecorator<R> for GlesDecorator<'_> {
             uniforms,
             glyph.fingerprint(),
         )))
+    }
+
+    fn flood(
+        &mut self,
+        renderer: &mut R,
+        piece: Flooding<R>,
+        flood: Flood,
+    ) -> Result<Self::Element, Flooding<R>> {
+        let Some(program) = FloodShader::get(renderer.gles()) else {
+            return Err(piece);
+        };
+        Ok(match piece {
+            Flooding::Surface(surface) => {
+                Decorated::FloodSurface(Flooded::new(surface, program, flood))
+            }
+            Flooding::Picture(picture) => {
+                Decorated::FloodPicture(Flooded::new(picture, program, flood))
+            }
+        })
     }
 }

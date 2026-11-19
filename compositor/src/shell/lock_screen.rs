@@ -85,6 +85,9 @@ pub struct OutputSubject {
     pub probe: Pixmap,
     /// It would hide too much of the clock where it is now, and is not drawn.
     pub hides_clock: bool,
+    /// Where its middle lands, as a fraction of the output across and down:
+    /// where the background floods out from as the lock arrives.
+    pub middle: Option<[f32; 2]>,
 }
 
 impl OutputVisuals {
@@ -128,14 +131,20 @@ pub struct ActiveLock {
     pub ids: LockIds,
 }
 
+/// How many surfaces of the desktop's wallpaper flood in; any more are drawn
+/// whole.
+const FLOOD_PIECES: usize = 4;
+
 /// Stable element ids, so the damage tracker sees the same floor, colour,
-/// dim and blur from one frame to the next.
+/// dim, blur and flood from one frame to the next.
 #[derive(Debug)]
 pub struct LockIds {
     pub base: Id,
     pub color: Id,
     pub dim: Id,
     pub blur: Id,
+    /// One per piece of the background as it floods in.
+    pub flood: [Id; FLOOD_PIECES],
 }
 
 impl Default for LockIds {
@@ -145,6 +154,7 @@ impl Default for LockIds {
             color: Id::new(),
             dim: Id::new(),
             blur: Id::new(),
+            flood: std::array::from_fn(|_| Id::new()),
         }
     }
 }
@@ -196,9 +206,12 @@ impl LockScreen {
         self.active.as_mut()
     }
 
-    /// Records that `output` has drawn a frame with the lock up.
+    /// Records that `output` has drawn a frame with the lock up, unless it
+    /// was still flooding in over the desktop.
     pub fn output_blanked(&mut self, output: &Output) {
-        if let Some(lock) = &mut self.active {
+        if let Some(lock) = &mut self.active
+            && !lock.flow.is_arriving(Instant::now())
+        {
             lock.blanked.insert(output.clone());
         }
     }

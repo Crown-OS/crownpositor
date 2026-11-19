@@ -123,21 +123,26 @@ impl State {
             },
         );
         self.start_logind_watch();
+        self.start_screensaver_service();
         self.schedule_idle_lock();
     }
 
     /// Puts the lock up. Does nothing if it already is, unless it is on its
-    /// way down: then it starts over.
+    /// way down: then it starts over. A suspend lands an entrance mid-flood.
     pub fn lock_screen(&mut self, reason: LockReason) {
-        if self
+        let now = Instant::now();
+        if let Some(lock) = self
             .shell
             .lock_screen
-            .active()
-            .is_some_and(|lock| !lock.flow.is_unlocking())
+            .active_mut()
+            .filter(|lock| !lock.flow.is_unlocking())
         {
+            if reason == LockReason::Suspend {
+                lock.flow.land(now);
+                self.queue_redraw();
+            }
             return;
         }
-        let now = Instant::now();
         let config = &self.lock.scene.current().config;
         let flow = match reason {
             LockReason::Suspend => LockFlow::settled(config, now),
@@ -163,7 +168,12 @@ impl State {
         self.lock.generation = self.lock.generation.wrapping_add(1);
         self.lock.face = ClockFace::now(&self.lock.scene.current().config);
         self.load_lock_pictures();
-        self.load_lock_subject();
+        if self.load_lock_subject()
+            && reason != LockReason::Suspend
+            && let Some(lock) = self.shell.lock_screen.active_mut()
+        {
+            lock.flow.enter_at(now + depth::SUBJECT_WAIT);
+        }
         self.schedule_lock_wake();
         self.announce_lock_state();
         tracing::info!(?reason, "screen locked");

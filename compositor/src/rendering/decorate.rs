@@ -169,6 +169,27 @@ impl GlyphDraw {
     }
 }
 
+/// The lock's background, or one surface of it, flooding out over the
+/// desktop.
+pub enum Flooding<R: Renderer + ImportAll> {
+    Surface(Cropped<R>),
+    Picture(MemoryRenderBufferRenderElement<R>),
+}
+
+/// How far a [`Flooding`] piece has come.
+#[derive(Debug, Clone)]
+pub struct Flood {
+    /// Stable while it floods, and not the piece's own: the desktop beneath
+    /// draws the same wallpaper surfaces.
+    pub id: Id,
+    /// The output the water spreads across, output-local.
+    pub output: Rectangle<i32, Physical>,
+    /// Where it wells up, as a fraction of the output across and down.
+    pub source: [f32; 2],
+    /// `lockscreen`'s `Frame::flood`.
+    pub level: f32,
+}
+
 /// Applies a backend's per-window effects to a tile.
 pub trait TileDecorator<R>
 where
@@ -204,9 +225,9 @@ where
         None
     }
 
-    /// A window bent on the GPU — poured into its icon or crumbled to dust.
+    /// A window bent on the GPU — poured into its icon or dissolved to dust.
     /// `None` — the default — makes the caller draw the flat morph, or let a
-    /// crumbling window go.
+    /// dissolving window go.
     fn warp(&mut self, renderer: &mut R, request: WarpRequest<'_, '_>) -> Option<Self::Element> {
         let _ = (renderer, request);
         None
@@ -292,6 +313,22 @@ where
     ) -> Option<Self::Element> {
         let _ = (renderer, sprite, glyph);
         None
+    }
+
+    /// The lock's background as far as it has flooded. `Err` — the default —
+    /// hands the piece back to be drawn whole, covering the desktop.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the piece comes back as it went in"
+    )]
+    fn flood(
+        &mut self,
+        renderer: &mut R,
+        piece: Flooding<R>,
+        flood: Flood,
+    ) -> Result<Self::Element, Flooding<R>> {
+        let _ = (renderer, flood);
+        Err(piece)
     }
 
     /// The surfaces whose image description this frame has to convert into

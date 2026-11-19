@@ -1,16 +1,11 @@
-//! The lock screen's one choreography, after ColorOS 17: the clock settles
-//! out of a soft zoom, gives way to the prompt by rising and receding into a
-//! blurred, dimmed wallpaper, and on unlock everything swells a little and
-//! dissolves into the desktop. The wallpaper covers the desktop from the
-//! first frame: a lock never lets the desktop show until it unlocks.
+//! The lock screen's one choreography: the clock and the
+//! background's subject rise in from below the bottom edge over the sharp
+//! desktop, then the background floods out from behind the subject to the
+//! screen's edges; the clock gives way to the
+//! prompt by rising and receding into a blurred, dimmed wallpaper; and on
+//! unlock everything swells a little and dissolves into the desktop.
 
 use super::{Frame, LayerStyle};
-
-/// How much bigger the clock starts as the lock arrives, and how blurred.
-const APPEAR_CLOCK_SCALE: f32 = 1.08;
-const APPEAR_CLOCK_BLUR: f32 = 18.0;
-/// How much bigger the wallpaper starts as the lock arrives.
-const APPEAR_WALLPAPER_SCALE: f32 = 1.06;
 
 /// Logical pixels the clock rises as the prompt comes up: 6 % of a typical
 /// 1080-pixel-tall output.
@@ -38,14 +33,16 @@ const DISMISS_WALLPAPER_SCALE: f32 = 1.08;
 
 /// Logical pixels: the widest blur any one moment gives the clock or prompt
 /// layer, the padding a host leaves around their sprites for it.
-pub const LAYER_BLUR_REACH: f32 = APPEAR_CLOCK_BLUR.max(REVEAL_CLOCK_BLUR).max(DISMISS_BLUR);
+pub const LAYER_BLUR_REACH: f32 = REVEAL_CLOCK_BLUR.max(DISMISS_BLUR);
 
 /// How far along each moment the lock is: 0 before it starts, 1 once it has
 /// landed, and a touch past 1 while a spring overshoots.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Moments {
-    /// Locking: the lock arriving over the desktop.
-    pub appear: f32,
+    /// Locking: the clock and subject rising in over the desktop.
+    pub rise: f32,
+    /// Locking, once they have: the background flooding out behind them.
+    pub flood: f32,
     /// The clock giving way to the password prompt.
     pub reveal: f32,
     /// Unlocking: the lock dissolving into the desktop.
@@ -55,7 +52,8 @@ pub struct Moments {
 impl Moments {
     /// Locked, showing the clock.
     pub const CLOCK: Self = Self {
-        appear: 1.0,
+        rise: 1.0,
+        flood: 1.0,
         reveal: 0.0,
         dismiss: 0.0,
     };
@@ -73,26 +71,24 @@ impl Moments {
             clock: self.clock(),
             prompt: self.prompt(),
             wallpaper: self.wallpaper(),
+            subject: self.subject(),
+            rise: self.rise,
+            flood: self.flood,
             dim: PROMPT_DIM * shown(self.reveal),
             shake,
         }
     }
 
+    /// Whole and sharp as it rises in: [`Frame::risen`] places it.
     fn clock(self) -> LayerStyle {
-        let (appear, reveal) = (self.appear, self.reveal);
-        let arriving = LayerStyle {
-            opacity: shown(appear),
-            scale: mix(APPEAR_CLOCK_SCALE, 1.0, appear),
-            blur: APPEAR_CLOCK_BLUR * (1.0 - shown(appear)),
-            ..LayerStyle::REST
-        };
+        let reveal = self.reveal;
         let giving_way = LayerStyle {
             opacity: 1.0 - shown(reveal),
             offset: [0.0, -REVEAL_CLOCK_RISE * reveal],
             scale: mix(1.0, REVEAL_CLOCK_SCALE, reveal),
             blur: REVEAL_CLOCK_BLUR * shown(reveal),
         };
-        arriving.then(giving_way).then(leaving(self.dismiss))
+        giving_way.then(leaving(self.dismiss))
     }
 
     fn prompt(self) -> LayerStyle {
@@ -109,14 +105,27 @@ impl Moments {
         rising.then(leaving(self.dismiss))
     }
 
+    /// Never zoomed on the way in, so the subject rises into its place in
+    /// the picture and stays there as the picture floods out around it.
     fn wallpaper(self) -> LayerStyle {
-        let (appear, dismiss) = (self.appear, self.dismiss);
+        let dismiss = self.dismiss;
         LayerStyle {
             opacity: 1.0 - shown(dismiss),
             offset: [0.0; 2],
-            scale: mix(APPEAR_WALLPAPER_SCALE, 1.0, appear)
-                * mix(1.0, DISMISS_WALLPAPER_SCALE, dismiss),
+            scale: mix(1.0, DISMISS_WALLPAPER_SCALE, dismiss),
             blur: PROMPT_BLUR * shown(self.reveal),
+        }
+    }
+
+    /// Framed with the wallpaper but sharp while it floods, and shown in
+    /// full from the start: rising in is its entrance, which
+    /// [`Frame::risen`] places.
+    fn subject(self) -> LayerStyle {
+        let wallpaper = self.wallpaper();
+        LayerStyle {
+            opacity: wallpaper.opacity * (1.0 - shown(self.reveal)) * (1.0 - shown(self.dismiss)),
+            blur: PROMPT_BLUR * shown(self.reveal),
+            ..wallpaper
         }
     }
 }
@@ -146,11 +155,21 @@ fn mix(from: f32, to: f32, progress: f32) -> f32 {
 mod tests {
     use super::*;
 
-    fn at(appear: f32, reveal: f32, dismiss: f32) -> Frame {
+    fn at(arrival: f32, reveal: f32, dismiss: f32) -> Frame {
         Moments {
-            appear,
+            rise: arrival,
+            flood: arrival,
             reveal,
             dismiss,
+        }
+        .frame(0.0)
+    }
+
+    fn arriving(rise: f32, flood: f32) -> Frame {
+        Moments {
+            rise,
+            flood,
+            ..Moments::CLOCK
         }
         .frame(0.0)
     }
@@ -161,6 +180,9 @@ mod tests {
         assert_eq!(frame.clock, LayerStyle::REST);
         assert!(!frame.prompt.is_visible());
         assert_eq!(frame.wallpaper, LayerStyle::REST);
+        assert_eq!(frame.subject, LayerStyle::REST);
+        assert_eq!(frame.flood, 1.0);
+        assert_eq!(frame.risen(1000.0), frame);
         assert_eq!(frame.dim, 0.0);
     }
 
@@ -175,13 +197,28 @@ mod tests {
     }
 
     #[test]
-    fn the_lock_arrives_out_of_a_soft_zoom() {
-        let frame = at(0.0, 0.0, 0.0);
-        assert!(!frame.clock.is_visible());
-        assert_eq!(frame.wallpaper.opacity, 1.0);
-        assert_eq!(frame.clock.scale, APPEAR_CLOCK_SCALE);
-        assert_eq!(frame.clock.blur, APPEAR_CLOCK_BLUR);
-        assert_eq!(frame.wallpaper.scale, APPEAR_WALLPAPER_SCALE);
+    fn the_clock_and_subject_rise_in_whole_and_sharp_from_below_the_output() {
+        let start = arriving(0.0, 0.0).risen(900.0);
+        for layer in [start.clock, start.subject] {
+            assert_eq!(layer.offset[1], 900.0);
+            assert_eq!((layer.opacity, layer.scale, layer.blur), (1.0, 1.0, 0.0));
+        }
+        assert_eq!(start.wallpaper.scale, 1.0);
+        let halfway = arriving(0.5, 0.0).risen(900.0);
+        assert_eq!(halfway.clock.offset, halfway.subject.offset);
+        assert!(
+            arriving(1.01, 0.0).risen(900.0).subject.offset[1] < 0.0,
+            "they overshoot"
+        );
+        assert!(!at(1.0, 1.0, 0.0).subject.is_visible());
+    }
+
+    #[test]
+    fn nothing_blurs_or_darkens_the_desktop_as_the_lock_arrives() {
+        for (rise, flood) in [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.0, 0.5)] {
+            assert_eq!(arriving(rise, flood).wallpaper.blur, 0.0);
+        }
+        assert_eq!(arriving(1.0, 0.0).darkening(0.6), 0.0);
     }
 
     #[test]

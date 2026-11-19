@@ -1,5 +1,5 @@
 use std::{
-    f32::consts::TAU,
+    f32::consts::{PI, TAU},
     time::{Duration, Instant},
 };
 
@@ -11,8 +11,15 @@ const DAMPING: f32 = 0.82;
 /// How far from its target, in whole moves, a spring counts as landed: less
 /// than an 8-bit channel can show.
 const LANDED: f32 = 1.0 / 512.0;
+/// The clock and subject rising in: a slow glide that barely overshoots.
+const RISE_RESPONSE: f32 = 0.7;
+const RISE_DAMPING: f32 = 0.86;
+/// The background flooding out behind them: slower still and closer to
+/// critical, so it pours rather than snaps.
+const FLOOD_RESPONSE: f32 = 1.4;
+const FLOOD_DAMPING: f32 = 0.9;
 
-/// A damped spring, described the way SwiftUI and ColorOS describe one.
+/// A damped spring, described by its response and damping.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Spring {
     /// Seconds one undamped swing would take.
@@ -29,6 +36,18 @@ impl Spring {
         damping: DAMPING,
     };
 
+    /// The lock arriving: its clock and subject rising in over the desktop.
+    pub const RISE: Self = Self {
+        response: RISE_RESPONSE,
+        damping: RISE_DAMPING,
+    };
+
+    /// The lock's background flooding out from behind its subject.
+    pub const FLOOD: Self = Self {
+        response: FLOOD_RESPONSE,
+        damping: FLOOD_DAMPING,
+    };
+
     /// How far a move from 0 to 1 has got `elapsed` after it started:
     /// exactly 1 once it has landed.
     pub fn progress(self, elapsed: Duration) -> f32 {
@@ -38,6 +57,13 @@ impl Spring {
     /// How long a move from 0 to 1 takes to land.
     pub fn settle_time(self) -> Duration {
         Duration::from_secs_f32(self.landing(-1.0, 0.0))
+    }
+
+    /// How long a move from 0 to 1 takes to first reach 1, where it starts
+    /// to overshoot.
+    pub fn arrival_time(self) -> Duration {
+        let swing = self.swing();
+        Duration::from_secs_f32((PI - (swing / self.decay()).atan()) / swing)
     }
 
     fn decay(self) -> f32 {
@@ -110,6 +136,11 @@ impl SpringValue {
         }
     }
 
+    /// Carried by `spring` instead of [`Spring::LOCK`].
+    pub fn on(self, spring: Spring) -> Self {
+        Self { spring, ..self }
+    }
+
     pub fn value(&self, now: Instant) -> f32 {
         self.target + self.state(now).0
     }
@@ -129,6 +160,11 @@ impl SpringValue {
             since: now,
             ..*self
         };
+    }
+
+    /// Whether it has set off by `now`: one made to start later has not.
+    pub fn has_started(&self, now: Instant) -> bool {
+        now >= self.since
     }
 
     pub fn is_settled(&self, now: Instant) -> bool {
@@ -167,6 +203,26 @@ mod tests {
             .map(|millis| spring.progress(Duration::from_millis(millis)))
             .fold(0.0_f32, f32::max);
         assert!(peak > 1.0 && peak < 1.03, "overshoots to {peak}");
+    }
+
+    #[test]
+    fn the_flood_pours_in_slower_and_softer() {
+        let (lock, flood) = (Spring::LOCK, Spring::FLOOD);
+        assert!(flood.settle_time() > lock.settle_time());
+        assert!(flood.settle_time() < Duration::from_secs(2));
+        let peak = (0..2000)
+            .map(|millis| flood.progress(Duration::from_millis(millis)))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 1.0 && peak < 1.01, "overshoots to {peak}");
+    }
+
+    #[test]
+    fn a_rise_arrives_where_it_starts_to_overshoot() {
+        let rise = Spring::RISE;
+        let arrival = rise.arrival_time();
+        assert!(arrival < rise.settle_time());
+        assert!(rise.progress(arrival - Duration::from_millis(5)) < 1.0);
+        assert!(rise.progress(arrival + Duration::from_millis(5)) > 1.0);
     }
 
     #[test]

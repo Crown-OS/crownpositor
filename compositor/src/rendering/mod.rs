@@ -16,6 +16,7 @@ pub mod cursor;
 pub mod decorate;
 pub mod decoration;
 pub mod element;
+pub mod flood;
 mod frame;
 pub mod framebuffer;
 pub mod fullscreen;

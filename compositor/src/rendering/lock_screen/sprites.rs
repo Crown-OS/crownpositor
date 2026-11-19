@@ -28,6 +28,27 @@ use crate::{
     shell::lock_screen::{OutputVisuals, PreparedSprite},
 };
 
+/// Where the background floods out from, at rest, as a fraction of the
+/// output across and down: the middle of the subject in front of the clock,
+/// or of the clock when nothing stands in front of it.
+pub(super) fn flood_source(visuals: &OutputVisuals) -> Option<[f32; 2]> {
+    let subject = visuals
+        .subject
+        .as_ref()
+        .filter(|subject| !subject.hides_clock)
+        .and_then(|subject| subject.middle);
+    subject.or_else(|| {
+        let clock = visuals
+            .sprites
+            .iter()
+            .filter(|sprite| sprite.layer == Layer::Clock)
+            .map(|sprite| sprite.rect);
+        let [across, down] = centre(clock)?;
+        let [width, height] = visuals.size.map(|side| side.max(1.0));
+        Some([across / width, down / height])
+    })
+}
+
 pub(super) struct Sprites<'a, R, D>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -91,7 +112,8 @@ where
     }
 
     /// The background's subject in front of the clock, framed over the
-    /// `size` output at `zoom` exactly as the background is.
+    /// `size` output at `zoom` exactly as the background is, and moved by
+    /// `style`'s offset.
     pub fn subject(&mut self, style: LayerStyle, zoom: f32, size: Size<i32, Logical>) {
         if !style.is_visible() {
             return;
@@ -104,8 +126,16 @@ where
         else {
             return;
         };
-        let Some(element) = covering(self.renderer, &subject.picture, size, zoom, style.opacity)
-        else {
+        let [across, down] = style.offset.map(f64::from);
+        let moved = Point::from((across * self.scale.x, down * self.scale.y));
+        let Some(element) = covering(
+            self.renderer,
+            &subject.picture,
+            moved,
+            size,
+            zoom,
+            style.opacity,
+        ) else {
             return;
         };
         let blur = style.blur * self.scale.x as f32;

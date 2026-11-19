@@ -15,7 +15,9 @@ use tiny_skia::{FilterQuality, IntSize, Pixmap, PixmapPaint, Transform};
 use crate::util::blur::box_blur;
 
 pub use crate::util::blur::gaussian_blur;
-pub use mask::{MAX_DEPTH_OCCLUSION, Mask, clock_occlusion, hides_clock, occlusion, subject};
+pub use mask::{
+    MAX_DEPTH_OCCLUSION, Mask, clock_occlusion, hides_clock, middle, occlusion, subject,
+};
 
 /// How much further than covering the output crownpaper zooms the desktop
 /// wallpaper about its centre (its `REST_ZOOM`), so a lock drawn over the

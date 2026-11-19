@@ -1,12 +1,13 @@
 //! The lock's background — the live wallpaper, a picture or a colour —
-//! zoomed about the output's centre, and the blur over it behind the prompt.
+//! zoomed about the output's centre, flooding out over the desktop as the
+//! lock arrives, and the blur over it as it arrives and behind the prompt.
 
 use lockscreen::{image::DESKTOP_WALLPAPER_ZOOM, transition::LayerStyle};
 use smithay::{
     backend::renderer::{
         ImportAll, ImportMem, Renderer,
         element::{
-            AsRenderElements, Kind, RenderElement,
+            AsRenderElements, Kind, Wrap,
             memory::MemoryRenderBufferRenderElement,
             surface::WaylandSurfaceRenderElement,
             utils::{CropRenderElement, RescaleRenderElement},
@@ -21,8 +22,9 @@ use smithay::{
 use super::{VISIBLE_BLUR, quantise, solid};
 use crate::{
     rendering::{
+        Elements,
         blur::{Glass, Shading},
-        decorate::{Backdrop as GlassBackdrop, TileDecorator},
+        decorate::{Backdrop as GlassBackdrop, Flood, Flooding, TileDecorator},
         element::CrownElement,
         unstretched::Unstretched,
     },
@@ -35,8 +37,13 @@ use crate::{
 pub(super) struct Background<'a> {
     pub lock: &'a ActiveLock,
     pub monitor: &'a Monitor,
+    pub visuals: Option<&'a OutputVisuals>,
     pub scale: Scale<f64>,
     pub style: LayerStyle,
+    /// How far it has flooded out, while it still is.
+    pub flood: Option<f32>,
+    /// Where it floods out from, as a fraction of the output across and down.
+    pub source: [f32; 2],
 }
 
 impl Background<'_> {
@@ -100,30 +107,39 @@ impl Background<'_> {
         )
     }
 
-    pub fn draw<R, E>(
+    /// Returns whether the desktop shows around it, as it floods in.
+    pub fn draw<R, D>(
         &self,
-        elements: &mut Vec<CrownElement<R, E>>,
+        elements: &mut Elements<R, D>,
         renderer: &mut R,
-        visuals: Option<&OutputVisuals>,
-    ) where
+        decorator: &mut D,
+    ) -> bool
+    where
         R: Renderer + ImportAll + ImportMem,
         R::TextureId: Send + Clone + 'static,
-        E: RenderElement<R>,
+        D: TileDecorator<R>,
     {
         let alpha = self.style.opacity;
         match self.lock.backdrop {
-            Backdrop::Wallpaper if self.lock.flow.is_unlocking() => {}
-            Backdrop::Wallpaper => self.wallpaper(elements, renderer),
-            Backdrop::Picture => {
-                if let Some(element) = visuals
-                    .and_then(|visuals| visuals.picture.as_ref())
-                    .and_then(|picture| {
-                        covering(renderer, picture, self.logical_size(), self.zoom(), alpha)
-                    })
-                {
-                    elements.push(Unstretched::from(element).into());
-                }
-            }
+            Backdrop::Wallpaper if self.lock.flow.is_unlocking() => false,
+            Backdrop::Wallpaper => self.wallpaper(elements, renderer, decorator),
+            Backdrop::Picture => self
+                .visuals
+                .and_then(|visuals| visuals.picture.as_ref())
+                .and_then(|picture| {
+                    let size = self.logical_size();
+                    covering(
+                        renderer,
+                        picture,
+                        Point::default(),
+                        size,
+                        self.zoom(),
+                        alpha,
+                    )
+                })
+                .map_or(self.flood.is_some(), |picture| {
+                    self.pour(elements, renderer, decorator, Flooding::Picture(picture), 0)
+                }),
             Backdrop::Color([red, green, blue, opacity]) => {
                 let alpha = opacity * alpha;
                 elements.push(solid(
@@ -131,24 +147,33 @@ impl Background<'_> {
                     self.output(),
                     [red * alpha, green * alpha, blue * alpha, alpha],
                 ));
+                false
             }
         }
     }
 
     /// The desktop's own wallpaper surfaces, zoomed about the output's centre.
     /// Not while unlocking: the desktop beneath draws the same surfaces, and
-    /// an element twice in one frame confuses the damage tracker.
-    fn wallpaper<R, E>(&self, elements: &mut Vec<CrownElement<R, E>>, renderer: &mut R)
+    /// an element twice in one frame confuses the damage tracker — which is
+    /// why the flood draws them under ids of its own.
+    fn wallpaper<R, D>(
+        &self,
+        elements: &mut Elements<R, D>,
+        renderer: &mut R,
+        decorator: &mut D,
+    ) -> bool
     where
         R: Renderer + ImportAll + ImportMem,
         R::TextureId: Send + Clone + 'static,
-        E: RenderElement<R>,
+        D: TileDecorator<R>,
     {
         let output = self.output();
         let centre = output.loc + Point::from((output.size.w / 2, output.size.h / 2));
         let zoom = f64::from(self.zoom());
         // A second guard for the same output deadlocks, so keep the scope tight.
         let map = layer_map_for_output(self.monitor.output());
+        let mut pieces = 0;
+        let mut floods = self.flood.is_some();
         for surface in map.layers_on(Layer::Background).rev() {
             let Some(geometry) = map.layer_geometry(surface) else {
                 continue;
@@ -159,19 +184,69 @@ impl Background<'_> {
             for element in surfaces {
                 let zoomed = RescaleRenderElement::from_element(element.into(), centre, zoom);
                 if let Some(cropped) = CropRenderElement::from_element(zoomed, self.scale, output) {
-                    elements.push(CrownElement::Scaled(cropped));
+                    floods &= self.pour(
+                        elements,
+                        renderer,
+                        decorator,
+                        Flooding::Surface(cropped),
+                        pieces,
+                    );
+                    pieces += 1;
                 }
             }
         }
+        floods
+    }
+
+    /// `piece` of the background, the `index`th, as far as it has flooded.
+    /// Returns whether it left the desktop showing: drawn whole, it covers it.
+    fn pour<R, D>(
+        &self,
+        elements: &mut Elements<R, D>,
+        renderer: &mut R,
+        decorator: &mut D,
+        piece: Flooding<R>,
+        index: usize,
+    ) -> bool
+    where
+        R: Renderer + ImportAll + ImportMem,
+        R::TextureId: Send + Clone + 'static,
+        D: TileDecorator<R>,
+    {
+        let flood = self.flood.zip(self.lock.ids.flood.get(index));
+        let piece = match flood {
+            Some((level, id)) => {
+                let flood = Flood {
+                    id: id.clone(),
+                    output: self.output(),
+                    source: self.source,
+                    level,
+                };
+                match decorator.flood(renderer, piece, flood) {
+                    Ok(flooded) => {
+                        elements.push(CrownElement::Tile(Wrap::from(flooded)));
+                        return true;
+                    }
+                    Err(piece) => piece,
+                }
+            }
+            None => piece,
+        };
+        elements.push(match piece {
+            Flooding::Surface(surface) => CrownElement::Scaled(surface),
+            Flooding::Picture(picture) => Unstretched::from(picture).into(),
+        });
+        false
     }
 }
 
-/// `picture` over the whole `size` output, zoomed `zoom` about its centre by
-/// cropping what it samples, as crownpaper's viewport crops the wallpaper: at
-/// 1 it draws pixel for pixel.
+/// `picture` over the whole `size` output from `origin`, zoomed `zoom` about
+/// its centre by cropping what it samples, as crownpaper's viewport crops the
+/// wallpaper: at 1 it draws pixel for pixel.
 pub(super) fn covering<R>(
     renderer: &mut R,
     picture: &OutputPicture,
+    origin: Point<f64, Physical>,
     size: Size<i32, Logical>,
     zoom: f32,
     alpha: f32,
@@ -182,7 +257,7 @@ where
 {
     MemoryRenderBufferRenderElement::from_buffer(
         renderer,
-        Point::<f64, Physical>::default(),
+        origin,
         &picture.buffer,
         Some(alpha),
         Some(centre_crop(picture.pixels, zoom)),
