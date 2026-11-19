@@ -214,6 +214,14 @@ mod tests {
     }
 
     #[test]
+    fn super_alt_l_locks_the_screen() {
+        assert_eq!(
+            bound(&Bindings::defaults(), "Super+Alt+L"),
+            Some(Action::Lock)
+        );
+    }
+
+    #[test]
     fn a_custom_row_adds_without_costing_a_default() {
         let bindings = Bindings::with_custom(&[row("Super+B", "spawn firefox")]);
 

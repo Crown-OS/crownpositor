@@ -20,6 +20,10 @@ const ALT: Mods = Mods {
     ..Mods::NONE
 };
 const ALT_SHIFT: Mods = Mods { shift: true, ..ALT };
+const SUPER_ALT: Mods = Mods {
+    alt: true,
+    ..Mods::META
+};
 const SUPER_CTRL: Mods = Mods {
     ctrl: true,
     ..Mods::META
@@ -87,6 +91,7 @@ pub fn bindings() -> impl Iterator<Item = (Keybind, Action)> {
     let fixed = [
         (SUPER_SHIFT, KeyCode::E, Action::Quit),
         (SUPER_SHIFT, KeyCode::C, Action::ReloadConfig),
+        (SUPER_ALT, KeyCode::L, Action::Lock),
         (SUPER_CTRL, KeyCode::Q, Action::Lock),
         (
             SUPER,
