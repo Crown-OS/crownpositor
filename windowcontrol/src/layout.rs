@@ -4,15 +4,22 @@
 //! card, in the middle of the screen; the windows before it are stacked behind
 //! it to the left and the ones after it to the right, each a little smaller and
 //! peeking out a little further than the card in front of it. Advancing slides
-//! the next card out of the stack and over the rest.
+//! the next card out of the stack and over the rest, the card it replaces
+//! fading through it so the two never swap over in one frame. From three
+//! windows on the row is a ring: the stack wraps round rather than sliding
+//! back across itself, a card fading out as it crosses the far side.
 
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use spacecontrol::scene::Canvas;
 
-use crate::strip::Strip;
+use crate::{motion::CROSSFADE, strip::Strip, util::ease::smoothstep};
 
 /// Width over height a card may take, whatever shape its window is.
 const ASPECTS: (f64, f64) = (0.5, 2.4);
+
+/// How far short of the far side of a ring cards fade out, so one crossing
+/// over to the other side of the stack never jumps.
+const FAR_SIDE_FADE: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Metrics {
@@ -85,9 +92,9 @@ pub fn arrange<K: Copy + Eq>(
 ) {
     out.clear();
     let entries = strip.entries();
-    let Some(last) = entries.len().checked_sub(1) else {
+    if entries.is_empty() {
         return;
-    };
+    }
     let unit = f64::from(canvas.output.size.h);
     let usable = canvas.usable.to_f64();
     let bounds = Size::from((
@@ -95,15 +102,15 @@ pub fn arrange<K: Copy + Eq>(
         usable.size.h * metrics.card.1,
     ));
     let natural = |index: usize| fit(bounds, aspect(entries[index].key));
-    let position = strip.position();
+    let ring_ends = strip.ring_ends();
 
     out.extend(entries.iter().enumerate().map(|(index, entry)| {
-        let depth = index as f64 - position;
+        let depth = strip.depth(index);
         let scale =
             entry.presence() * metrics.shrink(depth.abs()) * (1.0 + metrics.hover * entry.lift());
         Slot {
             rect: Rectangle::new(Point::default(), natural(index).upscale(scale)),
-            alpha: entry.presence() * metrics.visibility(depth.abs()),
+            alpha: entry.presence() * metrics.visibility(depth.abs()) * far_side(ring_ends, depth),
             radius: unit * metrics.roundness * scale,
             depth,
         }
@@ -111,22 +118,28 @@ pub fn arrange<K: Copy + Eq>(
 
     // Between two selections each card is part way between where it rests
     // for one and where it rests for the other.
-    let below = (position.max(0.0).floor() as usize).min(last);
-    let above = (below + 1).min(last);
-    let blend = (position - below as f64).clamp(0.0, 1.0);
+    let (below, above, blend) = strip.between();
     for (front, weight) in [(below, 1.0 - blend), (above, blend)] {
+        let offset = |index: usize| (strip.depth(index) - strip.depth(front)).round() as i64;
         let width = |index: usize| {
             natural(index).w
                 * entries[index].presence()
-                * metrics.shrink(index.abs_diff(front) as f64)
+                * metrics.shrink(offset(index).abs() as f64)
         };
         let peek = |index: usize| {
-            let stacked = metrics.is_stacked(index.abs_diff(front));
+            let stacked = metrics.is_stacked(offset(index).unsigned_abs() as usize);
             unit * metrics.peek * entries[index].presence() * f64::from(u8::from(stacked))
         };
-        chain(entries.len(), front, width, peek, |index, x| {
+        chain(entries.len(), front, width, peek, offset, |index, x| {
             out[index].rect.loc.x += x * weight;
         });
+    }
+    if below != above {
+        let leaving = match strip.is_moving_back() {
+            true => above,
+            false => below,
+        };
+        out[leaving].alpha *= smoothstep((1.0 - 2.0 * blend).abs() / CROSSFADE);
     }
 
     let centre = Point::<f64, Logical>::from((
@@ -139,21 +152,41 @@ pub fn arrange<K: Copy + Eq>(
     }
 }
 
+/// How opaque a card `depth` places round a ring is: none at all on the far
+/// side, where it crosses from one side of the stack to the other.
+fn far_side(ring_ends: Option<(f64, f64)>, depth: f64) -> f64 {
+    ring_ends.map_or(1.0, |(start, end)| {
+        ((depth - start).min(end - depth) / FAR_SIDE_FADE).clamp(0.0, 1.0)
+    })
+}
+
 /// Every card's middle with `front` on top and centred on 0. Out from it the
-/// cards are chained: each peeks `peek` past the cards in front of it on the
-/// outer side, and never out on the inner side, however wide it is.
+/// cards are chained, in the order `offset` puts them either side of it: each
+/// peeks `peek` past the cards in front of it on the outer side, and never out
+/// on the inner side, however wide it is.
 fn chain(
     len: usize,
     front: usize,
     width: impl Fn(usize) -> f64,
     peek: impl Fn(usize) -> f64,
+    offset: impl Fn(usize) -> i64,
     mut place: impl FnMut(usize, f64),
 ) {
     let half = width(front) / 2.0;
     place(front, 0.0);
 
+    let ring = len as i64;
+    let offset = &offset;
+    let side = |sign: i64| {
+        (1..ring)
+            .map(move |step| (front as i64 + sign * step).rem_euclid(ring) as usize)
+            .zip(1..)
+            .filter(move |&(index, step)| offset(index) == sign * step)
+            .map(|(index, _)| index)
+    };
+
     let (mut left, mut right) = (-half, half);
-    for index in (0..front).rev() {
+    for index in side(-1) {
         let width = width(index);
         left = left.min(right - width) - peek(index);
         right = left + width;
@@ -161,7 +194,7 @@ fn chain(
     }
 
     let (mut left, mut right) = (-half, half);
-    for index in front + 1..len {
+    for index in side(1) {
         let width = width(index);
         right = right.max(left + width) + peek(index);
         left = right - width;
@@ -282,9 +315,64 @@ mod tests {
 
         let front = spacecontrol::scene::centre(slots[2].rect);
         assert_eq!(slot_at(&slots, &order, front), Some(2));
-        let peek = Point::from((slots[0].rect.loc.x + 1.0, front.y));
-        assert_eq!(slot_at(&slots, &order, peek), Some(0));
+        let peek = Point::from((slots[1].rect.loc.x + 1.0, front.y));
+        assert_eq!(slot_at(&slots, &order, peek), Some(1));
+        let wrapped = Point::from((right(slots[0].rect) - 1.0, front.y));
+        assert_eq!(slot_at(&slots, &order, wrapped), Some(0));
         assert_eq!(slot_at(&slots, &order, (0.0, 0.0).into()), None);
+    }
+
+    #[test]
+    fn the_card_leaving_the_top_has_faded_through_when_they_swap_over() {
+        let mut strip = Strip::default();
+        strip.reset([1, 2, 3, 4, 5], Direction::Forward);
+        strip.scroll(0.5);
+        let mut slots = Vec::new();
+        arrange(canvas(), &Metrics::default(), &strip, |_| WIDE, &mut slots);
+        assert_eq!(slots[1].alpha, 0.0);
+        assert_eq!(slots[2].alpha, 1.0);
+
+        strip.scroll(0.1);
+        arrange(canvas(), &Metrics::default(), &strip, |_| WIDE, &mut slots);
+        assert!(slots[1].alpha > 0.0 && slots[1].alpha < 1.0);
+    }
+
+    #[test]
+    fn a_card_wrapping_round_the_ring_stays_on_its_side_of_the_stack() {
+        let mut strip = Strip::default();
+        strip.reset([1, 2, 3, 4], Direction::Backward);
+        strip.advance(Direction::Forward);
+        let mut slots = Vec::new();
+        arrange(canvas(), &Metrics::default(), &strip, |_| WIDE, &mut slots);
+        let front = slots[3].rect;
+        assert!(
+            slots[0].rect.loc.x > front.loc.x,
+            "the next card is to the right"
+        );
+        assert!(
+            right(slots[2].rect) <= right(front),
+            "the one before is to the left"
+        );
+    }
+
+    #[test]
+    fn every_card_of_an_even_ring_shows_at_rest() {
+        let slots = laid_out(&[1, 2, 3, 4], Direction::Forward, |_| WIDE);
+        assert!(slots.iter().all(|slot| slot.alpha == 1.0));
+        assert!(
+            slots[3].rect.loc.x > slots[2].rect.loc.x,
+            "the odd one goes right"
+        );
+    }
+
+    #[test]
+    fn a_card_crossing_the_far_side_of_the_ring_is_out_of_sight() {
+        let mut strip = Strip::default();
+        strip.reset([1, 2, 3, 4], Direction::Forward);
+        strip.scroll(0.5);
+        let mut slots = Vec::new();
+        arrange(canvas(), &Metrics::default(), &strip, |_| WIDE, &mut slots);
+        assert_eq!(slots[0].alpha, 0.0);
     }
 
     #[test]

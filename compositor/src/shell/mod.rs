@@ -1221,6 +1221,19 @@ impl Shell {
             .is_some_and(|monitor| monitor.switch_to(target))
     }
 
+    /// Switches the window's monitor to the workspace it lives on.
+    pub fn switch_to_workspace_of(&mut self, id: WindowId) -> bool {
+        let Some(location) = self.location(id) else {
+            return false;
+        };
+        self.monitor_by_id_mut(location.output)
+            .is_some_and(|monitor| {
+                monitor
+                    .index_of(location.workspace)
+                    .is_some_and(|index| monitor.activate(index))
+            })
+    }
+
     /// Moves the focused window to another workspace on the same output.
     pub fn move_focused_to_workspace(&mut self, target: WorkspaceRef, follow: bool) -> bool {
         let Some(id) = self.focused_window_id() else {

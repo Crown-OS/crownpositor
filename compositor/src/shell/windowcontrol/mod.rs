@@ -18,7 +18,10 @@ use windowcontrol::{Direction, Metrics, Slot, Switcher, layout};
 
 pub use icons::ICON_SIZE;
 
-use crate::{shell::monitor::Monitor, utils::id::WindowId};
+use crate::{
+    shell::{monitor::Monitor, tile::Tile},
+    utils::id::WindowId,
+};
 
 /// What the damage tracker knows a card's own quads by.
 #[derive(Debug)]
@@ -52,6 +55,8 @@ pub struct WindowControl {
     /// Width over height of every window seen since opening, so one that has
     /// closed keeps its shape while it collapses.
     aspects: HashMap<WindowId, f64>,
+    /// The active workspace front to back as it was when the stack came up.
+    stacking: Vec<WindowId>,
 }
 
 impl Default for WindowControl {
@@ -66,6 +71,7 @@ impl Default for WindowControl {
             slots: Vec::new(),
             order: Vec::new(),
             aspects: HashMap::new(),
+            stacking: Vec::new(),
         }
     }
 }
@@ -77,6 +83,9 @@ impl WindowControl {
         self.aspects.clear();
         self.cards.clear();
         self.icons.forget_windows();
+        self.stacking.clear();
+        self.stacking
+            .extend(monitor.active().stacking_order().map(Tile::id));
         let opened = self
             .switcher
             .open(monitor.active().recent_windows(), direction);
@@ -215,6 +224,13 @@ impl WindowControl {
     /// Indices into [`Self::slots`], top card first.
     pub fn order(&self) -> &[usize] {
         &self.order
+    }
+
+    /// The workspace front to back as it was when the stack came up. The
+    /// stage keeps to it until the stack is gone, so the window a commit
+    /// raises comes to the top under its landed card, not before it lands.
+    pub fn stacking(&self) -> &[WindowId] {
+        &self.stacking
     }
 
     /// How far `window` has come out of the stack to the top, 0 to 1.

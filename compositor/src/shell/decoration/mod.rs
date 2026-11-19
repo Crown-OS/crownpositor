@@ -1,6 +1,6 @@
 //! Where a window's frame sits relative to the window itself.
 //!
-//! The frame is *outside* the client area, the way macOS and Windows draw one:
+//! The frame is *outside* the client area:
 //! a decorated window's rect is the titlebar and rim plus the surface, and the client is
 //! configured with what is left. Two rects therefore exist for every tile, and
 //! confusing them is the whole bug surface of server-side decoration — so the
@@ -130,6 +130,25 @@ impl TitleBarLayout {
                 frame.loc.y + insets.top / 2,
             )),
         }
+    }
+
+    /// The same layout with the controls moved in from a corner `radius`
+    /// round, so the rightmost keeps the clearance it has from a straight
+    /// edge.
+    #[must_use]
+    pub fn clear_of_corner(mut self, radius: f64) -> Self {
+        let disc = f64::from(CONTROL_DIAMETER) / 2.0;
+        let clearance = f64::from(CONTROL_MARGIN) - disc;
+        let rise = radius - f64::from(self.first_control.y - self.bar.loc.y);
+        if rise <= 0.0 {
+            return self;
+        }
+        let reach = (radius - disc - clearance).max(0.0);
+        let beside = (reach * reach - rise * rise).max(0.0).sqrt();
+        let right = f64::from(self.bar.loc.x + self.bar.size.w);
+        let rightmost = (right - radius + beside).floor() as i32;
+        self.first_control.x -= (self.control_centre(Control::Close).x - rightmost).max(0);
+        self
     }
 
     pub fn bar(&self) -> Rectangle<i32, Logical> {
@@ -467,6 +486,27 @@ mod tests {
         );
         assert_eq!(centres[2], 800 - CONTROL_MARGIN, "close is the rightmost");
         assert_eq!(layout.first_control_centre().x, centres[0]);
+    }
+
+    #[test]
+    fn a_corner_no_rounder_than_half_the_bar_leaves_the_controls_alone() {
+        let layout = TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36));
+        assert_eq!(layout.clear_of_corner(18.0), layout);
+    }
+
+    #[test]
+    fn a_round_corner_keeps_the_close_control_as_clear_as_a_straight_edge() {
+        let radius = 35.0;
+        let layout =
+            TitleBarLayout::new(rect(0, 0, 800, 600), Insets::top(36)).clear_of_corner(radius);
+        let close = layout.control_centre(Control::Close).to_f64();
+        let corner = Point::<f64, Logical>::from((800.0 - radius, radius));
+        let gap = radius
+            - (close.x - corner.x).hypot(close.y - corner.y)
+            - f64::from(CONTROL_DIAMETER) / 2.0;
+
+        assert!(close.x < f64::from(800 - CONTROL_MARGIN));
+        assert!(gap >= f64::from(CONTROL_MARGIN - CONTROL_DIAMETER / 2));
     }
 
     #[test]

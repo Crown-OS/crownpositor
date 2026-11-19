@@ -8,6 +8,7 @@ use spacecontrol::animations::spring::{Spring, SpringProfile};
 use crate::{
     motion,
     strip::{Direction, Strip},
+    util::ease::smoothstep,
 };
 
 const VISIBLE: f32 = 1e-3;
@@ -15,6 +16,9 @@ const VISIBLE: f32 = 1e-3;
 #[derive(Debug, Clone)]
 pub struct Switcher<K> {
     reveal: Spring,
+    /// Heads for 1 from the moment the stack opens, and keeps heading there
+    /// as it goes: the window the top card lands on is the one left on top.
+    surfacing: Spring,
     open: bool,
     strip: Strip<K>,
     /// The window focused when it opened, which dismissing goes back to.
@@ -26,6 +30,7 @@ impl<K> Default for Switcher<K> {
     fn default() -> Self {
         Self {
             reveal: Spring::with_profile(0.0, motion::RISE),
+            surfacing: Spring::with_profile(0.0, motion::SURFACE),
             open: false,
             strip: Strip::default(),
             origin: None,
@@ -45,6 +50,8 @@ impl<K: Copy + Eq> Switcher<K> {
             return false;
         }
         self.open = true;
+        self.surfacing.hold(0.0);
+        self.surfacing.set_target(1.0);
         self.animate(motion::RISE, 1.0);
         true
     }
@@ -144,7 +151,8 @@ impl<K: Copy + Eq> Switcher<K> {
     }
 
     pub fn is_active(&self) -> bool {
-        self.is_visible() && !(self.reveal.at_rest() && self.strip.at_rest())
+        self.is_visible()
+            && !(self.reveal.at_rest() && self.surfacing.at_rest() && self.strip.at_rest())
     }
 
     /// How far the stack has come up, overshoot included.
@@ -156,13 +164,27 @@ impl<K: Copy + Eq> Switcher<K> {
         self.progress().clamp(0.0, 1.0)
     }
 
+    /// How opaque the top card is: it fades in over the windows that covered
+    /// its own rather than jumping in front of them, and never fades back.
+    pub fn surfaced(&self) -> f64 {
+        smoothstep(2.0 * f64::from(self.surfacing.position))
+    }
+
+    /// How far the top card's window has left its place on the desktop: only
+    /// once the card is opaque, so nothing ever shows through the pair.
+    pub fn vacated(&self) -> f64 {
+        smoothstep(2.0 * f64::from(self.surfacing.position) - 1.0)
+    }
+
     pub fn step(&mut self, dt: f32) {
         self.reveal.step(dt);
+        self.surfacing.step(dt);
         self.strip.step(dt);
     }
 
     pub fn settle(&mut self) {
         self.reveal.snap_to_target();
+        self.surfacing.snap_to_target();
         self.strip.settle();
     }
 
@@ -243,6 +265,42 @@ mod tests {
         switcher.open([1], Direction::Forward);
         switcher.sync([]);
         assert!(!switcher.is_open());
+    }
+
+    #[test]
+    fn the_top_card_fades_in_over_the_desktop_as_the_stack_rises() {
+        let mut switcher = Switcher::default();
+        switcher.open([1, 2], Direction::Forward);
+        assert_eq!(switcher.surfaced(), 0.0, "jumped in front at once");
+        settled(&mut switcher);
+        assert_eq!(switcher.surfaced(), 1.0);
+    }
+
+    #[test]
+    fn a_quick_tap_lands_its_card_opaque() {
+        let mut switcher = Switcher::default();
+        switcher.open([1, 2], Direction::Forward);
+        switcher.step(1.0 / 60.0);
+        switcher.commit();
+        let mut last = switcher.surfaced();
+        while switcher.is_visible() {
+            switcher.step(1.0 / 60.0);
+            assert!(switcher.surfaced() >= last, "faded back");
+            last = switcher.surfaced();
+        }
+        assert_eq!(last, 1.0, "landed see-through");
+    }
+
+    #[test]
+    fn a_window_leaves_its_place_only_under_an_opaque_card() {
+        let mut switcher = Switcher::default();
+        switcher.open([1, 2], Direction::Forward);
+        for _ in 0..60 {
+            switcher.step(1.0 / 120.0);
+            assert!(switcher.vacated() == 0.0 || switcher.surfaced() == 1.0);
+        }
+        settled(&mut switcher);
+        assert_eq!(switcher.vacated(), 1.0);
     }
 
     #[test]

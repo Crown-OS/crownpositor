@@ -10,6 +10,10 @@ use spacecontrol::animations::spring::Spring;
 
 use crate::motion;
 
+/// From this many entries the row is a ring: stepping past either end is one
+/// step like any other, not a slide back across every card.
+const RING: usize = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Forward,
@@ -115,6 +119,69 @@ impl<K: Copy + Eq> Strip<K> {
         f64::from(self.position.position)
     }
 
+    /// Places `index` sits behind the top card, negative to its left. Round a
+    /// ring that is between [`Self::ring_ends`].
+    pub fn depth(&self, index: usize) -> f64 {
+        let offset = index as f64 - self.position();
+        match self.ring_ends() {
+            Some((start, end)) => start + (offset - start).rem_euclid(end - start),
+            None => offset,
+        }
+    }
+
+    /// The depths where a card crosses from one side of the stack to the
+    /// other: half a place clear of every card at rest, the odd one of an
+    /// even ring going right. `None` while the row has two ends.
+    pub fn ring_ends(&self) -> Option<(f64, f64)> {
+        let len = self.entries.len();
+        let start = -((len.saturating_sub(1) / 2) as f64 + 0.5);
+        self.is_ring().then_some((start, start + len as f64))
+    }
+
+    /// The two entries the top of the stack is between, and how far it has
+    /// come from the first towards the second.
+    pub fn between(&self) -> (usize, usize, f64) {
+        let len = self.entries.len();
+        let position = self.position();
+        if self.is_ring() {
+            let below = (position.floor() as i64).rem_euclid(len as i64) as usize;
+            return (below, (below + 1) % len, position - position.floor());
+        }
+        let last = len.saturating_sub(1);
+        let below = (position.max(0.0).floor() as usize).min(last);
+        let blend = (position - below as f64).clamp(0.0, 1.0);
+        (below, (below + 1).min(last), blend)
+    }
+
+    /// Whether the stack is gliding towards earlier entries.
+    pub fn is_moving_back(&self) -> bool {
+        self.position.target < self.position.position
+    }
+
+    fn is_ring(&self) -> bool {
+        self.entries.len() >= RING
+    }
+
+    fn shortest(&self, offset: f64) -> f64 {
+        match self.is_ring() {
+            true => {
+                let len = self.entries.len() as f64;
+                offset - len * (offset / len).round()
+            }
+            false => offset,
+        }
+    }
+
+    /// Glides to `index` the short way round, renumbering the position so
+    /// the target is `index` itself.
+    fn aim(&mut self, index: usize) {
+        let target = index as f32;
+        let from = self.position.target;
+        let arrival = from + self.shortest(f64::from(target - from)) as f32;
+        self.position.set_target(arrival);
+        self.position.shift(target - arrival);
+    }
+
     pub fn has_live(&self) -> bool {
         self.entries.iter().any(|entry| !entry.is_leaving())
     }
@@ -143,7 +210,7 @@ impl<K: Copy + Eq> Strip<K> {
             .is_some_and(|entry| !entry.is_leaving())
         {
             self.selected = index;
-            self.position.set_target(index as f32);
+            self.aim(index);
             self.focus_selected();
         }
     }
@@ -166,10 +233,14 @@ impl<K: Copy + Eq> Strip<K> {
     /// Drags the row by `entries` with the fingers on it; the selection follows
     /// whichever entry ends up centred.
     pub fn scroll(&mut self, entries: f64) {
-        let last = self.entries.len().saturating_sub(1) as f32;
-        self.position
-            .hold((self.position.position + entries as f32).clamp(0.0, last));
-        if let Some(nearest) = self.nearest_live(self.position.position.round() as usize) {
+        let len = self.entries.len().max(1);
+        let moved = self.position.position + entries as f32;
+        self.position.hold(match self.is_ring() {
+            true => moved.rem_euclid(len as f32),
+            false => moved.clamp(0.0, (len - 1) as f32),
+        });
+        let centred = self.position.position.round() as usize % len;
+        if let Some(nearest) = self.nearest_live(centred) {
             self.selected = nearest;
             self.focus_selected();
         }
@@ -177,7 +248,7 @@ impl<K: Copy + Eq> Strip<K> {
 
     /// Lets go of the row: it glides onto the selection.
     pub fn release(&mut self) {
-        self.position.set_target(self.selected as f32);
+        self.aim(self.selected);
     }
 
     pub fn hover(&mut self, hovered: Option<usize>) {
@@ -376,9 +447,49 @@ mod tests {
         let mut strip = strip(&[1, 2, 3, 4], Direction::Forward);
         strip.scroll(1.6);
         assert_eq!(strip.selected_key(), Some(4));
+        strip.scroll(1.4);
+        assert_eq!(strip.position(), 0.0, "a ring scrolls round");
+        assert_eq!(strip.selected_key(), Some(1));
+    }
+
+    #[test]
+    fn a_row_of_two_stops_scrolling_at_its_ends() {
+        let mut strip = strip(&[1, 2], Direction::Forward);
         strip.scroll(-9.0);
         assert_eq!(strip.position(), 0.0);
         assert_eq!(strip.selected_key(), Some(1));
+    }
+
+    #[test]
+    fn wrapping_round_the_ring_is_one_step() {
+        let mut strip = strip(&[1, 2, 3, 4], Direction::Backward);
+        strip.advance(Direction::Forward);
+        assert_eq!(strip.selected_key(), Some(1));
+        assert_eq!(strip.position(), -1.0, "slides back across the stack");
+        assert_eq!(strip.depth(0), 1.0);
+
+        settled(&mut strip);
+        assert_eq!(strip.position(), 0.0);
+        assert_eq!(strip.depth(3), -1.0);
+    }
+
+    #[test]
+    fn stepping_back_past_the_start_comes_round_from_the_left() {
+        let mut strip = strip(&[1, 2, 3, 4, 5], Direction::Forward);
+        strip.advance(Direction::Backward);
+        strip.advance(Direction::Backward);
+        assert_eq!(strip.selected_key(), Some(5));
+        assert_eq!(strip.depth(4), -2.0);
+        assert!(strip.is_moving_back());
+    }
+
+    #[test]
+    fn a_row_of_two_keeps_its_ends() {
+        let mut strip = strip(&[1, 2], Direction::Forward);
+        strip.advance(Direction::Forward);
+        assert_eq!(strip.selected_key(), Some(1));
+        assert_eq!(strip.depth(0), -1.0);
+        assert_eq!(strip.ring_ends(), None);
     }
 
     #[test]

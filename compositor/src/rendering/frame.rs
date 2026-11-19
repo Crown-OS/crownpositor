@@ -279,7 +279,8 @@ impl<'a> Frame<'a> {
     /// Against the frame's *animated* size, scaled back to the window's own:
     /// controls placed from the settled width would drift outside a window
     /// that is mid-resize. Measured at the origin, so every rect is an offset
-    /// into the frame.
+    /// into the frame. Kept clear of the frame's own corner, which on an
+    /// Alt+Tab card is rounder than the window's.
     fn layout(&self, style: &FrameStyle<'_>) -> TitleBarLayout {
         let scale = style.scale * self.zoom;
         let logical = |value: i32| (f64::from(value) / scale).round() as i32;
@@ -290,6 +291,7 @@ impl<'a> Frame<'a> {
             ))),
             Insets::top(logical(self.inset)),
         )
+        .clear_of_corner(f64::from(self.radius) / scale)
     }
 
     fn appearance(&self, style: &FrameStyle<'_>) -> (bool, CommitCounter) {

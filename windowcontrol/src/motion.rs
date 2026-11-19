@@ -33,3 +33,10 @@ pub const ENTRY: SpringProfile = SpringProfile::SNAPPY;
 
 /// How large the stack starts as it comes up, and ends as it goes.
 pub const ARRIVAL_SCALE: f64 = 0.9;
+
+/// The top card fading in over the windows that covered its own.
+pub const SURFACE: SpringProfile = SpringProfile::SNAPPY;
+
+/// How much of one step the card leaving the top takes to fade through the
+/// card taking its place, so the two never swap over in a single frame.
+pub const CROSSFADE: f64 = 0.5;

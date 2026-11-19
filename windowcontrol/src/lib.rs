@@ -11,6 +11,7 @@ pub mod layout;
 pub mod motion;
 pub mod strip;
 pub mod switcher;
+mod util;
 
 pub use layout::{Metrics, Slot};
 pub use strip::Direction;

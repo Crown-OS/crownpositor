@@ -70,6 +70,7 @@ where
         let control = monitor.window_control();
         let switcher = control.switcher();
         let shown = switcher.eased();
+        let surfaced = switcher.surfaced();
         let lifted = switcher.progress();
         let arrival = ARRIVAL_SCALE + (1.0 - ARRIVAL_SCALE) * shown;
         let entries = switcher.strip().entries();
@@ -89,7 +90,7 @@ where
                 tile,
                 rect: scene::between(tile.render_rect(), stacked, flight),
                 radius: self.flown_radius(slot, arrival, flight),
-                alpha: slot.alpha * (1.0 - (1.0 - focus) * (1.0 - shown)),
+                alpha: slot.alpha * (focus * surfaced + (1.0 - focus) * shown),
                 chrome: slot.alpha * shown,
                 focus,
                 depth: slot.depth,
@@ -142,27 +143,18 @@ where
     }
 
     /// The icon over the card: at the stacked card's outer edge, moving to
-    /// the middle beside the title as the card comes to the top.
+    /// the top-left corner, with the title after it, as the card comes to
+    /// the top.
     fn card_chrome(&mut self, control: &WindowControl, card: &Card<'_>) {
         let rect = card.rect;
         let y = rect.loc.y - ICON_RISE;
         let edge = ICON_INSET + ICON_SIZE / 2.0;
+        let left = rect.loc.x + edge;
         let stacked = match card.depth < 0.0 {
-            true => rect.loc.x + edge,
+            true => left,
             false => rect.loc.x + rect.size.w - edge,
         };
-
-        let title = shortened(card.tile.title());
-        let width = match card.focus > VISIBLE {
-            true => f64::from(self.style.text.measure(&title, self.scale.x, TITLE, true)),
-            false => 0.0,
-        };
-        let middle = scene::centre(rect).x;
-        let group = ICON_SIZE + TITLE_GAP + width;
-        let icon = Point::<f64, Logical>::from((
-            stacked + (middle - group / 2.0 + ICON_SIZE / 2.0 - stacked) * card.focus,
-            y,
-        ));
+        let icon = Point::<f64, Logical>::from((stacked + (left - stacked) * card.focus, y));
         let has_icon = match control.icon(card.tile.id()) {
             Some((buffer, size)) => {
                 self.sprite(buffer, size, icon, card.chrome as f32);
@@ -172,13 +164,16 @@ where
         };
 
         let alpha = card.chrome * card.focus;
-        if width > 0.0 && alpha > VISIBLE {
-            let x = match has_icon {
-                true => icon.x + ICON_SIZE / 2.0 + TITLE_GAP + width / 2.0,
-                false => middle,
-            };
-            self.label(&title, (x, y).into(), TITLE, alpha as f32);
+        if alpha <= VISIBLE {
+            return;
         }
+        let title = shortened(card.tile.title());
+        let width = f64::from(self.style.text.measure(&title, self.scale.x, TITLE, true));
+        let start = match has_icon {
+            true => icon.x + ICON_SIZE / 2.0 + TITLE_GAP,
+            false => rect.loc.x + ICON_INSET,
+        };
+        self.label(&title, (start + width / 2.0, y).into(), TITLE, alpha as f32);
     }
 
     fn card_shadow(&mut self, id: Id, piece: ShadowPiece, alpha: f32) {

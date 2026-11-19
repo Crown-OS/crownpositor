@@ -1,6 +1,6 @@
-//! The workspace under the frost, as it is on the desktop, less the windows
-//! that have left it as cards: the top card stands in for its window from the
-//! moment it lifts off until it lands back on it.
+//! The workspace under the frost, as it was on the desktop when the stack came
+//! up, less the windows that have left it as cards: the top card fades in over
+//! its window as it lifts off, and only then does the window leave its place.
 
 use smithay::backend::renderer::{ImportAll, ImportMem, Renderer};
 
@@ -23,11 +23,14 @@ where
         let control = monitor.window_control();
         let workspace = monitor.active();
         let fullscreen = workspace.fullscreen();
-        let shown = workspace
-            .stacking_order()
-            .filter(|tile| fullscreen.is_none_or(|id| id == tile.id()));
+        let shown = control
+            .stacking()
+            .iter()
+            .filter_map(|&id| workspace.tile(id))
+            .filter(|tile| tile.is_shown() && fullscreen.is_none_or(|id| id == tile.id()));
+        let vacated = control.switcher().vacated();
         for tile in shown {
-            let alpha = tile.render_alpha() * (1.0 - control.focus_of(tile.id())) as f32;
+            let alpha = tile.render_alpha() * (1.0 - control.focus_of(tile.id()) * vacated) as f32;
             if alpha > 0.0 {
                 self.thumbnail(Thumbnail {
                     tile,

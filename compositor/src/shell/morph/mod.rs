@@ -234,11 +234,15 @@ impl Morph {
     /// The liquid shape this frame, between the icon and `window`, whose
     /// corners are rounded by `window_radius`.
     pub fn shape(&self, window: Rectangle<f64, Logical>, window_radius: f64) -> LiquidShape {
+        let progress = self.channel_progress();
         LiquidShape::between(
             &self.origin,
             window,
             window_radius,
-            self.channel_progress(),
+            Progress {
+                length: self.choreography.soften_stretch(progress.length),
+                ..progress
+            },
             self.choreography.taper,
         )
     }
@@ -432,10 +436,28 @@ mod tests {
         let peak = (1..=60)
             .map(|frame| liquid_grown_for(frame as f32 * FRAME).travel.position())
             .fold(0.0, f32::max);
-        assert!((1.10..1.20).contains(&peak), "peaked at {peak}");
+        assert!((1.06..1.09).contains(&peak), "peaked at {peak}");
         let (elapsed, end) = run_as(&mut liquid_grown_for(0.0), &Choreography::LIQUID);
         assert_eq!(end, MorphEnd::Window);
         assert!(elapsed < 1.5, "took {elapsed}s");
+    }
+
+    #[test]
+    fn a_liquid_grow_lifts_past_the_window_more_than_it_stretches() {
+        let mut morph = liquid_grown_for(0.0);
+        let (mut lift, mut stretch) = (0.0_f64, 0.0_f64);
+        for _ in 0..120 {
+            morph.step(FRAME, &Choreography::LIQUID);
+            let shape = morph.shape(window(), 10.0);
+            let [top_left, _, bottom_left, _] = shape.corners;
+            lift = lift.max(window().loc.y - top_left.y);
+            stretch = stretch.max(bottom_left.y - top_left.y - window().size.h);
+        }
+        assert!(lift > 0.0, "never overshot");
+        assert!(
+            stretch < lift / 3.0,
+            "stretched {stretch} for a lift of {lift}"
+        );
     }
 
     #[test]
@@ -447,8 +469,8 @@ mod tests {
 
     #[test]
     fn a_liquid_shrink_drops_its_content_then_collapses_before_it_travels() {
-        assert_eq!(liquid_shrunk_for(0.08).reveal(), 0.0);
-        let collapsing = liquid_shrunk_for(0.12).channel_progress();
+        assert_eq!(liquid_shrunk_for(0.05).reveal(), 0.0);
+        let collapsing = liquid_shrunk_for(0.08).channel_progress();
         assert_eq!(collapsing.travel, 1.0);
         assert!(collapsing.breadth < 0.8, "breadth {}", collapsing.breadth);
         let (_, end) = run_as(&mut liquid_shrunk_for(0.0), &Choreography::LIQUID);
