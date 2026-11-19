@@ -43,7 +43,7 @@ uniform sampler2D scene_tex;
 uniform vec2 scene_size;
 uniform vec2 half_pixel;
 uniform float offset;
-// ColorOS 17's glass, as `lockscreen::clock::Glass` fits it: the frost times
+// The clock's glass, as `lockscreen::clock::Glass` fits it: the frost times
 // `gain` — and whatever undoes the darkening the pyramid lifted with it —
 // plus `white`, plus `top_shine` fading out `top_shine_reach` of the
 // way down, plus `rim_white` along the inner rim, clamped. On the stored,

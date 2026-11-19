@@ -94,7 +94,7 @@ impl PointerGrab<State> for MoveGrab {
         let location = (event.location - self.offset).to_i32_round();
         state.shell.move_floating(self.window, location);
 
-        // Windows-style: the preview follows the pointer, not the window, so
+        // The preview follows the pointer, not the window, so
         // brushing an edge with the cursor is what arms a snap.
         if state.shell.track_snap(self.window, event.location) {
             state.queue_redraw();

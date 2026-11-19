@@ -44,7 +44,7 @@ pub struct GlyphRun {
 const OVERSHOOT: f32 = 0.04;
 /// Of the glyph's height, so a taller clock casts a proportionally softer
 /// shadow: how far the shadow drops, and the radius of each blur pass,
-/// about the gaussian sigma three passes make. ColorOS's references show no
+/// about the gaussian sigma three passes make. The references show no
 /// measurable shadow (under 2% darkening at any sigma up to 0.04 of the
 /// height), so this is the faint, wide one its reviews call "a subtle shadow
 /// at the base", not a hard drop.

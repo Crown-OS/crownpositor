@@ -129,7 +129,7 @@ pub struct Monitor {
     config: OutputConfig,
 
     /// Ordered and never empty. Workspaces persist until removed explicitly:
-    /// emptying one keeps it, the way macOS keeps an empty desktop.
+    /// emptying one keeps it.
     workspaces: Vec<Workspace>,
     active: usize,
     previous: usize,

@@ -72,8 +72,8 @@ fn main() {
     let surface = compositor.create_surface(&qh, ());
     let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
     let toplevel = xdg_surface.get_toplevel(&qh, ());
-    toplevel.set_title("Liquid Glass".to_owned());
-    toplevel.set_app_id("crownos.LiquidGlass".to_owned());
+    toplevel.set_title("Glass".to_owned());
+    toplevel.set_app_id("crownos.Glass".to_owned());
     surface.commit();
 
     let mut app = App::default();

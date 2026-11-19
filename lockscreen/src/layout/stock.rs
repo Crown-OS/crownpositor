@@ -19,7 +19,7 @@ const PROMPT_GAP: f32 = 14.0;
 const SLOT_GAP: f32 = 12.0;
 const EDGE_MARGIN: f32 = 48.0;
 const BOTTOM_MARGIN: f32 = 32.0;
-/// Of the output's height, above the clock: where ColorOS's date tops a
+/// Of the output's height, above the clock: where the reference date tops a
 /// centred clock, so its digits start 0.147 of the way down.
 const CLOCK_TOP: f32 = 0.1;
 /// Of the output's width, left of a clock laid out at the left.

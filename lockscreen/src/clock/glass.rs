@@ -1,4 +1,4 @@
-//! Glass digits as ColorOS 17 draws them, fitted to its screenshots: the
+//! Glass digits, fitted to reference screenshots: the
 //! background behind the digit, blurred and brightened, with white added on
 //! top of it — a plus-lighter blend on sRGB-encoded values, clamped — a
 //! little more white in a band along the glyph's top, and an inner rim.
@@ -98,7 +98,7 @@ const SOLID: Glass = Glass {
 
 impl Glass {
     /// The glass for a clock `whiteness` from clear frosted glass, 0, through
-    /// ColorOS's own at [`ClockLook::DEFAULT_WHITENESS`], to solid white, 1.
+    /// the default at [`ClockLook::DEFAULT_WHITENESS`], to solid white, 1.
     pub fn at(whiteness: f32) -> Self {
         let whiteness = whiteness.clamp(0.0, 1.0);
         let stock = ClockLook::DEFAULT_WHITENESS;
