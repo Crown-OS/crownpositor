@@ -60,6 +60,7 @@ use crate::{
             KmsState,
             feedback::SurfaceFeedback,
             head::HeadState,
+            present_watch::{PATIENCE, PresentWatch},
             tearing::{BufferLayout, FlipOutcome, FrameShape, Tearing},
             vrr::VrrGate,
         },
@@ -147,6 +148,7 @@ pub struct Surface {
     pub compositor: SurfaceCompositor,
     pub frame_clock: FrameClock,
     pub redraw_state: RedrawState,
+    pub present_watch: PresentWatch,
     /// Every backdrop's blur pyramid on this output, kept across frames.
     pub blur: BlurCache,
     pub corners: CornerMemory,
@@ -333,6 +335,8 @@ pub fn enable_head(
     .inspect_err(|err| tracing::warn!(%err, output = head.name, "no per-surface dmabuf feedback"))
     .ok();
 
+    let frame_clock = FrameClock::new(refresh_interval, false);
+    let present_watch = PresentWatch::new(frame_clock.now());
     device.surfaces.insert(
         crtc,
         Surface {
@@ -340,9 +344,10 @@ pub fn enable_head(
             node,
             render_node: device.render_node,
             compositor,
-            frame_clock: FrameClock::new(refresh_interval, false),
+            frame_clock,
             // First frame right away.
             redraw_state: RedrawState::Queued,
+            present_watch,
             blur: BlurCache::default(),
             corners: CornerMemory::default(),
             canvases: WarpCanvases::default(),
@@ -419,6 +424,9 @@ fn remove_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         RedrawState::WaitingForEstimatedVBlank(token)
         | RedrawState::WaitingForEstimatedVBlankAndQueued(token) => handle.remove(token),
         _ => {}
+    }
+    if let Some(token) = surface.present_watch.timer {
+        handle.remove(token);
     }
 
     shell.remove_output(&display_handle, &surface.output);
@@ -582,6 +590,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         }
         return released;
     }
+    surface.present_watch.rendering(&surface.output);
 
     // Animate to the instant this frame will *reach the screen*, not to
     // "now": springs get sampled at display time, which is what keeps motion
@@ -761,7 +770,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
                                 }
                             }
                             Err(err) => {
-                                tracing::warn!(%err, "failed to queue frame");
+                                tracing::warn!(%err, output = surface.output.name(), "failed to queue frame");
                             }
                         }
                     }
@@ -770,7 +779,7 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         }
         Err(err) => {
             // Happens legitimately across VT switches.
-            tracing::warn!(%err, "failed to render frame");
+            tracing::warn!(%err, output = surface.output.name(), "failed to render frame");
         }
     }
 
@@ -787,6 +796,10 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
         surface.redraw_state = RedrawState::WaitingForVBlank {
             redraw_needed: false,
         };
+        surface
+            .present_watch
+            .queued(surface.frame_clock.now(), &surface.output);
+        arm_present_watch(&handle, surface, node, crtc);
     } else {
         // Nothing reached KMS, so no vblank will fire. A timer at the
         // estimated presentation instant keeps the cycle honest: animations
@@ -880,6 +893,54 @@ fn queue_estimated_vblank_timer(
     }
 }
 
+/// Starts checking that the frame just queued reaches the screen. One timer
+/// per output, re-aimed at whichever frame is held when it fires, so a busy
+/// output wakes it about once a second and an idle one not at all.
+fn arm_present_watch(
+    handle: &calloop::LoopHandle<'static, State>,
+    surface: &mut Surface,
+    node: DrmNode,
+    crtc: crtc::Handle,
+) {
+    if surface.present_watch.timer.is_some() {
+        return;
+    }
+    match handle.insert_source(Timer::from_duration(PATIENCE), move |_, _, state| {
+        on_present_watch(state, node, crtc)
+    }) {
+        Ok(token) => surface.present_watch.timer = Some(token),
+        Err(err) => tracing::debug!(%err, "cannot watch for frames reaching the screen"),
+    }
+}
+
+fn on_present_watch(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> TimeoutAction {
+    let Some(device) = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get_mut(&node))
+    else {
+        return TimeoutAction::Drop;
+    };
+    let active = device.drm.is_active();
+    let Some(surface) = device.surfaces.get_mut(&crtc) else {
+        return TimeoutAction::Drop;
+    };
+
+    if !active {
+        surface.present_watch.forget();
+    }
+    match surface
+        .present_watch
+        .check(surface.frame_clock.now(), &surface.output)
+    {
+        Some(remaining) => TimeoutAction::ToDuration(remaining),
+        None => {
+            surface.present_watch.timer = None;
+            TimeoutAction::Drop
+        }
+    }
+}
+
 /// The stand-in for a vblank that never came: keep animations ticking, or go
 /// back to sleep.
 fn on_estimated_vblank(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
@@ -933,6 +994,9 @@ pub fn on_vblank(
     let Some(surface) = device.surfaces.get_mut(&crtc) else {
         return;
     };
+    surface
+        .present_watch
+        .presented(surface.frame_clock.now(), &surface.output);
 
     // The moment of presentation, straight from the driver when it can say.
     let (presentation_time, sequence) = match &metadata {

@@ -15,6 +15,7 @@ pub mod crtc_pool;
 pub mod device;
 pub mod feedback;
 pub mod head;
+pub mod present_watch;
 pub mod props;
 pub mod reconfigure;
 pub mod surface;
@@ -25,6 +26,7 @@ pub mod vulkan;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
+    time::Instant,
 };
 
 use anyhow::Context as _;
@@ -40,7 +42,7 @@ use smithay::{
         udev::{self, UdevBackend, UdevEvent},
     },
     output::Output,
-    reexports::{input::Libinput, rustix::fs::OFlags},
+    reexports::{drm::Device as _, input::Libinput, rustix::fs::OFlags},
     utils::DeviceFd,
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal},
     wayland::{
@@ -298,6 +300,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
             },
             UdevEvent::Changed { device_id } => {
                 if let Ok(node) = DrmNode::from_dev_id(device_id) {
+                    tracing::info!(%node, "GPU reported a connector change");
                     device_changed(state, node);
                 }
             }
@@ -330,6 +333,10 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
         return Ok(());
     }
 
+    // Each step below can block in the driver, so a session that never lights
+    // up says in the log which GPU and which step it stopped at.
+    let started = Instant::now();
+    tracing::info!(%node, path = %path.display(), "opening GPU");
     let fd = kms
         .session
         .open(
@@ -348,6 +355,12 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
         path: path.display().to_string(),
         source,
     })?;
+    let driver = drm
+        .get_driver()
+        .map(|driver| driver.name().to_string_lossy().into_owned())
+        .unwrap_or_default();
+    tracing::info!(%node, driver, "DRM device opened, its outputs switched off");
+
     let gbm = GbmDevice::new(fd).map_err(|source| KmsError::Gbm {
         path: path.display().to_string(),
         source,
@@ -361,6 +374,7 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
 
     // Effects compile once per GPU; failure degrades (square corners), never
     // blocks the GPU from lighting up.
+    tracing::info!(%node, driver, "compiling effect shaders");
     match kms.gpu_manager.single_renderer(&render_node) {
         Ok(mut renderer) => {
             if let Err(err) = renderer.compile_shaders() {
@@ -383,7 +397,13 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
         })
         .map_err(|err| KmsError::GpuManager(format!("failed to insert the DRM source: {err}")))?;
 
-    tracing::info!(%node, %render_node, "GPU added");
+    tracing::info!(
+        %node,
+        %render_node,
+        driver,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "GPU added"
+    );
     kms.devices.insert(
         node,
         Device {
