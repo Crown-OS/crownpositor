@@ -15,10 +15,10 @@ use super::{
 
 /// Of the output's height: the size a centred clock's digits are drawn at,
 /// before the frame scales them, so that at the default stretch they stand
-/// 0.37 of it tall, as ColorOS's stand 0.363 of a phone screen's height.
+/// 0.37 of it tall, near the reference's 0.363 of a phone screen's height.
 const DIGIT_SIZE: f32 = 0.147;
 /// Of the centred size: how wide the Left and Stacked layouts draw their
-/// digits, and how tall each line of them stands, as ColorOS's cards do.
+/// digits, and how tall each line of them stands, as the reference cards do.
 const LEFT_WIDTH: f32 = 0.78;
 const LEFT_HEIGHT: f32 = 1.0;
 const STACKED_WIDTH: f32 = 0.87;
@@ -28,7 +28,7 @@ const STACKED_HEIGHT: f32 = 0.97;
 const DATE_SIZE: f32 = 0.0233;
 const DATE_WEIGHT: u16 = 500;
 /// The date's colour: the palette's body text, about 85% of its primary
-/// white, as ColorOS's date is white at 85% opacity. A colour rather than
+/// white, as the reference date is white at 85% opacity. A colour rather than
 /// an opacity, because text is drawn from its glyphs' coverage alone and a
 /// colour's alpha never reaches it.
 const DATE_COLOR: &str = "text.body";
@@ -118,6 +118,10 @@ fn font(font: ClockFont) -> StrokedFont {
         ClockFont::Sans => StrokedFont::Sans,
         ClockFont::Grotesk => StrokedFont::Grotesk,
         ClockFont::Serif => StrokedFont::Serif,
+        ClockFont::Higher => StrokedFont::Higher,
+        ClockFont::Apache => StrokedFont::Apache,
+        ClockFont::Boston => StrokedFont::Boston,
+        ClockFont::Tribo => StrokedFont::Tribo,
     }
 }
 

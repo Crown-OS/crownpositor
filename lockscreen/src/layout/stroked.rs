@@ -2,18 +2,22 @@
 //! their straight runs while bowls stay round and strokes keep their width,
 //! where stretching a font's outline would flatten one and fatten the other.
 
+mod apache;
+mod boston;
 mod frame;
 mod grotesk;
+mod higher;
 mod ribbon;
 mod sans;
 mod serif;
 mod skeleton;
+mod tribo;
 
 use tiny_skia::{PathBuilder, Point};
 
 use super::{GlyphRun, outline::GlyphShape};
 use frame::Frame;
-use ribbon::Pen;
+use ribbon::{Dot, Pen};
 use skeleton::Line;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,6 +28,13 @@ pub enum StrokedFont {
     Grotesk,
     /// High contrast and condensed: heavy stems, hairline curves and bars.
     Serif,
+    /// Square monoline, tall and condensed, its bars set low.
+    Higher,
+    /// Heavy blocks with chamfered corners.
+    Apache,
+    Boston,
+    /// Condensed monoline with chamfered corners.
+    Tribo,
 }
 
 /// Of the size: the height digits stand at before they are stretched.
@@ -46,7 +57,8 @@ struct Style {
     contrast: f32,
     /// How many times taller than wide the font's turns are.
     aspect: f32,
-    /// Of the stem: a colon dot's radius.
+    dot: Dot,
+    /// Of the stem: a colon dot's radius, or half its side.
     dot_radius: f32,
     /// Of the glyph's height: how far each colon dot sits from its middle.
     dot_spread: f32,
@@ -59,6 +71,10 @@ impl StrokedFont {
             Self::Sans => &sans::STYLE,
             Self::Grotesk => &grotesk::STYLE,
             Self::Serif => &serif::STYLE,
+            Self::Higher => &higher::STYLE,
+            Self::Apache => &apache::STYLE,
+            Self::Boston => &boston::STYLE,
+            Self::Tribo => &tribo::STYLE,
         }
     }
 }
@@ -127,7 +143,7 @@ fn colon(style: &Style, pen: Pen, height: f32, size: f32) -> GlyphShape {
     let mut dots = PathBuilder::new();
     for side in [-1.0, 1.0] {
         let centre = Point::from_xy(centre_x, height * (0.5 + side * style.dot_spread));
-        ribbon::push_dot(&mut dots, centre, radius);
+        ribbon::push_dot(&mut dots, style.dot, centre, radius);
     }
     GlyphShape {
         path: dots.finish(),
@@ -142,7 +158,15 @@ mod tests {
     use super::*;
     use crate::layout::GlyphPaint;
 
-    const FONTS: [StrokedFont; 3] = [StrokedFont::Sans, StrokedFont::Grotesk, StrokedFont::Serif];
+    const FONTS: [StrokedFont; 7] = [
+        StrokedFont::Sans,
+        StrokedFont::Grotesk,
+        StrokedFont::Serif,
+        StrokedFont::Higher,
+        StrokedFont::Apache,
+        StrokedFont::Boston,
+        StrokedFont::Tribo,
+    ];
 
     fn run(ch: char, stretch: f32) -> GlyphRun {
         GlyphRun {
@@ -264,5 +288,21 @@ mod tests {
             shape.path.expect("dots").bounds().height()
         };
         assert!(gap(3.0) > 2.0 * gap(1.0));
+    }
+
+    #[test]
+    fn flush_bars_line_up_with_stems_at_any_weight() {
+        for weight in [150.0, 500.0, 850.0] {
+            let left = |ch| {
+                let heavy = GlyphRun {
+                    weight,
+                    font: StrokedFont::Higher,
+                    ..run(ch, 2.0)
+                };
+                let shape = glyph(StrokedFont::Higher, &heavy).expect("drawn");
+                shape.path.expect("outline").bounds().left()
+            };
+            assert!((left('7') - left('0')).abs() < 1e-3, "at {weight}");
+        }
     }
 }

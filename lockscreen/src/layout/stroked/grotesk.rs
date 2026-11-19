@@ -1,3 +1,4 @@
+use super::ribbon::Dot;
 use super::{Style, sans};
 
 pub(super) static STYLE: Style = Style {
@@ -7,6 +8,7 @@ pub(super) static STYLE: Style = Style {
     stem_gain: 1.0,
     contrast: 1.0,
     aspect: 1.3,
+    dot: Dot::Round,
     dot_radius: 0.45,
     dot_spread: 0.218,
     digits: &sans::DIGITS,

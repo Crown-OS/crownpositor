@@ -22,6 +22,9 @@ pub(super) enum Y {
 pub(super) enum Cut {
     /// Square to the stroke.
     Square,
+    /// Square to the stroke, half the stem past its end: flush with the far
+    /// side of a stem the end sits on, whatever the weight.
+    Flush,
     /// Along a line this many degrees counter-clockwise from level.
     Slant(f32),
 }
@@ -100,3 +103,4 @@ pub(super) const FOOT: Y = Y::Foot(0.0);
 pub(super) const TOP: Y = Y::Top(0.0);
 pub(super) const LEVEL: Cut = Cut::Slant(0.0);
 pub(super) const SQUARE: Cut = Cut::Square;
+pub(super) const FLUSH: Cut = Cut::Flush;

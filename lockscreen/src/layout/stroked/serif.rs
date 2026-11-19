@@ -1,4 +1,5 @@
 use super::Style;
+use super::ribbon::Dot;
 use super::skeleton::{Cut, FOOT, LEVEL, Line, SQUARE, TOP, Y, bowl, sharp};
 
 pub(super) static STYLE: Style = Style {
@@ -8,6 +9,7 @@ pub(super) static STYLE: Style = Style {
     stem_gain: 1.15,
     contrast: 5.0,
     aspect: 1.8,
+    dot: Dot::Round,
     dot_radius: 0.39,
     dot_spread: 0.226,
     digits: &DIGITS,

@@ -19,6 +19,13 @@ const MIN_GAP: f32 = 1e-3;
 /// Logical pixels a colon dot's outline strays from its circle at most.
 const DOT_TOLERANCE: f32 = 0.02;
 
+/// The shape of a colon's dots.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Dot {
+    Round,
+    Square,
+}
+
 /// An oval nib held level: a stroke drawn straight down is `stem` wide, one
 /// drawn level is `hairline` tall.
 #[derive(Debug, Clone, Copy)]
@@ -57,12 +64,22 @@ pub(super) fn push(path: &mut PathBuilder, stations: &[Station], line: &Line, pe
         return;
     }
     let [mut left, mut right] = [left, right];
-    cap(&mut left, &mut right, &stations, line.start, line.end);
+    cap(&mut left, &mut right, &stations, line, pen);
     push_loop(path, left.into_iter().chain(right.into_iter().rev()));
 }
 
-/// Adds a round dot, wound like a stroke's outline.
-pub(super) fn push_dot(path: &mut PathBuilder, centre: Point, radius: f32) {
+/// Adds a dot, wound like a stroke's outline.
+pub(super) fn push_dot(path: &mut PathBuilder, dot: Dot, centre: Point, radius: f32) {
+    if let Dot::Square = dot {
+        let corner = |x: f32, y: f32| centre + Point::from_xy(x * radius, y * radius);
+        push_loop(
+            path,
+            [(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]
+                .into_iter()
+                .map(|(x, y)| corner(x, y)),
+        );
+        return;
+    }
     let step = (8.0 * DOT_TOLERANCE / radius.max(DOT_TOLERANCE)).sqrt();
     let steps = (std::f32::consts::TAU / step).ceil().max(8.0) as usize;
     push_loop(
@@ -141,36 +158,39 @@ fn join(
     }
 }
 
-fn cap(left: &mut Vec<Point>, right: &mut Vec<Point>, stations: &[Station], start: Cut, end: Cut) {
+fn cap(left: &mut Vec<Point>, right: &mut Vec<Point>, stations: &[Station], line: &Line, pen: Pen) {
     let count = stations.len();
     let (first, last) = (stations[0].point, stations[count - 1].point);
     if let Some(outward) = direction(stations[count - 2].point, last) {
-        let across = cut_normal(end, outward);
-        clip_tail(left, last, across);
-        clip_tail(right, last, across);
+        let (origin, across) = cut_line(line.end, last, outward, pen);
+        clip_tail(left, origin, across);
+        clip_tail(right, origin, across);
     }
     if let Some(outward) = direction(stations[1].point, first) {
-        let across = cut_normal(start, outward);
+        let (origin, across) = cut_line(line.start, first, outward, pen);
         for side in [&mut *left, &mut *right] {
             side.reverse();
-            clip_tail(side, first, across);
+            clip_tail(side, origin, across);
             side.reverse();
         }
     }
 }
 
-/// The normal of the line an end is cut along, pointing away from the stroke.
-fn cut_normal(cut: Cut, outward: Point) -> Point {
+/// A point on the line an end at `end` is cut along, and the line's normal
+/// pointing away from the stroke.
+fn cut_line(cut: Cut, end: Point, outward: Point, pen: Pen) -> (Point, Point) {
     match cut {
-        Cut::Square => outward,
+        Cut::Square => (end, outward),
+        Cut::Flush => (end + scaled(outward, pen.stem / 2.0), outward),
         Cut::Slant(degrees) => {
             let (sin, cos) = degrees.to_radians().sin_cos();
             let normal = left_normal(Point::from_xy(cos, sin));
-            if normal.dot(outward) < 0.0 {
+            let away = if normal.dot(outward) < 0.0 {
                 -normal
             } else {
                 normal
-            }
+            };
+            (end, away)
         }
     }
 }
