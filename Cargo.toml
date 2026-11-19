@@ -9,6 +9,17 @@ members = [
   "spacecontrol",
   "windowcontrol",
 ]
+# Everything but depthcut, so its helper binary does not stop a bare `cargo run`
+# from picking the compositor. `cargo test --workspace` still covers depthcut.
+default-members = [
+  "compositor",
+  "config",
+  "lockscene",
+  "lockscreen",
+  "protocols",
+  "spacecontrol",
+  "windowcontrol",
+]
 resolver = "3"
 
 [workspace.dependencies]
@@ -55,3 +66,15 @@ crownos-protocols = { path = "../crownos-protocols" }
 
 [patch."https://github.com/crown-os/crownos-config"]
 crownos-config = { path = "../crownos-config" }
+
+# Locking cuts and scales the wallpaper on the CPU. Unoptimised, that takes
+# seconds, and the entrance gives up waiting for its subject.
+[profile.dev.package]
+lockscreen.opt-level = 3
+tiny-skia.opt-level = 3
+tiny-skia-path.opt-level = 3
+image.opt-level = 3
+zune-jpeg.opt-level = 3
+zune-core.opt-level = 3
+png.opt-level = 3
+fdeflate.opt-level = 3
