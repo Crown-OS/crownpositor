@@ -1,17 +1,25 @@
 #version 300 es
 
-// A window crumbling into particles that fall away. One quad per cell of the
-// canvas, built from gl_VertexID alone, each showing its own piece of the
-// window. The bottom gives way first, sweeping up and in from the right, where
-// the close control is. A particle released at `delay` then flies ballistically
-// under gravity against linear drag, in closed form, so nothing is integrated
-// or stored per particle.
+// A window dissolving into dust that the air carries away. One quad per cell
+// of the canvas, built from gl_VertexID alone, each showing its own piece of
+// the window. The dissolve sweeps in from the right, where the close control
+// is, along a ragged front. A grain freed at `delay` breaks away at a random
+// speed that linear drag relaxes toward the wind's, in closed form, and
+// weaves across the stream while it shrinks and fades, so nothing is
+// integrated or stored per grain.
 
 const vec2 CORNERS[6] = vec2[6](
     vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
     vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0)
 );
-const float SMALLEST = 0.35;
+const float SMALLEST = 0.25;
+const float TAU = 6.2831853;
+// How ragged the front is, as a share of the window's width.
+const float RAGGED = 0.12;
+// How far a grain weaves across the stream by the end of its life, as a
+// share of the scatter speed in pixels, and how fast, radians a second.
+const float WEAVE = 0.25;
+const float WEAVE_RATE = 9.0;
 
 uniform mat3 projection;
 // The canvas, output-local physical pixels: x, y, width, height.
@@ -20,7 +28,8 @@ uniform ivec2 cells;
 uniform uint seed;
 // Sweep, jitter, life, elapsed: seconds.
 uniform vec4 timing;
-// Gravity, drag, sideways spread, upward kick: physical pixels and seconds.
+// The wind's velocity, drag, then the scatter speed: physical pixels and
+// seconds.
 uniform vec4 physics;
 
 out vec2 v_uv;
@@ -33,28 +42,36 @@ float random(inout uint state) {
 }
 
 void main() {
-    int particle = gl_VertexID / 6;
-    vec2 cell = vec2(particle % cells.x, particle / cells.x);
+    int grain = gl_VertexID / 6;
+    vec2 cell = vec2(grain % cells.x, grain / cells.x);
     vec2 corner = CORNERS[gl_VertexID % 6];
     vec2 grid = vec2(cells);
     vec2 size = window.zw / grid;
 
-    uint state = uint(particle) ^ seed;
+    uint state = uint(grain) ^ seed;
     float jitter = random(state);
-    vec2 launch = vec2(random(state) * 2.0 - 1.0, -random(state));
+    vec2 launch = vec2(random(state), random(state)) * 2.0 - 1.0;
+    float phase = random(state) * TAU;
 
     vec2 home = (cell + 0.5) / grid;
-    float delay = timing.x * (0.65 * (1.0 - home.y) + 0.35 * (1.0 - home.x)) + timing.y * jitter;
+    float shore = float(seed & 1023u);
+    float front = 1.0 - home.x
+        + RAGGED * (0.65 * sin(home.y * 11.0 + shore) + 0.35 * sin(home.y * 37.0 - shore));
+    float delay = timing.x * clamp((front + RAGGED) / (1.0 + 2.0 * RAGGED), 0.0, 1.0)
+        + timing.y * jitter;
     float flight = max(timing.w - delay, 0.0);
 
-    float drag = physics.y;
-    vec2 terminal = vec2(0.0, physics.x / drag);
-    vec2 initial = launch * physics.zw;
-    vec2 travel = terminal * flight + (initial - terminal) * (1.0 - exp(-drag * flight)) / drag;
-
+    vec2 wind = physics.xy;
+    float drag = physics.z;
+    float scatter = physics.w;
+    float caught = (1.0 - exp(-drag * flight)) / drag;
     float age = clamp(flight / timing.z, 0.0, 1.0);
+    vec2 across = normalize(vec2(-wind.y, wind.x));
+    vec2 travel = wind * flight + (launch * scatter - wind) * caught
+        + across * scatter * WEAVE * age * sin(phase + flight * WEAVE_RATE);
+
     float scale = mix(1.0, SMALLEST, age);
-    v_alpha = 1.0 - smoothstep(0.35, 1.0, age);
+    v_alpha = 1.0 - smoothstep(0.2, 1.0, age);
     v_uv = (cell + corner) / grid;
 
     vec2 position = window.xy + home * window.zw + travel + (corner - 0.5) * size * scale;

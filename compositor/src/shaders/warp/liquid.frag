@@ -15,6 +15,9 @@ const float SHEEN = 0.10;
 const float RIM_SHEEN = 0.22;
 // Width of the rim's light, physical pixels.
 const float RIM_WIDTH = 6.0;
+// The furthest the carried icon is pressed out of its own proportions; a
+// shape longer than that shows the icon centred in it instead.
+const float ICON_SQUEEZE = 1.1;
 
 uniform sampler2D tex;
 uniform sampler2D icon;
@@ -49,7 +52,11 @@ void main() {
     float rim = 1.0 - smoothstep(0.0, RIM_WIDTH, -d);
     vec3 frost = mix(window.rgb / max(window.a, 1e-3), vec3(1.0), SHEEN + RIM_SHEEN * rim);
     vec4 body = mix(vec4(frost, 1.0), window, reveal);
-    vec4 carried = texture(icon, v_grid);
+    vec2 icon_size = vec2(textureSize(icon, 0));
+    vec2 icon_box = min(size, icon_size * min(size.x / icon_size.x, size.y / icon_size.y) * ICON_SQUEEZE);
+    vec2 icon_uv = (v_grid - 0.5) * size / icon_box + 0.5;
+    vec2 icon_edge = (0.5 - abs(icon_uv - 0.5)) * icon_box;
+    vec4 carried = texture(icon, icon_uv) * clamp(min(icon_edge.x, icon_edge.y) + 0.5, 0.0, 1.0);
 
     color = mix(body, carried, shape.w) * (coverage * alpha);
 }

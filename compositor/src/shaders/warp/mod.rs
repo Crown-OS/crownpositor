@@ -1,6 +1,6 @@
 //! The raw GL programs that draw a window's canvas bent out of shape: poured
-//! into its icon, crumbled into falling dust, or stretched into a drop of
-//! liquid glass.
+//! into its icon, dissolved into blown dust, or stretched into a drop of
+//! glass.
 //!
 //! Like [`KawaseProgram`](crate::shaders::blur::KawaseProgram) they bind no
 //! buffers: every vertex is built from `gl_VertexID`, so a mesh of tens of

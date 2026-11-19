@@ -1,11 +1,11 @@
-//! The dust's grid and the reach of its fall, in the physical pixels the
+//! The dust's grid and the reach of its flight, in the physical pixels the
 //! shader draws in.
 
 use smithay::utils::{Physical, Rectangle};
 
 use crate::{
     shaders::warp::DustUniforms,
-    shell::dust::{DRAG, Dust, GRAIN, GRAVITY, JITTER, KICK, LIFE, Reach, SPREAD, SWEEP},
+    shell::dust::{DRAG, Dust, GRAIN, JITTER, LIFE, Reach, SCATTER, SWEEP, WIND},
 };
 
 /// Most particles a window breaks into. A window too big for grains of the
@@ -27,21 +27,18 @@ pub fn uniforms(window: Rectangle<f64, Physical>, dust: &Dust, scale: f64) -> Du
         cells: [cells(window.size.w), cells(window.size.h)],
         seed: dust.seed(),
         timing: [SWEEP, JITTER, LIFE, dust.elapsed()],
-        physics: [GRAVITY * scale, DRAG, SPREAD * scale, KICK * scale],
+        physics: [WIND[0] * scale, WIND[1] * scale, DRAG, SCATTER * scale],
     }
 }
 
-/// Everywhere a particle of `window` can be drawn.
+/// Everywhere a grain of `window` can be drawn.
 pub fn bounds(window: Rectangle<f64, Physical>, scale: f64) -> Rectangle<i32, Physical> {
-    let reach = Reach::of_fall();
+    let reach = Reach::of_flow();
     let grain = grain(window, scale);
     let out = |length: f32| f64::from(length) * scale + grain;
-    let (left, top) = (
-        window.loc.x - out(reach.sideways),
-        window.loc.y - out(reach.up),
-    );
+    let (left, top) = (window.loc.x - out(reach.left), window.loc.y - out(reach.up));
     let (right, bottom) = (
-        window.loc.x + window.size.w + out(reach.sideways),
+        window.loc.x + window.size.w + out(reach.right),
         window.loc.y + window.size.h + out(reach.down),
     );
     Rectangle::from_extremities(
@@ -78,10 +75,11 @@ mod tests {
     }
 
     #[test]
-    fn the_fall_reaches_well_below_the_window() {
+    fn the_flight_reaches_well_past_the_right_and_above_the_window() {
         let window = window(800.0, 600.0);
         let bounds = bounds(window, 1.25).to_f64();
         assert!(bounds.contains_rect(window));
-        assert!(bounds.loc.y + bounds.size.h > window.loc.y + window.size.h + 150.0);
+        assert!(bounds.loc.x + bounds.size.w > window.loc.x + window.size.w + 150.0);
+        assert!(bounds.loc.y < window.loc.y - 100.0);
     }
 }

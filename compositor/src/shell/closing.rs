@@ -14,7 +14,7 @@ use crate::{
 pub enum Farewell {
     /// Shrinks into its icon, or away where it stood.
     Shrink(IconOrigin),
-    /// Crumbles into falling dust.
+    /// Dissolves into dust the air carries away.
     Dust(Dust),
 }
 

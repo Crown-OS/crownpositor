@@ -1,6 +1,6 @@
 //! Windows bent out of shape on the GPU: poured through a neck into their icon,
-//! crumbled into dust that falls away, stretched into a drop of liquid glass
-//! that carries their icon, or frosted over while they change size.
+//! dissolved into dust the air carries away, stretched into a drop of liquid
+//! glass that carries their icon, or frosted over while they change size.
 //!
 //! A mesh can only bend one texture, so the decorated window is first painted
 //! into a canvas of its own, then drawn through a raw GL program that builds
