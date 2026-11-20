@@ -21,17 +21,17 @@ use smithay::{
 };
 
 use crate::{
-    shell::monitor::{Monitor, OutputConfig, logical_size},
+    shell::{
+        monitor::{Monitor, OutputConfig, logical_size},
+        output_kind::NestedPersistence,
+    },
     state::{State, backend::DisabledHead},
+    utils::mode::{self, RequestedMode},
 };
 
 /// Scales outside this are refused rather than clamped: a client that asked
 /// for something impossible should be told, not quietly given something else.
 const SCALE_RANGE: std::ops::RangeInclusive<f64> = 0.1..=8.0;
-
-/// How far a custom mode's refresh rate may be from an advertised one before
-/// it stops counting as the same mode. One hertz, in millihertz.
-const REFRESH_TOLERANCE: i32 = 1_000;
 
 /// How long to wait before writing an applied configuration to disk.
 ///
@@ -285,15 +285,21 @@ impl State {
     /// so hand-written config keeps its shape.
     fn derive_output_settings(&self, existing: &[OutputSetting]) -> Vec<OutputSetting> {
         let mut settings = existing.to_vec();
+        let nested = NestedPersistence::from_environment();
 
         // A monitor switched off has to be recorded, or it comes back on at
         // the next start and the user has to switch it off again every boot.
-        for head in self.backend.disabled_heads() {
+        for head in self
+            .backend
+            .disabled_heads()
+            .iter()
+            .filter(|head| head.kind.is_persisted(nested))
+        {
             let entry = upsert(&mut settings, &head.name, &head.identity);
             entry.enabled = Some(false);
         }
 
-        for monitor in self.shell.monitors() {
+        for monitor in self.shell.persisted_monitors(nested) {
             let config = monitor.config();
             let identity = config.connector.as_str();
 
@@ -304,7 +310,7 @@ impl State {
             entry.enabled = Some(true);
             entry.scale = Some(config.scale.fractional_scale());
             entry.transform = Some(transform_to_config(config.transform));
-            entry.mode = Some(format_mode(config.mode));
+            entry.mode = Some(mode::format(config.mode));
             // Position lives in the per-set layout; the flat entry keeps it
             // only as the fallback for a monitor set that has none.
             entry
@@ -317,10 +323,10 @@ impl State {
 
     /// The arrangement for exactly the monitors that are plugged in now.
     fn derive_output_layouts(&self, existing: Vec<OutputLayout>) -> Vec<OutputLayout> {
+        let nested = NestedPersistence::from_environment();
         let present: Vec<String> = self
             .shell
-            .monitors()
-            .iter()
+            .persisted_monitors(nested)
             .map(|monitor| monitor.config().connector.as_str().to_owned())
             .collect();
         if present.is_empty() {
@@ -330,8 +336,7 @@ impl State {
         let layout = OutputLayout {
             positions: self
                 .shell
-                .monitors()
-                .iter()
+                .persisted_monitors(nested)
                 .map(|monitor| {
                     let config = monitor.config();
                     (
@@ -536,6 +541,7 @@ fn resolve_head(
     let mode = match mode {
         None => current.mode,
         Some(request) => resolve_mode(request, &current.modes)
+            .and_then(|index| current.modes.get(index).copied())
             .ok_or_else(|| Rejection::NoSuchMode(id.to_string()))?,
     };
 
@@ -550,26 +556,19 @@ fn resolve_head(
     })
 }
 
-/// Resolves a requested mode to one the hardware actually advertises.
-///
-/// A custom mode is only honoured when it names an advertised size: this
-/// compositor has no modeline calculator, and accepting a made-up timing would
-/// mean promising a mode the panel cannot display. The refresh rate is matched
-/// to the nearest advertised one rather than compared exactly, because clients
-/// round millihertz differently.
-fn resolve_mode(request: &ModeRequest, modes: &[Mode]) -> Option<Mode> {
+/// The advertised mode a protocol request names, by index. A custom mode is
+/// honoured only at an advertised size: there is no modeline calculator, and
+/// a made-up timing would promise something the panel cannot display.
+fn resolve_mode(request: &ModeRequest, modes: &[Mode]) -> Option<usize> {
     match request {
-        ModeRequest::Advertised(index) => modes.get(*index).copied(),
-        ModeRequest::Custom { size, refresh } => {
-            let matching = modes.iter().filter(|mode| mode.size == *size);
-            match refresh {
-                None => matching.max_by_key(|mode| mode.refresh).copied(),
-                Some(wanted) => matching
-                    .min_by_key(|mode| (mode.refresh - wanted).abs())
-                    .filter(|mode| (mode.refresh - wanted).abs() <= REFRESH_TOLERANCE)
-                    .copied(),
-            }
-        }
+        ModeRequest::Advertised(index) => (*index < modes.len()).then_some(*index),
+        ModeRequest::Custom { size, refresh } => mode::resolve(
+            RequestedMode {
+                size: *size,
+                refresh_millihertz: *refresh,
+            },
+            modes,
+        ),
     }
 }
 
@@ -718,16 +717,6 @@ fn upsert<'a>(
     }
 }
 
-/// `"2560x1440@144.000"`, the spelling `OutputSetting::mode` documents.
-fn format_mode(mode: Mode) -> String {
-    format!(
-        "{}x{}@{:.3}",
-        mode.size.w,
-        mode.size.h,
-        mode.refresh as f64 / 1000.0
-    )
-}
-
 fn transform_to_config(transform: Transform) -> config::OutputTransform {
     use config::OutputTransform as Config;
     match transform {
@@ -757,12 +746,18 @@ fn description(config: &OutputConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::output_kind::OutputKind;
 
     fn mode(width: i32, height: i32, refresh: i32) -> Mode {
         Mode {
             size: (width, height).into(),
             refresh,
         }
+    }
+
+    fn resolved(request: &ModeRequest) -> Option<Mode> {
+        let modes = modes();
+        resolve_mode(request, &modes).and_then(|index| modes.get(index).copied())
     }
 
     fn modes() -> Vec<Mode> {
@@ -788,22 +783,19 @@ mod tests {
     #[test]
     fn an_advertised_mode_resolves_by_index() {
         assert_eq!(
-            resolve_mode(&ModeRequest::Advertised(1), &modes()),
+            resolved(&ModeRequest::Advertised(1)),
             Some(mode(2560, 1440, 60_000))
         );
-        assert_eq!(resolve_mode(&ModeRequest::Advertised(9), &modes()), None);
+        assert_eq!(resolved(&ModeRequest::Advertised(9)), None);
     }
 
     #[test]
     fn a_custom_mode_must_name_a_size_the_hardware_advertises() {
         assert_eq!(
-            resolve_mode(
-                &ModeRequest::Custom {
-                    size: (3840, 2160).into(),
-                    refresh: None,
-                },
-                &modes()
-            ),
+            resolved(&ModeRequest::Custom {
+                size: (3840, 2160).into(),
+                refresh: None,
+            }),
             None,
             "a size no mode has cannot be synthesised"
         );
@@ -812,13 +804,10 @@ mod tests {
     #[test]
     fn a_custom_mode_without_a_refresh_takes_the_fastest() {
         assert_eq!(
-            resolve_mode(
-                &ModeRequest::Custom {
-                    size: (2560, 1440).into(),
-                    refresh: None,
-                },
-                &modes()
-            ),
+            resolved(&ModeRequest::Custom {
+                size: (2560, 1440).into(),
+                refresh: None,
+            }),
             Some(mode(2560, 1440, 144_000))
         );
     }
@@ -827,13 +816,10 @@ mod tests {
     fn a_custom_refresh_snaps_to_the_nearest_within_a_hertz() {
         // Clients round millihertz differently, so 59.9 Hz means 60.
         assert_eq!(
-            resolve_mode(
-                &ModeRequest::Custom {
-                    size: (1920, 1080).into(),
-                    refresh: Some(59_900),
-                },
-                &modes()
-            ),
+            resolved(&ModeRequest::Custom {
+                size: (1920, 1080).into(),
+                refresh: Some(59_900),
+            }),
             Some(mode(1920, 1080, 60_000))
         );
     }
@@ -841,13 +827,10 @@ mod tests {
     #[test]
     fn a_custom_refresh_further_than_a_hertz_is_refused() {
         assert_eq!(
-            resolve_mode(
-                &ModeRequest::Custom {
-                    size: (1920, 1080).into(),
-                    refresh: Some(75_000),
-                },
-                &modes()
-            ),
+            resolved(&ModeRequest::Custom {
+                size: (1920, 1080).into(),
+                refresh: Some(75_000),
+            }),
             None
         );
     }
@@ -945,6 +928,7 @@ mod tests {
             modes: vec![mode(1920, 1080, 60_000), mode(2560, 1440, 144_000)],
             preferred: Some(1),
             vrr_capable: false,
+            kind: OutputKind::Physical,
         };
 
         let current = Current::from_disabled(&disabled);
@@ -964,6 +948,7 @@ mod tests {
             modes: Vec::new(),
             preferred: None,
             vrr_capable: false,
+            kind: OutputKind::Physical,
         };
         assert_eq!(Current::from_disabled(&disabled).mode.refresh, 0);
     }

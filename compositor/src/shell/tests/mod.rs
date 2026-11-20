@@ -16,6 +16,7 @@ use crate::{
     shell::{
         Shell,
         monitor::{Monitor, OutputDescriptor, Presence},
+        output_kind::{NestedPersistence, OutputKind},
     },
     state::State,
     utils::id::WorkspaceId,
@@ -23,41 +24,84 @@ use crate::{
 
 struct Fixture {
     display: Display<State>,
+    config: Config,
     shell: Shell,
+}
+
+struct Head<'a> {
+    name: &'a str,
+    size: (i32, i32),
+    kind: OutputKind,
+    serial: Option<&'a str>,
+}
+
+impl<'a> Head<'a> {
+    fn physical(name: &'a str, size: (i32, i32)) -> Self {
+        Self {
+            name,
+            size,
+            kind: OutputKind::Physical,
+            serial: None,
+        }
+    }
+
+    fn of_kind(self, kind: OutputKind) -> Self {
+        Self { kind, ..self }
+    }
+
+    fn with_serial(self, serial: &'a str) -> Self {
+        Self {
+            serial: Some(serial),
+            ..self
+        }
+    }
 }
 
 impl Fixture {
     fn new() -> anyhow::Result<Self> {
+        Self::with_config(Config::default())
+    }
+
+    fn with_config(config: Config) -> anyhow::Result<Self> {
         let display = Display::<State>::new()?;
-        let shell = Shell::try_new(&display.handle(), &Config::default())?;
-        Ok(Self { display, shell })
+        let shell = Shell::try_new(&display.handle(), &config)?;
+        Ok(Self {
+            display,
+            config,
+            shell,
+        })
     }
 
     fn plug(&mut self, name: &str, size: (i32, i32)) -> Output {
+        self.plug_head(Head::physical(name, size))
+    }
+
+    fn plug_head(&mut self, head: Head) -> Output {
         let mode = Mode {
-            size: size.into(),
+            size: head.size.into(),
             refresh: 60_000,
         };
         self.shell.add_output(
             &self.display.handle(),
-            &Config::default(),
+            &self.config,
             OutputDescriptor {
-                name: name.to_owned(),
+                name: head.name.to_owned(),
                 physical: PhysicalProperties {
                     size: (0, 0).into(),
                     subpixel: Subpixel::Unknown,
                     make: "Test".into(),
                     model: "Monitor".into(),
-                    serial_number: name.to_owned(),
+                    serial_number: head.name.to_owned(),
                 },
                 modes: vec![mode],
                 preferred: Some(mode),
                 current: mode,
                 native_transform: Transform::Normal,
                 refresh_interval: None,
-                serial: None,
+                serial: head.serial.map(str::to_owned),
                 edid: None,
                 presence: Presence::Shown,
+                kind: head.kind,
             },
         )
     }
@@ -138,5 +182,49 @@ fn an_empty_workspace_is_not_carried_back_on_replug() -> anyhow::Result<()> {
     assert_eq!(fixture.workspace_ids(&right)?, right_before);
     assert_eq!(left_after.len(), 1);
     assert!(left_after.iter().all(|id| !left_before.contains(id)));
+    Ok(())
+}
+
+fn identity_of(fixture: &Fixture, output: &Output) -> anyhow::Result<String> {
+    Ok(fixture
+        .monitor(output)?
+        .config()
+        .connector
+        .as_str()
+        .to_owned())
+}
+
+#[test]
+fn twin_monitors_go_by_their_connectors_until_one_leaves() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let first = fixture.plug_head(Head::physical("DP-1", (1920, 1080)).with_serial("A1"));
+    assert_eq!(identity_of(&fixture, &first)?, "Test Monitor A1");
+
+    let twin = fixture.plug_head(Head::physical("DP-2", (1920, 1080)).with_serial("A1"));
+    assert_eq!(identity_of(&fixture, &first)?, "DP-1");
+    assert_eq!(identity_of(&fixture, &twin)?, "DP-2");
+
+    fixture.unplug(&first);
+    assert_eq!(identity_of(&fixture, &twin)?, "Test Monitor A1");
+    Ok(())
+}
+
+#[test]
+fn only_physical_monitors_are_persisted_unless_nested_is_asked_for() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    fixture.plug("DP-1", (1920, 1080));
+    fixture.plug_head(Head::physical("winit-1", (1280, 720)).of_kind(OutputKind::Nested));
+    fixture.plug_head(Head::physical("VIRTUAL-1", (1280, 720)).of_kind(OutputKind::Virtual));
+    fixture.plug_head(Head::physical("HEADLESS-1", (3840, 2160)).of_kind(OutputKind::Virtual));
+
+    let names = |nested| -> Vec<String> {
+        fixture
+            .shell
+            .persisted_monitors(nested)
+            .map(|monitor| monitor.config().name.clone())
+            .collect()
+    };
+    assert_eq!(names(NestedPersistence::Skip), ["DP-1"]);
+    assert_eq!(names(NestedPersistence::Save), ["DP-1", "winit-1"]);
     Ok(())
 }

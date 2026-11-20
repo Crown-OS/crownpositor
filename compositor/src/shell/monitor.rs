@@ -7,11 +7,13 @@ use smithay::{
 };
 
 use config::{OutputSetting, OutputTransform, Vrr};
+use crownos_config::schema::output_identity;
 
 use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
     layout::{Gaps, WorkspaceMode},
+    shell::output_kind::OutputKind,
     shell::{overview::SpaceControl, windowcontrol::WindowControl},
     shell::{
         workspace::{Workspace, WorkspaceRef},
@@ -19,6 +21,7 @@ use crate::{
     },
     utils::edid::EdidInfo,
     utils::id::{OutputId, WorkspaceId},
+    utils::mode,
     utils::scale::closest_representable_scale,
 };
 
@@ -31,10 +34,11 @@ pub struct ConnectorId(String);
 
 impl ConnectorId {
     pub fn new(name: &str, make: &str, model: &str, serial: Option<&str>) -> Self {
-        match serial {
-            Some(serial) if !serial.is_empty() => Self(format!("{make} {model} {serial}")),
-            _ => Self(name.to_owned()),
-        }
+        Self(output_identity(name, make, model, serial))
+    }
+
+    pub fn from_identity(identity: &str) -> Self {
+        Self(identity.to_owned())
     }
 
     pub fn as_str(&self) -> &str {
@@ -62,6 +66,7 @@ pub struct OutputDescriptor {
     /// VRR floor below which refresh may not be stretched.
     pub edid: Option<EdidInfo>,
     pub presence: Presence,
+    pub kind: OutputKind,
 }
 
 /// Whether the user can reach an output. A hidden one is laid out, rendered
@@ -77,7 +82,11 @@ pub enum Presence {
 #[derive(Debug, Clone)]
 pub struct OutputConfig {
     pub name: String,
+    /// The identity settings are filed under now: the EDID identity, or the
+    /// connector name while a twin is connected.
     pub connector: ConnectorId,
+    /// What the EDID alone makes of this monitor.
+    pub edid_identity: String,
     pub mode: Mode,
     pub preferred_mode: Option<Mode>,
     pub modes: Vec<Mode>,
@@ -93,6 +102,7 @@ pub struct OutputConfig {
     /// means on demand.
     pub vrr: Vrr,
     pub presence: Presence,
+    pub kind: OutputKind,
 }
 
 /// Logical size after scale and transform. The one place this arithmetic
@@ -537,15 +547,15 @@ impl Monitor {
         }
 
         if let Some(text) = setting.and_then(|s| s.mode.as_deref()) {
-            match parse_mode(text) {
-                // Only a mode the hardware advertises; a plausible-looking typo
-                // must not leave the output on something it cannot display.
-                Some(mode) if self.config.modes.iter().any(|m| m.size == mode.size) => {
-                    changed |= self.set_mode(mode);
-                }
-                Some(mode) => {
-                    tracing::warn!(output = %self.config.name, ?mode, "output has no such mode");
-                }
+            match mode::parse(text) {
+                Some(request) => match mode::resolve(request, &self.config.modes)
+                    .and_then(|index| self.config.modes.get(index).copied())
+                {
+                    Some(mode) => changed |= self.set_mode(mode),
+                    None => {
+                        tracing::warn!(output = %self.config.name, ?request, "output has no such mode");
+                    }
+                },
                 None => {
                     tracing::warn!(output = %self.config.name, mode = text, "unparsable mode");
                 }
@@ -732,6 +742,7 @@ mod tests {
             config: OutputConfig {
                 name: "test".into(),
                 connector: ConnectorId::new("test", "m", "m", None),
+                edid_identity: "test".into(),
                 mode: Mode {
                     size: (1920, 1080).into(),
                     refresh: 60_000,
@@ -746,6 +757,7 @@ mod tests {
                 edid: None,
                 vrr: Vrr::OnDemand,
                 presence: Presence::Shown,
+                kind: OutputKind::Physical,
             },
             workspaces: Vec::new(),
             active: 0,
@@ -1069,27 +1081,6 @@ mod tests {
     }
 }
 
-/// `"2560x1440@144.000"`, or `"2560x1440"` for whatever refresh the output has.
-fn parse_mode(text: &str) -> Option<Mode> {
-    let (size, refresh) = match text.split_once('@') {
-        Some((size, refresh)) => (size, Some(refresh)),
-        None => (text, None),
-    };
-    let (w, h) = size.trim().split_once('x')?;
-
-    // An absent refresh defaults; a *malformed* one rejects the whole string.
-    // Quietly running a 144 Hz panel at 60 because of a typo is a bad surprise.
-    let refresh = match refresh {
-        None => 60_000,
-        Some(text) => (text.trim().parse::<f64>().ok()? * 1000.0).round() as i32,
-    };
-
-    Some(Mode {
-        size: (w.trim().parse().ok()?, h.trim().parse().ok()?).into(),
-        refresh,
-    })
-}
-
 fn transform_from_config(transform: OutputTransform) -> Transform {
     match transform {
         OutputTransform::Normal => Transform::Normal,
@@ -1104,38 +1095,8 @@ fn transform_from_config(transform: OutputTransform) -> Transform {
 }
 
 #[cfg(test)]
-mod mode_tests {
+mod transform_tests {
     use super::*;
-
-    #[test]
-    fn a_full_mode_string_parses() {
-        let mode = parse_mode("2560x1440@144.000").expect("should parse");
-        assert_eq!(mode.size, (2560, 1440).into());
-        // smithay counts refresh in millihertz.
-        assert_eq!(mode.refresh, 144_000);
-    }
-
-    #[test]
-    fn refresh_is_optional() {
-        let mode = parse_mode("1920x1080").expect("should parse");
-        assert_eq!(mode.size, (1920, 1080).into());
-        assert_eq!(mode.refresh, 60_000);
-    }
-
-    #[test]
-    fn whitespace_is_tolerated() {
-        assert_eq!(
-            parse_mode(" 1280 x 720 @ 60 ").map(|m| m.size),
-            Some((1280, 720).into())
-        );
-    }
-
-    #[test]
-    fn nonsense_is_rejected_rather_than_guessed() {
-        for bad in ["", "1920", "axb", "1920x", "x1080", "1920x1080@nope"] {
-            assert!(parse_mode(bad).is_none(), "{bad:?} should not parse");
-        }
-    }
 
     #[test]
     fn every_config_transform_maps() {

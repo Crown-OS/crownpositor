@@ -7,9 +7,11 @@ pub mod decoration;
 pub mod dust;
 pub mod gaming;
 pub mod grab;
+pub mod identity;
 pub mod lock_screen;
 pub mod monitor;
 pub mod morph;
+pub mod output_kind;
 pub mod overview;
 pub mod popup;
 pub mod resize_blur;
@@ -47,6 +49,7 @@ use smithay::{
 };
 
 use config::{Config, ResolvedRule};
+use crownos_config::schema::output_identity;
 
 use protocols::{crownos_app_icons::IconRef, crownos_surface_animation::SurfaceAnimations};
 use spacecontrol::animations::spring::SpringProfile;
@@ -67,6 +70,7 @@ use crate::{
             output_id,
         },
         morph::{Choreography, IconOrigin},
+        output_kind::NestedPersistence,
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
         tile::{Chrome, Tile, WindowState},
@@ -379,6 +383,13 @@ impl Shell {
         self.monitors.iter().filter(|monitor| !monitor.is_hidden())
     }
 
+    /// The monitors whose settings `compositor.ron` keeps.
+    pub fn persisted_monitors(&self, nested: NestedPersistence) -> impl Iterator<Item = &Monitor> {
+        self.monitors
+            .iter()
+            .filter(move |monitor| monitor.config().kind.is_persisted(nested))
+    }
+
     fn first_shown(&self) -> Option<usize> {
         self.monitors
             .iter()
@@ -426,16 +437,18 @@ impl Shell {
         let global = output.create_global::<State>(dh);
         let id = output_id(&output);
 
-        let connector = ConnectorId::new(
+        let edid_identity = output_identity(
             &descriptor.name,
             &descriptor.physical.make,
             &descriptor.physical.model,
             descriptor.serial.as_deref(),
         );
+        let connector = self.identity_beside_others(&descriptor.name, &edid_identity);
 
         let mut output_config = OutputConfig {
             name: descriptor.name.clone(),
             connector: connector.clone(),
+            edid_identity,
             mode: descriptor.current,
             preferred_mode: descriptor.preferred,
             modes: descriptor.modes.clone(),
@@ -447,6 +460,7 @@ impl Shell {
             edid: descriptor.edid.clone(),
             vrr: config::Vrr::OnDemand,
             presence: descriptor.presence,
+            kind: descriptor.kind,
         };
 
         // `enabled` is deliberately not read here: a `Monitor` in the shell is
@@ -466,6 +480,7 @@ impl Shell {
         );
         monitor.set_animation_profile(self.animation);
         self.monitors.push(monitor);
+        self.refresh_identities();
 
         self.reclaim_migrated(&connector, id);
         if descriptor.presence == Presence::Shown {
@@ -529,6 +544,7 @@ impl Shell {
         if let Some(global) = monitor.take_global() {
             dh.remove_global::<State>(global);
         }
+        self.refresh_identities();
         self.focused_output = self
             .focused_output
             .min(self.monitors.len().saturating_sub(1));

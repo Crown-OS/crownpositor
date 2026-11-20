@@ -75,6 +75,7 @@ use crate::{
     shell::{
         gaming,
         monitor::{OutputDescriptor, Presence},
+        output_kind::OutputKind,
     },
     state::State,
 };
@@ -294,6 +295,7 @@ pub fn enable_head(
             serial: head.edid.as_ref().and_then(|edid| edid.serial.clone()),
             edid: head.edid.clone(),
             presence: Presence::Shown,
+            kind: OutputKind::Physical,
         },
     );
 
@@ -340,7 +342,7 @@ pub fn enable_head(
     device.surfaces.insert(
         crtc,
         Surface {
-            output,
+            output: output.clone(),
             node,
             render_node: device.render_node,
             compositor,
@@ -363,7 +365,7 @@ pub fn enable_head(
         head.state = HeadState::Enabled { crtc };
     }
 
-    state.refresh_output_heads();
+    state.output_added(&output);
 
     Ok(())
 }
@@ -407,15 +409,12 @@ pub fn disable_head(state: &mut State, node: DrmNode, connector: connector::Hand
 /// whether the head stays in the registry afterwards.
 fn remove_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     let handle = state.common.event_loop_handle.clone();
-    let display_handle = state.common.display_handle.clone();
-    let State { backend, shell, .. } = state;
-    let Some(kms) = backend.kms() else {
-        return;
-    };
-    let Some(device) = kms.devices.get_mut(&node) else {
-        return;
-    };
-    let Some(surface) = device.surfaces.remove(&crtc) else {
+    let Some(surface) = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get_mut(&node))
+        .and_then(|device| device.surfaces.remove(&crtc))
+    else {
         return;
     };
 
@@ -429,7 +428,7 @@ fn remove_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         handle.remove(token);
     }
 
-    shell.remove_output(&display_handle, &surface.output);
+    state.output_removed(&surface.output);
 }
 
 /// Forgets a connector that has been unplugged.

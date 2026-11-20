@@ -123,7 +123,9 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         })
         .collect();
 
-    state.refresh_output_heads();
+    for viewport in &viewports {
+        state.output_added(&viewport.output);
+    }
     if let Some(first) = viewports.first() {
         crate::backend::debug_frames::init(&first.output);
     }

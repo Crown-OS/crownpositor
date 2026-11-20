@@ -48,11 +48,7 @@ impl Config {
     }
 
     pub fn output_setting(&self, connector: &str, identity: &str) -> Option<&OutputSetting> {
-        self.compositor
-            .outputs
-            .iter()
-            .find(|setting| setting.name == connector)
-            .or_else(|| self.compositor.outputs.iter().find(|s| s.name == identity))
+        self.compositor.output(connector, identity)
     }
 
     /// Default window opacity, unless a rule says otherwise. `transparency` is

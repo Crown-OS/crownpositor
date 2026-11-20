@@ -22,7 +22,10 @@ use protocols::crownos_virtual_output::{CloseReason, VirtualMode, VirtualOutput,
 
 use crate::{
     backend::present::{self, ReleasedClients},
-    shell::monitor::{OutputDescriptor, Presence},
+    shell::{
+        monitor::{OutputDescriptor, Presence},
+        output_kind::OutputKind,
+    },
     state::State,
 };
 
@@ -135,6 +138,7 @@ impl State {
                 serial: None,
                 edid: None,
                 presence,
+                kind: OutputKind::Virtual,
             },
         );
         self.apply_virtual_scale(&output, mode);
@@ -145,7 +149,7 @@ impl State {
             frame_requested: true,
             front_title: None,
         });
-        self.refresh_output_heads();
+        self.output_added(&output);
         tracing::info!(output = name, ?mode, "virtual output created");
         Some(output)
     }
@@ -203,11 +207,7 @@ impl State {
 
     fn remove_virtual_head(&mut self, index: usize) {
         let head = self.virtual_outputs.heads.swap_remove(index);
-        self.capture.output_removed(&head.output);
-        self.shell
-            .remove_output(&self.common.display_handle, &head.output);
-        self.refresh_output_heads();
-        self.queue_redraw();
+        self.output_removed(&head.output);
         tracing::info!(output = head.output.name(), "virtual output removed");
     }
 

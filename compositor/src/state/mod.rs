@@ -16,6 +16,7 @@ mod idle;
 mod input;
 pub mod launch_target;
 pub mod lock_screen;
+mod output_lifecycle;
 pub mod outputs;
 mod overview;
 pub mod session_env;

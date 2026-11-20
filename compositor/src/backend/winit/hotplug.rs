@@ -69,12 +69,7 @@ fn remove_viewport(state: &mut State, index: usize, connection: Connection) {
     else {
         return;
     };
-    state.capture.output_removed(&output);
-    state
-        .shell
-        .remove_output(&state.common.display_handle, &output);
-    state.refresh_output_heads();
-    state.queue_redraw();
+    state.output_removed(&output);
     tracing::info!(output = output.name(), ?connection, "nested output removed");
 }
 
@@ -101,9 +96,8 @@ fn connect_viewport(state: &mut State, index: usize) {
         .winit()
         .and_then(|winit| winit.viewports.get_mut(index))
     {
-        viewport.reconnect(output);
+        viewport.reconnect(output.clone());
     }
-    state.refresh_output_heads();
-    state.queue_redraw();
+    state.output_added(&output);
     tracing::info!(output = name, "nested output added");
 }

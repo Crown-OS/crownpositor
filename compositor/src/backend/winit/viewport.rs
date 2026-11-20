@@ -16,7 +16,10 @@ use smithay::{
 
 use crate::{
     rendering::{blur::BlurCache, corners::CornerMemory, warp::WarpCanvases},
-    shell::monitor::{OutputDescriptor, Presence},
+    shell::{
+        monitor::{OutputDescriptor, Presence},
+        output_kind::OutputKind,
+    },
     state::DisabledHead,
 };
 
@@ -98,6 +101,7 @@ impl Viewport {
             modes: vec![self.mode()],
             preferred: Some(0),
             vrr_capable: false,
+            kind: OutputKind::Nested,
         }
     }
 
@@ -139,6 +143,7 @@ pub fn descriptor(name: &str, mode: Mode, transform: Transform) -> OutputDescrip
         serial: None,
         edid: None,
         presence: Presence::Shown,
+        kind: OutputKind::Nested,
     }
 }
 

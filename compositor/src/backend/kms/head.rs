@@ -17,7 +17,11 @@ use smithay::{
     reexports::drm::control::{Device as ControlDevice, Mode as DrmMode, ModeTypeFlags, connector},
 };
 
-use crate::{backend::kms::props, shell::monitor::ConnectorId, utils::edid::EdidInfo};
+use crate::{
+    backend::kms::props,
+    shell::monitor::ConnectorId,
+    utils::{edid::EdidInfo, mode},
+};
 
 /// Whether this connector is currently driving an output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,34 +161,10 @@ impl Head {
             .copied()
     }
 
-    /// Matches `"2560x1440@144.000"` or `"2560x1440"` against the mode list.
     fn find_mode(&self, text: &str) -> Option<DrmMode> {
-        let (size, refresh) = match text.split_once('@') {
-            Some((size, refresh)) => (size, refresh.parse::<f64>().ok()),
-            None => (text, None),
-        };
-        let (width, height) = size.split_once('x')?;
-        let (width, height) = (width.parse::<u16>().ok()?, height.parse::<u16>().ok()?);
-
-        let matching = self
-            .modes
-            .iter()
-            .filter(|mode| mode.size() == (width, height));
-
-        match refresh {
-            // Compared in millihertz against the same arithmetic smithay uses,
-            // so a mode named from a head list round-trips exactly.
-            Some(wanted) => {
-                let wanted = (wanted * 1000.0).round() as i64;
-                matching
-                    .min_by_key(|mode| {
-                        (smithay::output::Mode::from(**mode).refresh as i64 - wanted).abs()
-                    })
-                    .copied()
-            }
-            None => matching
-                .max_by_key(|mode| smithay::output::Mode::from(**mode).refresh)
-                .copied(),
-        }
+        let advertised: Vec<smithay::output::Mode> =
+            self.modes.iter().copied().map(Into::into).collect();
+        let index = mode::resolve(mode::parse(text)?, &advertised)?;
+        self.modes.get(index).copied()
     }
 }

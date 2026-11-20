@@ -10,10 +10,13 @@ use smithay::{
 
 use protocols::gamma_control::GammaRamps;
 
-use crate::backend::{
-    Preference,
-    kms::{KmsState, head::Head, reconfigure},
-    winit::WinitState,
+use crate::{
+    backend::{
+        Preference,
+        kms::{KmsState, head::Head, reconfigure},
+        winit::WinitState,
+    },
+    shell::output_kind::OutputKind,
 };
 
 /// A connected monitor that is switched off, as the protocol needs to see it.
@@ -30,6 +33,7 @@ pub struct DisabledHead {
     pub modes: Vec<Mode>,
     pub preferred: Option<usize>,
     pub vrr_capable: bool,
+    pub kind: OutputKind,
 }
 
 impl DisabledHead {
@@ -44,6 +48,7 @@ impl DisabledHead {
             modes: head.modes.iter().copied().map(Mode::from).collect(),
             preferred: head.preferred,
             vrr_capable: head.vrr_capable,
+            kind: OutputKind::Physical,
         }
     }
 }

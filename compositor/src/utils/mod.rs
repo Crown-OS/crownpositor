@@ -3,6 +3,8 @@ pub mod app_icon;
 pub mod constraint_region;
 pub mod edid;
 pub mod id;
+pub mod mode;
+pub mod panel;
 pub mod pixels;
 pub mod portal;
 pub mod privilege;
