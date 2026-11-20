@@ -85,6 +85,15 @@ impl SessionLock {
         (&self.backdrop, CommitCounter::default())
     }
 
+    /// Forgets an output that went: its lock surface, and that it drew a
+    /// locked frame, so neither outlives it.
+    pub fn output_removed(&mut self, output: &Output) {
+        self.surfaces.retain(|(held, _)| held != output);
+        if let Phase::Locking { blanked, .. } = &mut self.phase {
+            blanked.remove(output);
+        }
+    }
+
     /// Records that `output` has drawn a locked frame.
     pub fn output_blanked(&mut self, output: &Output) {
         if let Phase::Locking { blanked, .. } = &mut self.phase {

@@ -264,6 +264,18 @@ impl State {
         self.release_sleep_once_locked();
     }
 
+    /// Lays the lock out again and decodes its pictures for the outputs there
+    /// are now, after one came or went while it is up.
+    pub(crate) fn lock_outputs_changed(&mut self) {
+        let Some(lock) = self.shell.lock_screen.active_mut() else {
+            return;
+        };
+        lock.dirty = true;
+        self.load_lock_pictures();
+        self.prepare_lock_visuals();
+        self.queue_redraw();
+    }
+
     pub fn mark_lock_dirty(&mut self) {
         if let Some(lock) = self.shell.lock_screen.active_mut() {
             lock.dirty = true;

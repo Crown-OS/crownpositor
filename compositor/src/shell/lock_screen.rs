@@ -206,6 +206,16 @@ impl LockScreen {
         self.active.as_mut()
     }
 
+    /// Forgets an output that went: its pictures and sprites, and that it
+    /// drew the lock.
+    pub fn output_removed(&mut self, output: &Output, id: OutputId) {
+        if let Some(lock) = &mut self.active {
+            lock.blanked.remove(output);
+            lock.visuals.remove(&id);
+            lock.dirty = true;
+        }
+    }
+
     /// Records that `output` has drawn a frame with the lock up, unless it
     /// was still flooding in over the desktop.
     pub fn output_blanked(&mut self, output: &Output) {

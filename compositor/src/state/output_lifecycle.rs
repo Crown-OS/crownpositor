@@ -1,11 +1,15 @@
 //! The two doors an output passes through at State level. Each backend builds
 //! the output with `Shell::add_output` and records it, then calls
 //! `output_added`; each removal, whatever its cause, goes through
-//! `output_removed`.
+//! `output_removed`. Both bring the settings, the head list and the lock
+//! screen up to date with the outputs there are now.
 
 use smithay::output::Output;
 
-use crate::{shell::identity::OfflineHead, state::State};
+use crate::{
+    shell::{identity::OfflineHead, monitor::output_id},
+    state::State,
+};
 
 impl State {
     /// Everything that follows an output the backend has just recorded.
@@ -13,6 +17,7 @@ impl State {
         self.sync_offline_heads();
         self.apply_output_settings();
         self.refresh_output_heads();
+        self.lock_outputs_changed();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output added");
     }
@@ -22,11 +27,17 @@ impl State {
     pub fn output_removed(&mut self, output: &Output) {
         self.capture.output_removed(output);
         self.wayland.workspace_mode_state.output_removed(output);
+        self.shell.session_lock.output_removed(output);
+        self.shell
+            .lock_screen
+            .output_removed(output, output_id(output));
         self.shell
             .remove_output(&self.common.display_handle, output);
         self.sync_offline_heads();
         self.apply_output_settings();
         self.refresh_output_heads();
+        self.lock_outputs_changed();
+        self.confirm_session_lock();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output removed");
     }
