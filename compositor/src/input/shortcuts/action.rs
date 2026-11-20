@@ -33,6 +33,7 @@ impl FromStr for Direction {
 
 pub use crate::controls::{Control, MediaCommand, Step};
 pub use crate::shell::workspace::WorkspaceRef;
+pub use crate::state::clamshell::Lid;
 
 impl FromStr for WorkspaceRef {
     type Err = ParseActionError;
@@ -152,6 +153,8 @@ pub enum Action {
 
     /// Unplugs a nested output, counted from 1, or plugs it back in.
     NestedDisconnect(u8),
+    /// Closes or opens a pretend lid in a nested session.
+    NestedLid(Lid),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -278,6 +281,11 @@ impl FromStr for Action {
                     .map_err(|_| ParseActionError::bad_argument("output", &raw))?;
                 Ok(Self::NestedDisconnect(number))
             }
+            "nested-lid" => match arg("state", parts)?.as_str() {
+                "closed" => Ok(Self::NestedLid(Lid::Closed)),
+                "open" => Ok(Self::NestedLid(Lid::Open)),
+                other => Err(ParseActionError::bad_argument("state", other)),
+            },
 
             other => Err(ParseActionError::UnknownAction(other.to_owned())),
         }
@@ -344,6 +352,8 @@ mod tests {
     #[test]
     fn nested_disconnect_takes_an_output_number() {
         assert_eq!(parse("nested-disconnect 2"), Action::NestedDisconnect(2));
+        assert_eq!(parse("nested-lid closed"), Action::NestedLid(Lid::Closed));
+        assert_eq!(parse("nested-lid open"), Action::NestedLid(Lid::Open));
         assert!("nested-disconnect".parse::<Action>().is_err());
         assert!("nested-disconnect winit-2".parse::<Action>().is_err());
     }

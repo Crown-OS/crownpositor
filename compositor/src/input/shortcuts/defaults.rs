@@ -6,7 +6,7 @@
 use crownos_config::{KeyCode, Keybind, Mods};
 
 use crate::input::shortcuts::action::{
-    Action, Control, Direction, MediaCommand, SnapZone, Step, WorkspaceRef,
+    Action, Control, Direction, Lid, MediaCommand, SnapZone, Step, WorkspaceRef,
 };
 
 const NONE: Mods = Mods::NONE;
@@ -86,15 +86,21 @@ const HARDWARE_KEYS: [(KeyCode, Control); 12] = [
 /// The nested outputs `Super+Shift+F<n>` unplugs and plugs back in.
 const NESTED_OUTPUT_KEYS: [KeyCode; 4] = [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4];
 
+/// The pretend lid `Super+Shift+F5` closes and `Super+Shift+F6` opens.
+const NESTED_LID_KEYS: [(KeyCode, Lid); 2] = [(KeyCode::F5, Lid::Closed), (KeyCode::F6, Lid::Open)];
+
 /// Bindings that only a nested session has, because only there can an
-/// output be unplugged on purpose.
+/// output be unplugged or a lid closed on purpose.
 pub fn nested_bindings() -> impl Iterator<Item = (Keybind, Action)> {
-    (1..).zip(NESTED_OUTPUT_KEYS).map(|(number, key)| {
-        (
-            Keybind::new(SUPER_SHIFT, Some(key)),
-            Action::NestedDisconnect(number),
-        )
-    })
+    let outputs = (1..)
+        .zip(NESTED_OUTPUT_KEYS)
+        .map(|(number, key)| (key, Action::NestedDisconnect(number)));
+    let lid = NESTED_LID_KEYS
+        .into_iter()
+        .map(|(key, lid)| (key, Action::NestedLid(lid)));
+    outputs
+        .chain(lid)
+        .map(|(key, action)| (Keybind::new(SUPER_SHIFT, Some(key)), action))
 }
 
 /// Every built-in binding.

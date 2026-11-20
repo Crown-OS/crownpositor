@@ -16,6 +16,7 @@ use protocols::{
 use spacecontrol::animations::spring::SpringProfile;
 use windowcontrol::Direction as Cycle;
 
+use crate::backend::Preference;
 use crate::utils::privilege::trusted_executables;
 use crate::{
     controls::Control,
@@ -174,6 +175,10 @@ impl State {
             Action::NestedDisconnect(number) => {
                 crate::backend::winit::toggle_connection(self, number);
             }
+            Action::NestedLid(lid) => match self.backend.preference() {
+                Preference::Winit => self.set_lid(lid),
+                Preference::Kms => tracing::warn!("nested-lid works only in a nested session"),
+            },
         }
 
         // One place recomputes geometry, one place moves keyboard focus.

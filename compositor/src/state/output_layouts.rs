@@ -60,7 +60,7 @@ pub fn configured_position(
 }
 
 /// Whether a head is lit: not switched off by its own setting, by the
-/// matched arrangement, or by `suppressed` (a closed lid, from M9 on).
+/// matched arrangement, or by `suppressed` (a closed lid).
 pub fn should_enable(
     setting: Option<&OutputSetting>,
     layout: Option<&OutputLayout>,
@@ -117,7 +117,7 @@ impl State {
             output_setting(&self.config.current, connector, identity),
             self.matched_output_layout().as_ref(),
             names,
-            &[],
+            self.clamshell.suppressed(),
         )
     }
 

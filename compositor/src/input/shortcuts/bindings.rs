@@ -102,7 +102,7 @@ mod tests {
     use crownos_config::Keybind;
 
     use super::*;
-    use crate::input::shortcuts::action::{Direction, WorkspaceRef};
+    use crate::input::shortcuts::action::{Direction, Lid, WorkspaceRef};
 
     fn chord(written: &str) -> Chord {
         written
@@ -208,6 +208,14 @@ mod tests {
         );
         assert_eq!(
             bound(&Bindings::defaults(Preference::Kms), "Super+Shift+F1"),
+            None
+        );
+        assert_eq!(
+            bound(&Bindings::defaults(Preference::Winit), "Super+Shift+F5"),
+            Some(Action::NestedLid(Lid::Closed))
+        );
+        assert_eq!(
+            bound(&Bindings::defaults(Preference::Kms), "Super+Shift+F6"),
             None
         );
     }

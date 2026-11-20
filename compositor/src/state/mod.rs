@@ -5,6 +5,7 @@ pub mod agent_seats;
 mod app_icons;
 mod backend;
 mod brightness;
+pub mod clamshell;
 mod client;
 mod common;
 mod config;
@@ -52,6 +53,7 @@ use crate::{
     brightness::Brightness,
     rendering::decoration::TextRenderer,
     shell::Shell,
+    state::clamshell::Clamshell,
     utils::surface::root_surface,
     xwayland::Xwayland,
 };
@@ -68,6 +70,7 @@ pub struct State {
     /// Which outputs the compositor's own gamma ramps are programmed on.
     /// See [`crate::state::display`].
     pub display_gamma: DisplayGamma,
+    pub clamshell: Clamshell,
     /// The brightness of each output, and the worker that drives the
     /// backlights and DDC/CI monitors behind it.
     pub brightness: Brightness,
@@ -199,6 +202,7 @@ impl State {
             input,
             config,
             display_gamma: DisplayGamma::default(),
+            clamshell: Clamshell::default(),
             brightness,
             xwayland,
             clock: Clock::new(),

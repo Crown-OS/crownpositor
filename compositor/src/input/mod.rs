@@ -5,6 +5,7 @@ pub mod keyboard;
 pub mod libinput;
 pub mod mouse;
 pub mod shortcuts;
+mod switch;
 mod tablet;
 pub mod trackpad;
 
@@ -23,6 +24,11 @@ impl State {
         ) {
             self.note_user_activity();
             self.windows.activity.observe(&event);
+        }
+        match &event {
+            InputEvent::SwitchToggle { event } => return self.on_switch_toggle::<I>(event),
+            InputEvent::DeviceAdded { device } => self.on_switch_added::<I>(device),
+            _ => {}
         }
         if self.capture_input_event(&event) {
             return;

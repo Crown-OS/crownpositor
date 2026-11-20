@@ -19,6 +19,7 @@ impl State {
         self.apply_output_settings();
         self.refresh_output_heads();
         self.lock_outputs_changed();
+        self.check_clamshell();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output added");
     }
@@ -42,6 +43,7 @@ impl State {
         self.refresh_output_heads();
         self.lock_outputs_changed();
         self.confirm_session_lock();
+        self.check_clamshell();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output removed");
     }

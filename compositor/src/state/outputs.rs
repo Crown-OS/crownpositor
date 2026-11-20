@@ -24,6 +24,7 @@ use crate::utils::output_setting::{output_entry, output_setting};
 use crate::{
     brightness::{Control, Reading, software_share},
     shell::{
+        identity::OfflineHead,
         monitor::{Monitor, OutputConfig, logical_size},
         output_kind::NestedPersistence,
     },
@@ -299,12 +300,8 @@ impl State {
 
         // A monitor switched off has to be recorded, or it comes back on at
         // the next start and the user has to switch it off again every boot.
-        for head in self
-            .shell
-            .offline_heads()
-            .iter()
-            .filter(|head| head.kind.is_persisted(nested))
-        {
+        // A panel switched off by the closed lid is not the user's choice.
+        for head in self.switched_off_by_user(nested) {
             output_entry(on_disk, &head.connector, &head.identity).enabled = Some(false);
         }
 
@@ -350,10 +347,7 @@ impl State {
                 })
                 .collect(),
             disabled: self
-                .shell
-                .offline_heads()
-                .iter()
-                .filter(|head| head.kind.is_persisted(nested))
+                .switched_off_by_user(nested)
                 .map(|head| head.identity.clone())
                 .collect(),
             heads: present,
@@ -367,6 +361,18 @@ impl State {
             .collect();
         layouts.push(layout);
         layouts
+    }
+
+    /// The persisted heads that are off, less the panel the closed lid
+    /// switched off.
+    fn switched_off_by_user(
+        &self,
+        nested: NestedPersistence,
+    ) -> impl Iterator<Item = &OfflineHead> {
+        let suppressed = self.clamshell.suppressed();
+        self.shell.offline_heads().iter().filter(move |head| {
+            head.kind.is_persisted(nested) && !suppressed.contains(&head.connector)
+        })
     }
 
     /// Turns one head on or off, if it is not already.
