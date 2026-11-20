@@ -10,7 +10,7 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use overview_keys::{closes_overview, overview_key};
+use overview_keys::{closes_overview, is_lock_key, overview_key};
 
 use crate::{
     input::shortcuts::{Action, ModMask},
@@ -125,12 +125,13 @@ impl State {
                         // An open overview owns the keyboard, but only after
                         // the VT chord above, which nothing may take away.
                         if state.overview_is_open() {
+                            let keysyms = handle.modified_syms();
+                            if is_lock_key(&keysyms) {
+                                return FilterResult::Forward;
+                            }
                             state.input.intercepted.insert(handle.raw_code());
                             return FilterResult::Intercept(overview_key(
-                                closes_overview(
-                                    &handle.modified_syms(),
-                                    state.config.current.input.swap_caps_and_esc,
-                                ),
+                                closes_overview(&keysyms),
                                 (!bypass)
                                     .then(|| state.input.bindings.lookup(modifiers, &handle))
                                     .flatten(),

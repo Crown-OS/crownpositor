@@ -4,13 +4,19 @@ use smithay::input::keyboard::Keysym;
 
 use crate::input::shortcuts::Action;
 
-/// The physical Escape key closes the overview in both settings. With the swap
-/// on, that key produces Caps Lock and the Caps Lock key produces Escape, so
-/// both keysyms close it.
-pub(super) fn closes_overview(keysyms: &[Keysym], swap_caps_and_esc: bool) -> bool {
-    keysyms.iter().any(|&keysym| {
-        keysym == Keysym::Escape || (swap_caps_and_esc && keysym == Keysym::Caps_Lock)
-    })
+/// The Escape keysym closes the overview. With Caps Lock and Escape swapped, that
+/// is the key labelled Caps Lock.
+pub(super) fn closes_overview(keysyms: &[Keysym]) -> bool {
+    keysyms.contains(&Keysym::Escape)
+}
+
+/// Lock keys reach the client even while the overview owns the keyboard. The
+/// keyboard state toggles the lock before the filter runs, so a swallowed lock
+/// key would leave the client with a lock state that is not true.
+pub(super) fn is_lock_key(keysyms: &[Keysym]) -> bool {
+    keysyms
+        .iter()
+        .any(|&keysym| matches!(keysym, Keysym::Caps_Lock | Keysym::Num_Lock))
 }
 
 /// Escape closes the overview, and the shortcuts that open, close or toggle it
@@ -34,21 +40,23 @@ mod tests {
     use crate::input::shortcuts::WorkspaceRef;
 
     #[test]
-    fn the_escape_keysym_closes_the_overview_in_both_settings() {
-        assert!(closes_overview(&[Keysym::Escape], false));
-        assert!(closes_overview(&[Keysym::Escape], true));
+    fn the_escape_keysym_closes_the_overview() {
+        assert!(closes_overview(&[Keysym::Escape]));
     }
 
     #[test]
-    fn the_physical_escape_key_closes_the_overview_when_it_makes_caps_lock() {
-        assert!(closes_overview(&[Keysym::Caps_Lock], true));
-        assert!(!closes_overview(&[Keysym::Caps_Lock], false));
+    fn caps_lock_and_other_keysyms_do_not_close_the_overview() {
+        assert!(!closes_overview(&[Keysym::Caps_Lock]));
+        assert!(!closes_overview(&[Keysym::a]));
+        assert!(!closes_overview(&[]));
     }
 
     #[test]
-    fn other_keysyms_do_not_close_the_overview() {
-        assert!(!closes_overview(&[Keysym::a], true));
-        assert!(!closes_overview(&[], true));
+    fn lock_keys_pass_through_and_other_keys_do_not() {
+        assert!(is_lock_key(&[Keysym::Caps_Lock]));
+        assert!(is_lock_key(&[Keysym::Num_Lock]));
+        assert!(!is_lock_key(&[Keysym::Escape]));
+        assert!(!is_lock_key(&[Keysym::a]));
     }
 
     #[test]
