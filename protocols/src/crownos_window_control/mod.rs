@@ -21,7 +21,7 @@ pub use crownos_protocols::window_control::v1::server::crownos_window_v1::State 
 pub use dispatch::WindowControlDispatch;
 
 /// The protocol version this module speaks.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The compositor's own name for a window, stable for its lifetime.
 pub type WindowKey = u64;
@@ -59,6 +59,8 @@ pub trait WindowControlHandler {
     fn focus_window(&mut self, key: WindowKey);
     fn close_window(&mut self, key: WindowKey);
     fn move_window_to_workspace(&mut self, key: WindowKey, workspace: &str);
+    /// `output` is the name the placement event gives.
+    fn move_window_to_output(&mut self, key: WindowKey, output: &str);
     fn make_window_visible(&mut self, key: WindowKey);
     fn make_window_hidden(&mut self, key: WindowKey);
     fn set_window_rectangle(&mut self, key: WindowKey, x: i32, y: i32, width: i32, height: i32);

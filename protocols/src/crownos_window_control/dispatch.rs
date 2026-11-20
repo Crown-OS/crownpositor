@@ -97,6 +97,9 @@ impl<D: WindowControlDispatch> Dispatch<CrownosWindowV1, WindowKey, D> for Windo
             crownos_window_v1::Request::MoveToWorkspace { workspace } => {
                 state.move_window_to_workspace(*key, &workspace);
             }
+            crownos_window_v1::Request::MoveToOutput { output } => {
+                state.move_window_to_output(*key, &output);
+            }
             crownos_window_v1::Request::MakeVisible => state.make_window_visible(*key),
             crownos_window_v1::Request::MakeHidden => state.make_window_hidden(*key),
             crownos_window_v1::Request::SetRectangle {

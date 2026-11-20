@@ -65,7 +65,7 @@ zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2
 [dev-dependencies]
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
-wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "client"] }
+wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "unstable", "client"] }
 crownos-protocols = { workspace = true, features = ["client"] }
 
 [[example]]

@@ -66,6 +66,22 @@ impl WindowControlHandler for State {
         }
     }
 
+    fn move_window_to_output(&mut self, key: WindowKey, output: &str) {
+        let id = WindowId::from_raw(key);
+        let Some(target) = self
+            .shell
+            .shown_monitors()
+            .find(|monitor| monitor.output().name() == output)
+            .map(|monitor| monitor.id())
+        else {
+            return;
+        };
+        tracing::info!(target: AUDIT, %id, output, "move to output");
+        if self.shell.move_window_to_output(id, target) {
+            self.settle_shell();
+        }
+    }
+
     fn make_window_visible(&mut self, key: WindowKey) {
         let id = WindowId::from_raw(key);
         if !self.is_on_agent_workspace(id) {
