@@ -56,6 +56,10 @@ xcursor = "0.3.11"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash", "fontconfig", "sys-locale"] }
 futures-util = { version = "0.3.34", default-features = false }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
+# DDC/CI on one known `/dev/i2c-N`. ddc-hi cannot open a single bus, and its
+# enumeration pulls in a second udev.
+ddc = "0.2.2"
+ddc-i2c = { version = "0.2.2", default-features = false, features = ["with-linux"] }
 wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }
 resvg = { version = "0.48.1", default-features = false }
 zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
@@ -67,6 +71,7 @@ wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
 wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "unstable", "client"] }
 crownos-protocols = { workspace = true, features = ["client"] }
+tempfile = "3.27.0"
 
 [[example]]
 name = "wlr_outputs"

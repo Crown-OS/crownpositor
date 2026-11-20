@@ -1,4 +1,5 @@
 mod backend;
+mod brightness;
 mod color;
 mod controls;
 mod handlers;

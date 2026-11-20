@@ -15,6 +15,8 @@
 //!   while the harness rebinds the context.
 //! - `CROWN_DEBUG_DUMP=<from>-<to>` — dump every frame pair in that render
 //!   range; `CROWN_DEBUG_THRESHOLD` — per-channel difference that counts.
+//! - `CROWN_DEBUG_BRIGHTNESS=software` (read in `brightness`) — nested
+//!   outputs report a software dim: stored and echoed, never drawn.
 use std::{cell::RefCell, path::PathBuf, time::Instant};
 
 use smithay::backend::renderer::Texture as _;

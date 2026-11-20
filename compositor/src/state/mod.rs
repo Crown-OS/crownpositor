@@ -4,6 +4,7 @@ pub mod agent_access;
 pub mod agent_seats;
 mod app_icons;
 mod backend;
+mod brightness;
 mod client;
 mod common;
 mod config;
@@ -48,6 +49,7 @@ use spacecontrol::animations::spring::Clock;
 
 use crate::{
     backend::{capture::CaptureState, virtual_output::VirtualOutputs},
+    brightness::Brightness,
     rendering::decoration::TextRenderer,
     shell::Shell,
     utils::surface::root_surface,
@@ -66,6 +68,9 @@ pub struct State {
     /// Which outputs the compositor's own gamma ramps are programmed on.
     /// See [`crate::state::display`].
     pub display_gamma: DisplayGamma,
+    /// The brightness of each output, and the worker that drives the
+    /// backlights and DDC/CI monitors behind it.
+    pub brightness: Brightness,
     pub xwayland: Xwayland,
     /// Drives the springs. Owned here because it is per-compositor, not
     /// per-output — every output steps by the same wall-clock delta.
@@ -184,6 +189,7 @@ impl State {
         let shell = Shell::try_new(&common.display_handle, &config.current)?;
         let visual_context_rules = config.current.visual_context.clone();
         let xwayland = Xwayland::start(&common.event_loop_handle);
+        let brightness = Brightness::start(&common.tasks);
 
         let mut state = Self {
             common,
@@ -193,6 +199,7 @@ impl State {
             input,
             config,
             display_gamma: DisplayGamma::default(),
+            brightness,
             xwayland,
             clock: Clock::new(),
             text: TextRenderer::new(),

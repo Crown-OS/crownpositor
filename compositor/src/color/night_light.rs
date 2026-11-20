@@ -28,7 +28,7 @@ const WARMEST_KELVIN: f64 = 2500.0;
 ///
 /// Zero would be a black screen with no way back, since the control that
 /// undoes it is on that screen.
-const MIN_BRIGHTNESS: f64 = 0.15;
+pub const MIN_BRIGHTNESS: f64 = 0.15;
 
 /// The night light the Display page asks for, from 0.0 to 1.0.
 pub fn warmth(display: &Display) -> f64 {

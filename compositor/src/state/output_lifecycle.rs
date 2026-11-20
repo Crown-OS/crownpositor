@@ -14,6 +14,7 @@ use crate::{
 impl State {
     /// Everything that follows an output the backend has just recorded.
     pub fn output_added(&mut self, output: &Output) {
+        self.track_output_brightness(output);
         self.sync_offline_heads();
         self.apply_output_settings();
         self.refresh_output_heads();
@@ -28,6 +29,7 @@ impl State {
         self.capture.output_removed(output);
         self.wayland.workspace_mode_state.output_removed(output);
         self.wayland.output_info_state.output_removed(output);
+        self.brightness.forget(output_id(output));
         self.shell.session_lock.output_removed(output);
         self.shell
             .lock_screen

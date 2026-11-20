@@ -14,9 +14,12 @@ use smithay::{
 
 use protocols::gamma_control::GammaRamps;
 
-use crate::backend::{
-    frame_clock::FrameClock,
-    kms::{KmsState, surface::Surface},
+use crate::{
+    backend::{
+        frame_clock::FrameClock,
+        kms::{KmsState, surface::Surface},
+    },
+    brightness::CardNode,
 };
 
 /// Whether a mode can actually be set on this output, without setting it.
@@ -243,6 +246,18 @@ fn crtc_for<'a>(
             .find(|(_, surface)| surface.output == *output)
             .map(|(crtc, _)| (&device.drm, *crtc))
     })
+}
+
+/// The card that scans `output` out.
+pub fn card_node(kms: &KmsState, output: &Output) -> Option<CardNode> {
+    kms.devices
+        .values()
+        .flat_map(|device| device.surfaces.values())
+        .find(|surface| surface.output == *output)
+        .map(|surface| CardNode {
+            major: surface.node.major(),
+            minor: surface.node.minor(),
+        })
 }
 
 /// Whether an output's panel is powered.

@@ -17,6 +17,7 @@ use crate::{
         kms::{KmsState, head::Head, lighting, reconfigure},
         winit::WinitState,
     },
+    brightness::CardNode,
     shell::output_kind::OutputKind,
     state::outputs::ResolvedHead,
 };
@@ -272,6 +273,15 @@ impl BackendState {
         match self {
             Self::Unset | Self::Winit(_) => false,
             Self::Kms(kms) => reconfigure::set_gamma(kms, output, ramps),
+        }
+    }
+
+    /// The DRM card behind `output`; `None` for nested and virtual outputs,
+    /// which have no hardware of their own.
+    pub fn card_node(&self, output: &Output) -> Option<CardNode> {
+        match self {
+            Self::Unset | Self::Winit(_) => None,
+            Self::Kms(kms) => reconfigure::card_node(kms, output),
         }
     }
 
