@@ -8,7 +8,7 @@ use protocols::crownos_output_info::{
 use smithay::output::Output;
 
 use super::{Fixture, Head};
-use crate::shell::output_kind::OutputKind;
+use crate::{color::output::ScanoutDepth, shell::output_kind::OutputKind};
 
 fn info(fixture: &Fixture, output: &Output) -> anyhow::Result<OutputInfo> {
     let primary = fixture.shell.primary().map(|monitor| monitor.id());
@@ -105,5 +105,40 @@ fn the_settings_choose_the_shell_surfaces() -> anyhow::Result<()> {
         ShellSurfaces::Dock | ShellSurfaces::Notifications
     );
     assert_eq!(info(&fixture, &right)?.shell, ShellSurfaces::Bar);
+    Ok(())
+}
+
+#[test]
+fn a_monitor_coming_or_going_makes_preferred_descriptions_stale_once() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let left = fixture.plug("DP-1", (1920, 1080));
+    fixture.plug("DP-2", (1920, 1080));
+    assert!(fixture.shell.take_preferred_stale());
+    assert!(!fixture.shell.take_preferred_stale());
+
+    fixture.unplug(&left);
+    assert!(fixture.shell.take_preferred_stale());
+    assert!(!fixture.shell.take_preferred_stale());
+    Ok(())
+}
+
+#[test]
+fn an_output_reports_the_depth_and_hdr_of_its_colour_state() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let output = fixture.plug("DP-1", (1920, 1080));
+    assert_eq!(info(&fixture, &output)?.scanout_depth, 8);
+    assert_eq!(info(&fixture, &output)?.capabilities, Capability::empty());
+
+    let color = fixture
+        .shell
+        .monitor_mut(&output)
+        .context("DP-1 is plugged")?
+        .color_mut();
+    color.depth = ScanoutDepth::Ten;
+    color.hdr_capable = true;
+
+    let deeper = info(&fixture, &output)?;
+    assert_eq!(deeper.scanout_depth, 10);
+    assert_eq!(deeper.capabilities, Capability::Hdr);
     Ok(())
 }

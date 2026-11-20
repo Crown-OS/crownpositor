@@ -506,6 +506,7 @@ impl Shell {
         monitor.set_animation_profile(self.animation);
         self.monitors.push(monitor);
         self.refresh_identities();
+        self.preferred_stale = true;
 
         if descriptor.presence == Presence::Shown {
             self.adopt_stash(id);
@@ -546,6 +547,7 @@ impl Shell {
             dh.remove_global::<State>(global);
         }
         self.refresh_identities();
+        self.preferred_stale = true;
         self.hand_focus_over(removed, survivor);
 
         self.arrange_outputs();

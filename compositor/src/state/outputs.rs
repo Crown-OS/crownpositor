@@ -195,14 +195,15 @@ impl State {
     /// The protocol half sends only what actually changed. The gamma half is
     /// here rather than at each call site because a modeset clears the CRTC's
     /// lookup table, so an output that has just been reconfigured has lost
-    /// whatever night light put there.
+    /// whatever night light put there, and every ramp is written again.
     pub fn refresh_output_heads(&mut self) {
         self.sync_offline_heads();
         let heads = self.output_head_snapshots();
         self.wayland
             .output_management_state
             .set_heads::<State>(heads);
-        self.apply_display_gamma();
+        self.display_gamma.forget_all();
+        self.apply_output_color();
     }
 
     /// The one door for changing outputs: the protocol, a config reload and

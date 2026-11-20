@@ -292,6 +292,9 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                     }
                     // Everything on screen is stale after a VT switch.
                     state.backend.queue_redraw(None);
+                    // The other VT may have left its own ramps on the CRTCs.
+                    state.display_gamma.forget_all();
+                    state.apply_output_color();
                 }
             }
         })

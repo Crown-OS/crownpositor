@@ -20,7 +20,12 @@ impl OutputPowerHandler for State {
         let Some(output) = self.output_for(wl_output) else {
             return false;
         };
-        self.backend.set_output_power(&output, on)
+        let powered = self.backend.set_output_power(&output, on);
+        if powered && on {
+            self.display_gamma.forget(&output);
+            self.apply_output_color();
+        }
+        powered
     }
 }
 

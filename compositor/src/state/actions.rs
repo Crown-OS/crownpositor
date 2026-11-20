@@ -392,7 +392,7 @@ impl State {
             }
             Update::Display(display) => {
                 config.display = display;
-                self.apply_display_gamma();
+                self.apply_output_color();
             }
             Update::Glass(glass) => config.glass = glass,
             Update::Lock(lock) => {

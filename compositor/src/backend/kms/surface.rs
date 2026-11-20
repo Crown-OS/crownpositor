@@ -67,6 +67,7 @@ use crate::{
         present::{self, ReleasedClients},
         render::{CrownAllocator, DmabufExporter},
     },
+    color::output::ScanoutDepth,
     rendering::{
         self, FrameStyle,
         blur::{BlurCache, BlurConfig, BlurSession},
@@ -314,6 +315,9 @@ pub fn enable_head(
         Some(device.gbm.clone()),
     )
     .with_context(|| format!("failed to create the DRM compositor for {}", head.name))?;
+    if let Some(monitor) = shell.monitor_mut(&output) {
+        monitor.color_mut().depth = ScanoutDepth::of_format(compositor.format());
+    }
 
     let vrr_support = compositor
         .vrr_supported(connector)

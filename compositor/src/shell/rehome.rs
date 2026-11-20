@@ -114,11 +114,15 @@ impl Shell {
         self.mark_dirty(id);
     }
 
-    /// Whether a window changed monitor since the last call, so the
-    /// surfaces' preferred colour description is out of date.
-    #[expect(dead_code, reason = "the colour-management refresh is its reader")]
+    /// Whether a window or a monitor came or went, or an output's colours
+    /// changed, since the last call, so the surfaces' preferred colour
+    /// description is out of date.
     pub fn take_preferred_stale(&mut self) -> bool {
         std::mem::take(&mut self.preferred_stale)
+    }
+
+    pub fn mark_preferred_stale(&mut self) {
+        self.preferred_stale = true;
     }
 }
 

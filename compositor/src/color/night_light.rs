@@ -6,9 +6,11 @@
 //! change costs one ioctl rather than a frame.
 //!
 //! This module is the arithmetic alone — it names no output and no backend.
-//! Programming the result is [`State::apply_display_gamma`].
+//! Each output's values live in [`OutputColor`], and programming the result
+//! is [`State::apply_output_color`].
 //!
-//! [`State::apply_display_gamma`]: crate::state::State::apply_display_gamma
+//! [`OutputColor`]: super::output::OutputColor
+//! [`State::apply_output_color`]: crate::state::State::apply_output_color
 
 use config::Display;
 use protocols::gamma_control::GammaRamps;
@@ -28,17 +30,28 @@ const WARMEST_KELVIN: f64 = 2500.0;
 /// undoes it is on that screen.
 const MIN_BRIGHTNESS: f64 = 0.15;
 
-/// The ramps for these settings, or `None` when they come to "leave it alone".
-///
-/// `None` is not the same as an identity ramp: it means the compositor has no
-/// opinion, so a `zwlr_gamma_control_v1` client may keep the output.
-pub fn ramps(size: u32, display: &Display) -> Option<GammaRamps> {
-    let brightness = (display.brightness / 100.0).clamp(MIN_BRIGHTNESS, 1.0);
-    let warmth = if display.night_light {
+/// The night light the Display page asks for, from 0.0 to 1.0.
+pub fn warmth(display: &Display) -> f64 {
+    if display.night_light {
         (display.night_light_warmth / 100.0).clamp(0.0, 1.0)
     } else {
         0.0
-    };
+    }
+}
+
+/// The share of full brightness `display.ron` asks every output to keep.
+pub fn dim(display: &Display) -> f64 {
+    display.brightness / 100.0
+}
+
+/// The ramps for a night light `warmth` and a `dim`, or `None` when they come
+/// to "leave it alone".
+///
+/// `None` is not the same as an identity ramp: it means the compositor has no
+/// opinion, so a `zwlr_gamma_control_v1` client may keep the output.
+pub fn ramps(size: u32, warmth: f64, dim: f64) -> Option<GammaRamps> {
+    let brightness = dim.clamp(MIN_BRIGHTNESS, 1.0);
+    let warmth = warmth.clamp(0.0, 1.0);
 
     if size == 0 || (brightness == 1.0 && warmth == 0.0) {
         return None;
@@ -105,8 +118,57 @@ fn black_body(kelvin: f64) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::output::OutputColor;
 
     const SIZE: u32 = 256;
+
+    fn ramps(size: u32, display: &Display) -> Option<GammaRamps> {
+        OutputColor {
+            warmth: warmth(display),
+            dim: dim(display),
+            ..OutputColor::new(false)
+        }
+        .ramps(size)
+    }
+
+    /// The single ramp every output shared before colour was per output,
+    /// kept to pin the per-output ramps to it.
+    fn shared_ramps(size: u32, display: &Display) -> Option<GammaRamps> {
+        let brightness = (display.brightness / 100.0).clamp(MIN_BRIGHTNESS, 1.0);
+        let warmth = if display.night_light {
+            (display.night_light_warmth / 100.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if size == 0 || (brightness == 1.0 && warmth == 0.0) {
+            return None;
+        }
+        let kelvin = NEUTRAL_KELVIN + warmth * (WARMEST_KELVIN - NEUTRAL_KELVIN);
+        let [red, green, blue] = tint(kelvin).map(|channel| channel * brightness);
+        Some(GammaRamps {
+            red: channel_ramp(size, red),
+            green: channel_ramp(size, green),
+            blue: channel_ramp(size, blue),
+        })
+    }
+
+    #[test]
+    fn per_output_ramps_match_the_shared_ramp_they_replace() {
+        for size in [0, 2, 256, 1024] {
+            for brightness in [0.0, 10.0, 50.0, 80.0, 100.0, 120.0] {
+                for night_light in [false, true] {
+                    for warmth in [-10.0, 0.0, 35.0, 100.0, 150.0] {
+                        let settings = display(brightness, night_light, warmth);
+                        assert_eq!(
+                            ramps(size, &settings),
+                            shared_ramps(size, &settings),
+                            "{settings:?} at {size} entries"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn display(brightness: f64, night_light: bool, warmth: f64) -> Display {
         Display {

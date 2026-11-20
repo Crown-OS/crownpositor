@@ -12,6 +12,7 @@ use crownos_config::schema::output_identity;
 use spacecontrol::animations::spring::SpringProfile;
 
 use crate::{
+    color::output::OutputColor,
     layout::{Gaps, WorkspaceMode},
     shell::output_kind::OutputKind,
     shell::{overview::SpaceControl, windowcontrol::WindowControl},
@@ -170,6 +171,7 @@ pub struct Monitor {
     spacecontrol: SpaceControl,
     /// The Alt+Tab strip, risen over this output's active workspace.
     window_control: WindowControl,
+    color: OutputColor,
 }
 
 impl Monitor {
@@ -183,6 +185,7 @@ impl Monitor {
     ) -> Self {
         let default_mode = config.default_mode.unwrap_or(default_mode);
         let usable = Rectangle::from_size(config.logical_size());
+        let hdr_capable = config.edid.as_ref().is_some_and(EdidInfo::supports_hdr);
 
         let mut monitor = Self {
             id,
@@ -199,6 +202,7 @@ impl Monitor {
             fixed_position: None,
             spacecontrol: SpaceControl::new(),
             window_control: WindowControl::default(),
+            color: OutputColor::new(hdr_capable),
         };
         monitor.add_workspace();
         monitor
@@ -222,6 +226,14 @@ impl Monitor {
 
     pub fn config_mut(&mut self) -> &mut OutputConfig {
         &mut self.config
+    }
+
+    pub fn color(&self) -> &OutputColor {
+        &self.color
+    }
+
+    pub fn color_mut(&mut self) -> &mut OutputColor {
+        &mut self.color
     }
 
     pub fn geometry(&self) -> Rectangle<i32, Logical> {
@@ -849,6 +861,7 @@ mod tests {
             fixed_position: None,
             spacecontrol: SpaceControl::new(),
             window_control: WindowControl::default(),
+            color: OutputColor::new(false),
         };
         for _ in 0..workspaces {
             monitor.workspaces.push(Workspace::new(

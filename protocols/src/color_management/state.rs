@@ -201,6 +201,12 @@ impl ColorManagementState {
         self.feedback.retain(|feedback| feedback.object != *object);
     }
 
+    /// The `wl_output`s some client watches the colours of, once for each
+    /// `wp_color_management_output_v1`.
+    pub fn watched_outputs(&self) -> impl Iterator<Item = &WlOutput> {
+        self.outputs.iter().map(|(output, _)| output)
+    }
+
     /// Tells everyone watching an output that its colours changed.
     ///
     /// The `wl_output.done` that has to follow is the compositor's to send,

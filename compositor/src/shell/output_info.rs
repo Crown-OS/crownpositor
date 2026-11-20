@@ -14,8 +14,6 @@ use crate::{
     utils::id::OutputId,
 };
 
-const EIGHT_BIT_SCANOUT: u32 = 8;
-
 const SHELL_ROLES: [(ShellRole, ShellSurfaces); 3] = [
     (ShellRole::Bar, ShellSurfaces::Bar),
     (ShellRole::Dock, ShellSurfaces::Dock),
@@ -64,8 +62,9 @@ impl Shell {
         if self.focused == Some(monitor.id()) {
             state |= State::Focused;
         }
+        let color = monitor.color();
         let mut capabilities = Capability::empty();
-        if output.edid.as_ref().is_some_and(|edid| edid.supports_hdr()) {
+        if color.hdr_capable {
             capabilities |= Capability::Hdr;
         }
         if output.kind == OutputKind::Virtual {
@@ -77,7 +76,7 @@ impl Shell {
             shell: shell_surfaces(setting, is_primary, output.presence),
             state,
             capabilities,
-            scanout_depth: EIGHT_BIT_SCANOUT,
+            scanout_depth: color.depth.bits(),
         })
     }
 }
