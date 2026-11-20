@@ -2,6 +2,7 @@
 //! here are the only way to get from a surface to any of it.
 
 pub mod arrangement;
+pub mod chosen_placement;
 pub mod closing;
 pub mod decoration;
 pub mod dust;

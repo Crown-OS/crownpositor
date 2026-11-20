@@ -523,9 +523,9 @@ impl State {
             // the swapchain no longer has.
             let output = monitor.output().clone();
             let mode_changed = monitor.set_mode(head.mode);
-            monitor.set_scale(head.scale);
+            monitor.choose_scale(head.scale);
             monitor.set_transform(head.transform);
-            monitor.pin_position(head.position);
+            monitor.choose_position(head.position);
 
             if mode_changed && let Err(err) = self.backend.set_output_mode(&output, head.mode) {
                 tracing::error!(%err, output = %head.id, "failed to set the mode");

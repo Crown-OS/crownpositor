@@ -3,6 +3,7 @@
 //! A `Tile` needs a live client surface, so these tests carry no windows:
 //! they check what the shell does with outputs and their empty workspaces.
 
+mod chosen_placement;
 mod cross_monitor;
 mod output_info;
 mod overview_scope;

@@ -14,7 +14,7 @@ use spacecontrol::animations::spring::SpringProfile;
 use crate::{
     color::output::OutputColor,
     layout::{Gaps, WorkspaceMode},
-    shell::output_kind::OutputKind,
+    shell::{chosen_placement::ChosenPlacement, output_kind::OutputKind},
     shell::{overview::SpaceControl, windowcontrol::WindowControl},
     shell::{
         workspace::{Workspace, WorkspaceRef},
@@ -166,6 +166,7 @@ pub struct Monitor {
     default_mode: WorkspaceMode,
     /// Pinned by config; `None` lets `arrange_outputs` place it.
     fixed_position: Option<smithay::utils::Point<i32, Logical>>,
+    chosen: ChosenPlacement,
     /// The mission-control overview on this output. Per-monitor, like the
     /// viewport: each screen opens and closes its own.
     spacecontrol: SpaceControl,
@@ -200,6 +201,7 @@ impl Monitor {
             gaps,
             default_mode,
             fixed_position: None,
+            chosen: ChosenPlacement::default(),
             spacecontrol: SpaceControl::new(),
             window_control: WindowControl::default(),
             color: OutputColor::new(hdr_capable),
@@ -620,8 +622,9 @@ impl Monitor {
     ) -> Applied {
         let mut changed = false;
 
-        let scale = setting
-            .and_then(|s| s.scale)
+        let scale = self
+            .chosen
+            .scale_for(setting)
             .unwrap_or_else(|| self.guessed_scale());
         changed |= self.set_scale(scale);
 
@@ -647,6 +650,7 @@ impl Monitor {
             }
         }
 
+        let position = self.chosen.position_for(setting, position);
         if self.fixed_position != position {
             self.fixed_position = position;
             changed = true;
@@ -671,6 +675,18 @@ impl Monitor {
     pub fn pin_position(&mut self, position: smithay::utils::Point<i32, Logical>) -> bool {
         self.fixed_position = Some(position);
         self.set_position(position)
+    }
+
+    /// Sets the scale output management asked for.
+    pub fn choose_scale(&mut self, scale: f64) -> bool {
+        self.chosen.scale = Some(scale);
+        self.set_scale(scale)
+    }
+
+    /// Pins the position output management asked for.
+    pub fn choose_position(&mut self, position: smithay::utils::Point<i32, Logical>) -> bool {
+        self.chosen.position = Some(position);
+        self.pin_position(position)
     }
 
     /// The scale this output should use when nothing configures it.
@@ -859,6 +875,7 @@ mod tests {
             gaps: Gaps::default(),
             default_mode: WorkspaceMode::Tiling,
             fixed_position: None,
+            chosen: ChosenPlacement::default(),
             spacecontrol: SpaceControl::new(),
             window_control: WindowControl::default(),
             color: OutputColor::new(false),
