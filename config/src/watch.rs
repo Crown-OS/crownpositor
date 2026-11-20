@@ -10,7 +10,7 @@ use crownos_config::{
     Appearance, Display, Key, Subscription,
     schema::{
         Agents, Binding, GamingOptions, Glass, Lock, OutputLayout, OutputSetting, Theme,
-        VisualContext, WorkspaceMode, compositor, keybinds,
+        VisualContext, WorkspaceMode, WorkspaceScope, compositor, keybinds,
     },
     subscribe_key, subscribe_typed,
 };
@@ -26,6 +26,7 @@ pub enum Update {
     DefaultMode(WorkspaceMode),
     FocusFollowsMouse(bool),
     PrimaryOutput(Option<String>),
+    WorkspaceScope(WorkspaceScope),
     Outputs(Vec<OutputSetting>),
     OutputLayouts(Vec<OutputLayout>),
     WindowRules(WindowRules),
@@ -61,6 +62,7 @@ impl Watch {
                     Update::FocusFollowsMouse,
                 ),
                 key(&sink, compositor::PrimaryOutput, Update::PrimaryOutput),
+                key(&sink, compositor::Scope, Update::WorkspaceScope),
                 key(&sink, compositor::Outputs, Update::Outputs),
                 key(&sink, compositor::OutputLayouts, Update::OutputLayouts),
                 key(&sink, compositor::WindowRules, |rules| {

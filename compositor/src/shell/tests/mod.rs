@@ -3,6 +3,8 @@
 //! A `Tile` needs a live client surface, so these tests carry no windows:
 //! they check what the shell does with outputs and their empty workspaces.
 
+mod workspace_scope;
+
 use anyhow::Context;
 use smithay::{
     output::{Mode, Output, PhysicalProperties, Subpixel},

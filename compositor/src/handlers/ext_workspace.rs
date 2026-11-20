@@ -17,15 +17,15 @@ impl ExtWorkspaceHandler for State {
     }
 
     fn activate_workspace(&mut self, key: u64) {
-        let target = self.shell.monitors_mut().iter_mut().find_map(|monitor| {
+        let target = self.shell.shown_monitors().find_map(|monitor| {
             let index = monitor
                 .workspaces()
                 .iter()
                 .position(|workspace| workspace.id().raw() == key)?;
-            Some((monitor, index))
+            Some((monitor.id(), index))
         });
-        if let Some((monitor, index)) = target
-            && monitor.activate(index)
+        if let Some((output, index)) = target
+            && self.shell.activate_index(output, index)
         {
             self.queue_redraw();
         }
@@ -36,37 +36,43 @@ impl State {
     /// Tells `ext_workspace_v1` clients about the workspaces as they are now.
     /// Cheap when nothing changed: the protocol state compares before sending.
     pub fn refresh_ext_workspaces(&mut self) {
-        let monitors = self.shell.monitors();
-        let groups = monitors
-            .iter()
-            .map(|monitor| WorkspaceGroup {
-                key: monitor.id().raw(),
-                output: monitor.output().clone(),
-            })
-            .collect();
-        let workspaces = monitors
-            .iter()
-            .flat_map(|monitor| {
-                let active = monitor.active().id();
-                monitor
-                    .workspaces()
-                    .iter()
-                    .enumerate()
-                    .map(move |(index, workspace)| WorkspaceInfo {
-                        key: workspace.id().raw(),
-                        group: monitor.id().raw(),
-                        id: workspace_identifier(workspace.id()),
-                        name: (index + 1).to_string(),
-                        coordinates: vec![index as u32],
-                        active: workspace.id() == active,
-                    })
-            })
-            .collect();
+        let (groups, workspaces) = workspace_model(&self.shell);
         let display = self.common.display_handle.clone();
         self.wayland
             .ext_workspace_state
             .update::<State>(&display, groups, workspaces);
     }
+}
+
+/// One group per shown monitor, each with its own workspaces. Hidden
+/// monitors are left out: nobody can switch to what they cannot see.
+pub fn workspace_model(shell: &Shell) -> (Vec<WorkspaceGroup>, Vec<WorkspaceInfo>) {
+    let groups = shell
+        .shown_monitors()
+        .map(|monitor| WorkspaceGroup {
+            key: monitor.id().raw(),
+            output: monitor.output().clone(),
+        })
+        .collect();
+    let workspaces = shell
+        .shown_monitors()
+        .flat_map(|monitor| {
+            let active = monitor.active().id();
+            monitor
+                .workspaces()
+                .iter()
+                .enumerate()
+                .map(move |(index, workspace)| WorkspaceInfo {
+                    key: workspace.id().raw(),
+                    group: monitor.id().raw(),
+                    id: workspace_identifier(workspace.id()),
+                    name: (index + 1).to_string(),
+                    coordinates: vec![index as u32],
+                    active: workspace.id() == active,
+                })
+        })
+        .collect();
+    (groups, workspaces)
 }
 
 /// The `id` clients see, and pass back to `crownos_screencast_v1` to capture a

@@ -26,6 +26,7 @@ pub mod transaction;
 pub mod visibility;
 pub mod windowcontrol;
 pub mod workspace;
+pub mod workspace_scope;
 pub mod workspace_switch;
 
 #[cfg(test)]
@@ -51,7 +52,7 @@ use smithay::{
 };
 
 use config::{Config, ResolvedRule};
-use crownos_config::schema::output_identity;
+use crownos_config::schema::{WorkspaceScope, output_identity};
 
 use protocols::{crownos_app_icons::IconRef, crownos_surface_animation::SurfaceAnimations};
 use spacecontrol::animations::spring::SpringProfile;
@@ -256,6 +257,8 @@ pub struct Shell {
     keyboard: Option<OutputId>,
     /// `compositor.primary_output`: a connector or an identity.
     primary_output: Option<String>,
+    /// Whether a workspace change acts on one monitor or on every shown one.
+    scope: WorkspaceScope,
     /// Workspaces rescued from the last output to be unplugged. Without this, a
     /// lid close on a single-output session would destroy every window.
     headless: Vec<Workspace>,
@@ -316,6 +319,7 @@ impl Shell {
             focused: None,
             keyboard: None,
             primary_output: config.compositor.primary_output.clone(),
+            scope: config.compositor.workspace_scope,
             headless: Vec::new(),
             migrated: HashMap::new(),
             surface_to_window: HashMap::new(),
@@ -648,6 +652,7 @@ impl Shell {
         for monitor in &mut self.monitors {
             monitor.normalize();
         }
+        self.link_workspaces();
     }
 
     // ---- layer surfaces ----
@@ -800,40 +805,6 @@ impl Shell {
         self.animation = profile;
         for monitor in &mut self.monitors {
             monitor.set_animation_profile(profile);
-        }
-    }
-
-    // ---- interactive workspace switching ----
-
-    pub fn is_swiping_workspaces(&self) -> bool {
-        self.focused_monitor().is_some_and(Monitor::is_swiping)
-    }
-
-    /// Hands the focused output's viewport to the fingers.
-    pub fn begin_workspace_swipe(&mut self) {
-        if let Some(monitor) = self.focused_monitor_mut() {
-            monitor.begin_switch_gesture();
-        }
-    }
-
-    /// `travelled` is cumulative horizontal travel in pages, positive
-    /// rightward.
-    pub fn update_workspace_swipe(&mut self, travelled: f64) {
-        if let Some(monitor) = self.focused_monitor_mut() {
-            monitor.update_switch_gesture(travelled);
-        }
-    }
-
-    /// Releases the swipe into its spring. `velocity` is in pages per second,
-    /// positive rightward; returns whether the active workspace moved.
-    pub fn end_workspace_swipe(&mut self, velocity: f64) -> bool {
-        self.focused_monitor_mut()
-            .is_some_and(|monitor| monitor.end_switch_gesture(velocity))
-    }
-
-    pub fn cancel_workspace_swipe(&mut self) {
-        if let Some(monitor) = self.focused_monitor_mut() {
-            monitor.cancel_switch_gesture();
         }
     }
 
@@ -1211,24 +1182,6 @@ impl Shell {
 
     // ---- actions ----
 
-    pub fn switch_workspace(&mut self, target: WorkspaceRef) -> bool {
-        self.focused_monitor_mut()
-            .is_some_and(|monitor| monitor.switch_to(target))
-    }
-
-    /// Switches the window's monitor to the workspace it lives on.
-    pub fn switch_to_workspace_of(&mut self, id: WindowId) -> bool {
-        let Some(location) = self.location(id) else {
-            return false;
-        };
-        self.monitor_by_id_mut(location.output)
-            .is_some_and(|monitor| {
-                monitor
-                    .index_of(location.workspace)
-                    .is_some_and(|index| monitor.activate(index))
-            })
-    }
-
     /// Moves the focused window to another workspace on its own output.
     pub fn move_focused_to_workspace(&mut self, target: WorkspaceRef, follow: bool) -> bool {
         let Some(id) = self.focused_window_id() else {
@@ -1261,53 +1214,9 @@ impl Shell {
         if let Some(workspace) = self.workspace_mut(location) {
             workspace.focus_window(id);
         }
-        if follow && let Some(monitor) = self.monitor_by_id_mut(location.output) {
-            monitor.activate(index);
+        if follow {
+            self.activate_index(location.output, index);
         }
-        true
-    }
-
-    /// Appends a workspace to the focused monitor and returns its index.
-    pub fn create_workspace(&mut self) -> Option<usize> {
-        self.focused_monitor_mut().map(Monitor::add_workspace)
-    }
-
-    /// Removes a workspace, handing its windows to the neighbour before it (or
-    /// after it, for the first). The last workspace on a monitor stays.
-    pub fn remove_workspace(&mut self, output: OutputId, workspace: WorkspaceId) -> bool {
-        let Some(monitor) = self.monitor_by_id(output) else {
-            return false;
-        };
-        let Some(index) = monitor.index_of(workspace) else {
-            return false;
-        };
-        let heir_index = if index == 0 { 1 } else { index - 1 };
-        let Some(heir) = monitor.workspaces().get(heir_index).map(Workspace::id) else {
-            return false;
-        };
-        let was_active = monitor.active_index() == index;
-        let orphans: Vec<WindowId> = monitor.workspaces()[index]
-            .tiles()
-            .iter()
-            .map(Tile::id)
-            .collect();
-
-        let heir_location = Location {
-            output,
-            workspace: heir,
-        };
-        for id in orphans {
-            self.move_tile(id, heir_location);
-        }
-
-        let Some(monitor) = self.monitor_by_id_mut(output) else {
-            return false;
-        };
-        monitor.take_workspace(workspace);
-        if was_active && let Some(heir_index) = monitor.index_of(heir) {
-            monitor.activate(heir_index);
-        }
-        monitor.normalize();
         true
     }
 
@@ -1471,19 +1380,6 @@ impl Shell {
         {
             workspace.dirty.layout = true;
         }
-    }
-
-    /// Flips the focused workspace between tiling and floating.
-    pub fn toggle_workspace_mode(&mut self) -> bool {
-        let mode = self
-            .focused_monitor()
-            .map(|monitor| monitor.active().mode());
-        mode.is_some_and(|mode| self.set_workspace_mode(mode.toggled()))
-    }
-
-    pub fn set_workspace_mode(&mut self, mode: WorkspaceMode) -> bool {
-        self.focused_monitor_mut()
-            .is_some_and(|monitor| monitor.active_mut().set_mode(mode))
     }
 
     /// Acts on the layout around the keyboard window.
@@ -1956,6 +1852,10 @@ impl Shell {
         }
 
         self.assert_focus_invariants();
+        assert!(
+            self.scope != WorkspaceScope::Shared || self.workspaces_are_linked(),
+            "shared workspaces are out of step across the shown monitors"
+        );
 
         // `monitor_at` returns the first monitor containing a point, so two
         // that overlap would make "which output is this on?" order-dependent.

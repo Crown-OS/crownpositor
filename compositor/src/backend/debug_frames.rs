@@ -146,12 +146,12 @@ pub fn script(state: &mut State) {
             if let Some(index) = action
                 .strip_prefix("ws@")
                 .and_then(|n| n.parse::<usize>().ok())
-                && let Some(monitor) = state.shell.focused_monitor_mut()
+                && let Some(output) = state.shell.focused_monitor().map(|monitor| monitor.id())
             {
-                while monitor.workspaces().len() <= index {
-                    monitor.add_workspace();
-                }
-                monitor.switch_to(crate::shell::workspace::WorkspaceRef::Index(index));
+                state.shell.ensure_workspace(output, index);
+                state
+                    .shell
+                    .switch_workspace(crate::shell::workspace::WorkspaceRef::Index(index));
             }
             let mut parts = action.split('@');
             let button = match parts.next() {

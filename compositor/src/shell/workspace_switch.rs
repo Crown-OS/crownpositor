@@ -151,12 +151,23 @@ impl WorkspaceSwitch {
     /// is where the caller owes it. Tearing the start renumbers every
     /// workspace up by one, so the switch shifts itself to match.
     pub fn drag_to(&mut self, travelled: f64, last: usize) -> Option<Edge> {
-        let drag = self.drag.as_mut()?;
+        let drag = self.drag?;
+        let torn = Edge::torn(drag.origin - travelled, last as f64).filter(|_| !drag.torn);
+        self.drag_torn(travelled, last, torn);
+        torn
+    }
+
+    /// [`Self::drag_to`] for a viewport that follows another one's swipe:
+    /// whether the band tears is the leading viewport's decision, so every
+    /// follower grows its workspace list at the same moment.
+    pub fn drag_torn(&mut self, travelled: f64, last: usize, torn: Option<Edge>) {
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
         let mut wanted = drag.origin - travelled;
         let mut last = last as f64;
 
-        let torn = Edge::torn(wanted, last).filter(|_| !drag.torn);
-        if let Some(edge) = torn {
+        if let Some(edge) = torn.filter(|_| !drag.torn) {
             drag.torn = true;
             last += 1.0;
             if edge == Edge::Start {
@@ -171,7 +182,6 @@ impl WorkspaceSwitch {
             Some(_) => self.position.set_target(pinned),
             None => self.position.hold(pinned),
         }
-        torn
     }
 
     /// Lets go. `velocity` is the fingers' speed in pages per second, positive

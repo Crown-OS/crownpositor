@@ -92,7 +92,12 @@ impl State {
                 self.shell.move_focused_to_workspace(target, follow);
             }
             Action::CreateWorkspace => {
-                if let Some(index) = self.shell.create_workspace() {
+                if let Some(index) = self
+                    .shell
+                    .focused_monitor()
+                    .map(|monitor| monitor.id())
+                    .and_then(|output| self.shell.create_workspace(output))
+                {
                     self.shell.switch_workspace(WorkspaceRef::Index(index));
                     self.shell.focus_keyboard_on_focused();
                 }
@@ -288,6 +293,8 @@ impl State {
             .set_choreography(Choreography::of(new.appearance.minimize_effect));
         self.shell
             .set_primary_output(new.compositor.primary_output.clone());
+        self.shell
+            .set_workspace_scope(new.compositor.workspace_scope);
 
         if self.input.cursor.set_theme(&new.appearance.cursor_theme) {
             self.queue_pointer_redraw();
@@ -352,6 +359,10 @@ impl State {
             Update::PrimaryOutput(primary_output) => {
                 self.shell.set_primary_output(primary_output.clone());
                 config.compositor.primary_output = primary_output;
+            }
+            Update::WorkspaceScope(scope) => {
+                config.compositor.workspace_scope = scope;
+                self.shell.set_workspace_scope(scope);
             }
             Update::WindowRules(rules) => {
                 config.window_rules = rules;

@@ -9,11 +9,7 @@ use smithay::utils::{Logical, Point};
 
 use spacecontrol::interaction::{Release, Target};
 
-use crate::{
-    shell::{Location, workspace::WorkspaceRef},
-    state::State,
-    utils::id::OutputId,
-};
+use crate::{shell::Location, state::State, utils::id::OutputId};
 
 impl State {
     /// Whether any output is showing the overview, which is what makes the rest
@@ -125,14 +121,14 @@ impl State {
                 }
             }
             Release::Click(Target::Workspace(index)) => {
-                monitor.switch_to(WorkspaceRef::Index(index));
                 monitor.spacecontrol_mut().close();
+                self.shell.activate_index(id, index);
             }
             // A new workspace is added and shown in the bar, not switched to:
             // the user is arranging, and usually has windows to drop on it.
             Release::Click(Target::NewWorkspace) => {
-                monitor.add_workspace();
-                monitor.with_spacecontrol(|space, monitor| space.resolve(monitor));
+                self.shell.create_workspace(id);
+                self.resolve_overview(id);
             }
             Release::Click(Target::Close(index)) => {
                 if let Some(workspace) = monitor.workspaces().get(index).map(|it| it.id()) {
@@ -144,8 +140,9 @@ impl State {
                 self.drop_window(id, window, workspace);
             }
             Release::DroppedOnNew { window } => {
-                let workspace = monitor.add_workspace();
-                self.drop_window(id, window, workspace);
+                if let Some(workspace) = self.shell.create_workspace(id) {
+                    self.drop_window(id, window, workspace);
+                }
             }
             Release::Returned {
                 window,
@@ -155,8 +152,8 @@ impl State {
                 .spacecontrol_mut()
                 .return_window(window, from, velocity),
             Release::Reordered { from, to, .. } => {
-                monitor.move_workspace(from, to);
-                monitor.with_spacecontrol(|space, monitor| space.resolve(monitor));
+                self.shell.move_workspace(id, from, to);
+                self.resolve_overview(id);
             }
             Release::None => {}
         }

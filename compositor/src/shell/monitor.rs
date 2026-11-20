@@ -258,7 +258,14 @@ impl Monitor {
         self.workspaces.iter().position(|ws| ws.id() == id)
     }
 
-    pub(super) fn push_workspace(&mut self, workspace: Workspace) {
+    /// Appends a workspace from elsewhere, fitted to this monitor.
+    pub(super) fn push_workspace(&mut self, mut workspace: Workspace) {
+        workspace.set_output(self.id);
+        workspace.set_area(
+            shrink(self.usable, self.gaps.outer),
+            Rectangle::from_size(self.config.logical_size()),
+        );
+        workspace.set_gaps(self.gaps);
         self.workspaces.push(workspace);
     }
 
@@ -271,15 +278,22 @@ impl Monitor {
     }
 
     /// The workspace at `index`, appending fresh ones until it exists.
-    pub fn ensure_workspace(&mut self, index: usize) -> WorkspaceId {
+    pub(super) fn ensure_workspace(&mut self, index: usize) -> WorkspaceId {
         while self.workspaces.len() <= index {
             self.add_workspace();
         }
         self.workspaces[index].id()
     }
 
+    /// Appends empty workspaces until there are `count`. Never removes one.
+    pub(super) fn pad_to(&mut self, count: usize) {
+        if let Some(last) = count.checked_sub(1) {
+            self.ensure_workspace(last);
+        }
+    }
+
     /// Appends a fresh workspace and returns its index.
-    pub fn add_workspace(&mut self) -> usize {
+    pub(super) fn add_workspace(&mut self) -> usize {
         let workspace = self.fresh_workspace();
         self.workspaces.push(workspace);
         self.workspaces.len() - 1
@@ -305,7 +319,7 @@ impl Monitor {
 
     /// Moves the workspace at `from` to `to`, shifting the ones between. The
     /// workspace on screen stays on screen, whatever its number becomes.
-    pub fn move_workspace(&mut self, from: usize, to: usize) -> bool {
+    pub(super) fn move_workspace(&mut self, from: usize, to: usize) -> bool {
         let last = self.workspaces.len().saturating_sub(1);
         if from > last || from == to {
             return false;
@@ -418,15 +432,29 @@ impl Monitor {
         self.switch.is_dragging()
     }
 
-    pub fn begin_switch_gesture(&mut self) {
+    pub(super) fn begin_switch_gesture(&mut self) {
         self.switch.begin();
     }
 
     /// `travelled` is the fingers' cumulative horizontal travel in pages,
-    /// positive rightward. Pulling hard past either end makes a workspace there.
-    pub fn update_switch_gesture(&mut self, travelled: f64) {
+    /// positive rightward. Pulling hard past either end makes a workspace
+    /// there; the returned edge is where.
+    pub(super) fn update_switch_gesture(&mut self, travelled: f64) -> Option<Edge> {
         let last = self.workspaces.len().saturating_sub(1);
-        match self.switch.drag_to(travelled, last) {
+        let torn = self.switch.drag_to(travelled, last);
+        self.grow_at(torn);
+        torn
+    }
+
+    /// Follows a swipe another monitor leads, tearing where it tore.
+    pub(super) fn follow_switch_gesture(&mut self, travelled: f64, torn: Option<Edge>) {
+        let last = self.workspaces.len().saturating_sub(1);
+        self.switch.drag_torn(travelled, last, torn);
+        self.grow_at(torn);
+    }
+
+    fn grow_at(&mut self, edge: Option<Edge>) {
+        match edge {
             Some(Edge::Start) => self.prepend_workspace(),
             Some(Edge::End) => {
                 self.add_workspace();
@@ -438,13 +466,13 @@ impl Monitor {
     /// Ends the swipe and makes whichever workspace it landed on active, while
     /// the spring — carrying the speed already on screen — covers the rest of
     /// the distance. `velocity` is in pages per second, positive rightward.
-    pub fn end_switch_gesture(&mut self, velocity: f64) -> bool {
+    pub(super) fn end_switch_gesture(&mut self, velocity: f64) -> bool {
         let last = self.workspaces.len().saturating_sub(1);
         let target = self.switch.release(velocity, last);
         self.commit(target)
     }
 
-    pub fn cancel_switch_gesture(&mut self) {
+    pub(super) fn cancel_switch_gesture(&mut self) {
         self.switch.cancel(self.active);
     }
 
@@ -636,12 +664,7 @@ impl Monitor {
         }
     }
 
-    pub fn switch_to(&mut self, target: WorkspaceRef) -> bool {
-        self.resolve(target)
-            .is_some_and(|index| self.activate(index))
-    }
-
-    pub fn activate(&mut self, index: usize) -> bool {
+    pub(super) fn activate(&mut self, index: usize) -> bool {
         let index = index.min(self.workspaces.len().saturating_sub(1));
         self.switch.animate_to(index);
         self.commit(index)
@@ -663,6 +686,16 @@ impl Monitor {
 
     pub fn previous_index(&self) -> usize {
         self.previous
+    }
+
+    /// Shows the workspace at `active`, sliding there, and remembers
+    /// `previous` as where the user came from. Does nothing when both already
+    /// hold, so it can run on every refresh without disturbing a swipe.
+    pub(super) fn align_to(&mut self, active: usize, previous: usize) {
+        if self.active != active {
+            self.activate(active);
+        }
+        self.previous = previous.min(self.workspaces.len().saturating_sub(1));
     }
 }
 

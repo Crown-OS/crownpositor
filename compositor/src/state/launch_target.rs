@@ -81,10 +81,10 @@ impl State {
             }
             LaunchTarget::Headless => self.headless_location(),
             LaunchTarget::Workspace(index) => {
-                let monitor = self.shell.focused_monitor_mut()?;
+                let output = self.shell.focused_monitor()?.id();
                 Some(Location {
-                    output: monitor.id(),
-                    workspace: monitor.ensure_workspace(*index),
+                    output,
+                    workspace: self.shell.ensure_workspace(output, *index)?,
                 })
             }
         }
