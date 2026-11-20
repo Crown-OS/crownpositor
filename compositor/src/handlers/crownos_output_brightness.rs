@@ -31,6 +31,7 @@ impl OutputBrightnessHandler for State {
     fn set_output_brightness(&mut self, output: &Output, level: u32) -> Option<OutputBrightness> {
         let id = self.shell.monitor(output)?.id();
         let reading = self.brightness.set(id, level)?;
+        self.remember_software_brightness(reading);
         Some(on_the_wire(reading))
     }
 

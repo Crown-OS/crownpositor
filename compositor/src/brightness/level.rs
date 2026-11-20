@@ -60,10 +60,6 @@ pub fn stepped(level: u32, step: Step) -> u32 {
 
 /// The `software_brightness` entry for a software level: unset at full, so a
 /// monitor brought back to full loses its old dim.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used once the software dim lands")
-)]
 pub fn software_share(level: u32) -> Option<f64> {
     (level < FULL).then(|| f64::from(level) / f64::from(FULL))
 }

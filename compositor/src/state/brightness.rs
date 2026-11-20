@@ -4,7 +4,7 @@
 use smithay::output::Output;
 
 use crate::{
-    brightness::{Device, FULL, Operation, Outcome, ProbeTarget, Reading, software_level},
+    brightness::{Control, Device, FULL, Operation, Outcome, ProbeTarget, Reading, software_level},
     controls::{Gauge, Level, Step},
     shell::output_kind::OutputKind,
     state::State,
@@ -82,11 +82,19 @@ impl State {
             return;
         };
         self.brightness_changed(output, reading);
+        self.remember_software_brightness(reading);
         self.common.controls.show(Level {
             gauge: Gauge::Display,
             percent: (reading.level * 100 / FULL) as u8,
             muted: false,
         });
+    }
+
+    /// Saves a software level the user set; hardware keeps its own.
+    pub fn remember_software_brightness(&mut self, reading: Reading) {
+        if reading.control == Control::Software {
+            self.schedule_persist();
+        }
     }
 
     fn brightness_changed(&mut self, output: OutputId, reading: Reading) {

@@ -71,6 +71,7 @@ pub fn run() -> anyhow::Result<Exit> {
             state.refresh_ext_workspaces();
             state.refresh_workspace_mode();
             state.refresh_output_info();
+            state.apply_software_dim();
             state.refresh_preferred_descriptions();
             state.sync_window_directory();
             state.refresh_virtual_output_titles();

@@ -25,6 +25,7 @@ use protocols::gamma_control::GammaRamps;
 
 use crate::{
     color::{night_light, output::OutputColor},
+    shell::monitor::output_id,
     state::State,
 };
 
@@ -113,9 +114,18 @@ impl State {
         }
     }
 
-    /// The share of full brightness `output` keeps.
-    pub fn output_dim(&self, _output: &Output) -> f64 {
-        night_light::dim(&self.config.current.display)
+    /// The share of full brightness `output` keeps: its software level, or
+    /// all of it when hardware holds its brightness.
+    pub fn output_dim(&self, output: &Output) -> f64 {
+        self.brightness.software_dim(output_id(output))
+    }
+
+    /// Writes the ramps once after a burst of software level changes.
+    pub fn apply_software_dim(&mut self) {
+        if self.brightness.take_software_changed() {
+            tracing::debug!("applying the software dim");
+            self.apply_output_color();
+        }
     }
 
     /// Writes `output`'s ramp when it differs from what its CRTC holds,

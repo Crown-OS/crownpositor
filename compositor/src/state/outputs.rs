@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use calloop::timer::{TimeoutAction, Timer};
-use config::{Compositor, OutputLayout, Vrr};
+use config::{Compositor, OutputLayout, OutputSetting, Vrr};
 use protocols::output_management::{
     AdaptiveSync, HeadConfig, HeadId, HeadSnapshot, ModeRequest, ModeSnapshot, OutputConfigRequest,
     VrrSupport,
@@ -21,6 +21,7 @@ use smithay::{
 };
 
 use crate::{
+    brightness::{Control, Reading, software_share},
     shell::{
         monitor::{Monitor, OutputConfig, logical_size},
         output_kind::NestedPersistence,
@@ -241,10 +242,11 @@ impl State {
 
     /// Queues a write-back of the current output state to `compositor.ron`.
     ///
-    /// Only ever called after a *successful apply* — never on a test, and
-    /// never on a hotplug that changed no setting — because the user may have
-    /// the file open in an editor and the compositor would win.
-    fn schedule_persist(&mut self) {
+    /// Only ever called after a *successful apply* or a software brightness
+    /// the user set — never on a test, and never on a hotplug that changed no
+    /// setting — because the user may have the file open in an editor and the
+    /// compositor would win.
+    pub(crate) fn schedule_persist(&mut self) {
         if let Some(token) = self.config.persist.take() {
             self.common.event_loop_handle.remove(token);
         }
@@ -322,6 +324,7 @@ impl State {
             entry
                 .position
                 .get_or_insert((config.position.x, config.position.y));
+            record_software_brightness(entry, self.brightness.reading(monitor.id()));
         }
     }
 
@@ -566,6 +569,14 @@ impl State {
     }
 }
 
+/// Keeps a software level in its entry. Backlights and DDC/CI monitors keep
+/// their own level, so their entry is left alone.
+fn record_software_brightness(entry: &mut OutputSetting, reading: Reading) {
+    if reading.control == Control::Software {
+        entry.software_brightness = software_share(reading.level);
+    }
+}
+
 fn resolve_head(
     id: &HeadId,
     config: &HeadConfig,
@@ -798,10 +809,11 @@ fn description(config: &OutputConfig) -> String {
 
 #[cfg(test)]
 mod tests {
-    use config::OutputSetting;
-
     use super::*;
-    use crate::shell::output_kind::OutputKind;
+    use crate::{
+        brightness::{FULL, software_level},
+        shell::output_kind::OutputKind,
+    };
 
     fn mode(width: i32, height: i32, refresh: i32) -> Mode {
         Mode {
@@ -1034,6 +1046,41 @@ mod tests {
         assert_eq!(settings[0].name, "eDP-1", "its spelling must be kept");
         assert_eq!(settings[0].scale, Some(2.0), "unrelated fields survive");
         assert_eq!(settings[0].enabled, Some(false));
+    }
+
+    #[test]
+    fn a_software_level_is_saved_with_its_monitor_and_found_again() {
+        let mut compositor = Compositor::default();
+        let dimmed = Reading {
+            control: Control::Software,
+            level: 4200,
+        };
+        record_software_brightness(compositor.output_entry("HDMI-A-1", "Acme X 1"), dimmed);
+        let saved = |compositor: &Compositor| {
+            compositor
+                .output("HDMI-A-1", "Acme X 1")
+                .and_then(|setting| setting.software_brightness)
+        };
+        assert_eq!(saved(&compositor), Some(0.42));
+        assert_eq!(software_level(saved(&compositor)), 4200);
+
+        let ddc = Reading {
+            control: Control::Ddc,
+            level: 3000,
+        };
+        record_software_brightness(compositor.output_entry("HDMI-A-1", "Acme X 1"), ddc);
+        assert_eq!(
+            saved(&compositor),
+            Some(0.42),
+            "hardware keeps its own level"
+        );
+
+        let full = Reading {
+            control: Control::Software,
+            level: FULL,
+        };
+        record_software_brightness(compositor.output_entry("HDMI-A-1", "Acme X 1"), full);
+        assert_eq!(saved(&compositor), None, "full brightness forgets the dim");
     }
 
     #[test]

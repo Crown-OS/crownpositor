@@ -39,11 +39,6 @@ pub fn warmth(display: &Display) -> f64 {
     }
 }
 
-/// The share of full brightness `display.ron` asks every output to keep.
-pub fn dim(display: &Display) -> f64 {
-    display.brightness / 100.0
-}
-
 /// The ramps for a night light `warmth` and a `dim`, or `None` when they come
 /// to "leave it alone".
 ///
@@ -122,10 +117,10 @@ mod tests {
 
     const SIZE: u32 = 256;
 
-    fn ramps(size: u32, display: &Display) -> Option<GammaRamps> {
+    fn ramps(size: u32, dim: f64, display: &Display) -> Option<GammaRamps> {
         OutputColor {
             warmth: warmth(display),
-            dim: dim(display),
+            dim,
             ..OutputColor::new(false)
         }
         .ramps(size)
@@ -133,8 +128,8 @@ mod tests {
 
     /// The single ramp every output shared before colour was per output,
     /// kept to pin the per-output ramps to it.
-    fn shared_ramps(size: u32, display: &Display) -> Option<GammaRamps> {
-        let brightness = (display.brightness / 100.0).clamp(MIN_BRIGHTNESS, 1.0);
+    fn shared_ramps(size: u32, dim: f64, display: &Display) -> Option<GammaRamps> {
+        let brightness = dim.clamp(MIN_BRIGHTNESS, 1.0);
         let warmth = if display.night_light {
             (display.night_light_warmth / 100.0).clamp(0.0, 1.0)
         } else {
@@ -155,14 +150,14 @@ mod tests {
     #[test]
     fn per_output_ramps_match_the_shared_ramp_they_replace() {
         for size in [0, 2, 256, 1024] {
-            for brightness in [0.0, 10.0, 50.0, 80.0, 100.0, 120.0] {
+            for dim in [0.0, 0.1, 0.5, 0.8, 1.0, 1.2] {
                 for night_light in [false, true] {
                     for warmth in [-10.0, 0.0, 35.0, 100.0, 150.0] {
-                        let settings = display(brightness, night_light, warmth);
+                        let settings = display(night_light, warmth);
                         assert_eq!(
-                            ramps(size, &settings),
-                            shared_ramps(size, &settings),
-                            "{settings:?} at {size} entries"
+                            ramps(size, dim, &settings),
+                            shared_ramps(size, dim, &settings),
+                            "{settings:?} dimmed to {dim} at {size} entries"
                         );
                     }
                 }
@@ -170,31 +165,31 @@ mod tests {
         }
     }
 
-    fn display(brightness: f64, night_light: bool, warmth: f64) -> Display {
+    fn display(night_light: bool, warmth: f64) -> Display {
         Display {
-            brightness,
             night_light,
             night_light_warmth: warmth,
+            ..Display::default()
         }
     }
 
     #[test]
     fn full_brightness_without_night_light_asks_for_nothing() {
-        assert!(ramps(SIZE, &display(100.0, false, 50.0)).is_none());
+        assert!(ramps(SIZE, 1.0, &display(false, 50.0)).is_none());
         assert!(
-            ramps(SIZE, &display(100.0, true, 0.0)).is_none(),
+            ramps(SIZE, 1.0, &display(true, 0.0)).is_none(),
             "night light at zero warmth is night light doing nothing"
         );
     }
 
     #[test]
     fn an_output_with_no_programmable_gamma_gets_no_ramps() {
-        assert!(ramps(0, &display(50.0, true, 50.0)).is_none());
+        assert!(ramps(0, 0.5, &display(true, 50.0)).is_none());
     }
 
     #[test]
     fn brightness_scales_every_channel_alike() {
-        let ramps = ramps(SIZE, &display(50.0, false, 0.0)).expect("dimming needs a ramp");
+        let ramps = ramps(SIZE, 0.5, &display(false, 0.0)).expect("dimming needs a ramp");
 
         assert_eq!(ramps.red, ramps.green);
         assert_eq!(ramps.green, ramps.blue);
@@ -205,14 +200,14 @@ mod tests {
 
     #[test]
     fn a_black_screen_is_not_reachable() {
-        let ramps = ramps(SIZE, &display(0.0, false, 0.0)).expect("dimming needs a ramp");
+        let ramps = ramps(SIZE, 0.0, &display(false, 0.0)).expect("dimming needs a ramp");
         let peak = f64::from(ramps.red[255]) / f64::from(u16::MAX);
         assert!((peak - MIN_BRIGHTNESS).abs() < 0.01);
     }
 
     #[test]
     fn warmth_holds_red_back_and_takes_blue_away() {
-        let ramps = ramps(SIZE, &display(100.0, true, 100.0)).expect("warmth needs a ramp");
+        let ramps = ramps(SIZE, 1.0, &display(true, 100.0)).expect("warmth needs a ramp");
 
         assert_eq!(ramps.red[255], u16::MAX, "the warm end never dims red");
         assert!(ramps.blue[255] < ramps.green[255]);
@@ -221,7 +216,7 @@ mod tests {
 
     #[test]
     fn a_ramp_never_falls() {
-        let ramps = ramps(SIZE, &display(70.0, true, 60.0)).expect("both need a ramp");
+        let ramps = ramps(SIZE, 0.7, &display(true, 60.0)).expect("both need a ramp");
 
         for channel in [&ramps.red, &ramps.green, &ramps.blue] {
             assert_eq!(channel.len(), SIZE as usize);
