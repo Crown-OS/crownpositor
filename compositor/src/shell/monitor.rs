@@ -269,6 +269,15 @@ impl Monitor {
         self.workspaces.push(workspace);
     }
 
+    /// The empty workspace a monitor starts with, while it is still the only
+    /// one: an adopted list may take its place.
+    pub(super) fn lone_fresh_workspace(&self) -> Option<WorkspaceId> {
+        match self.workspaces.as_slice() {
+            [only] if only.is_empty() => Some(only.id()),
+            _ => None,
+        }
+    }
+
     /// Empties the list. Only used while dismantling an unplugged monitor.
     pub(super) fn drain_workspaces(&mut self) -> Vec<Workspace> {
         self.active = 0;

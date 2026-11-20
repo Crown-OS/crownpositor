@@ -10,6 +10,7 @@ pub mod gaming;
 pub mod grab;
 pub mod identity;
 pub mod lock_screen;
+pub mod migration;
 pub mod monitor;
 pub mod morph;
 pub mod output_kind;
@@ -68,6 +69,7 @@ use crate::{
         decoration::resize_edge,
         grab::{moves_left, moves_top},
         lock_screen::LockScreen,
+        migration::Migration,
         monitor::{
             ConnectorId, Monitor, OutputConfig, OutputDescriptor, Presence, output_from_descriptor,
             output_id,
@@ -262,7 +264,7 @@ pub struct Shell {
     /// Workspaces rescued from the last output to be unplugged. Without this, a
     /// lid close on a single-output session would destroy every window.
     headless: Vec<Workspace>,
-    migrated: HashMap<ConnectorId, Vec<WorkspaceId>>,
+    migrated: HashMap<ConnectorId, Migration>,
 
     surface_to_window: HashMap<WlSurface, WindowId>,
     window_to_location: HashMap<WindowId, Location>,
@@ -486,19 +488,17 @@ impl Shell {
         self.arrange_outputs();
         self.refresh_usable(&output);
         self.readvertise_output(&output);
+        self.normalize_all();
 
         output
     }
 
     /// The only way an `Output` leaves.
     pub fn remove_output(&mut self, dh: &DisplayHandle, output: &Output) {
-        let Some(index) = self
-            .monitors
-            .iter()
-            .position(|monitor| monitor.id() == output_id(output))
-        else {
+        let removed = output_id(output);
+        if self.monitor_by_id(removed).is_none() {
             return;
-        };
+        }
 
         // Layer surfaces cannot migrate: a `zwlr_layer_surface_v1` is bound to
         // one output for its lifetime.
@@ -508,37 +508,13 @@ impl Shell {
                 layer.layer_surface().send_close();
             }
         }
-        self.layer_to_output
-            .retain(|_, owner| *owner != output_id(output));
+        self.layer_to_output.retain(|_, owner| *owner != removed);
 
-        let removed = output_id(output);
-        let mut monitor = self.monitors.remove(index);
-        let survivor = self
-            .focused
-            .filter(|focused| *focused != removed)
-            .or_else(|| self.primary().map(Monitor::id));
-        let connector = monitor.config().connector.clone();
-
-        // An empty workspace carries nothing worth moving to another screen.
-        let mut orphans = monitor.drain_workspaces();
-        orphans.retain(|workspace| !workspace.is_empty());
-        for tile in orphans.iter().flat_map(Workspace::tiles) {
-            tile.window().output_leave(output);
-        }
-
-        match survivor {
-            Some(target) => {
-                let moved: Vec<WorkspaceId> = orphans.iter().map(Workspace::id).collect();
-                self.migrated.insert(connector, moved);
-                for workspace in orphans {
-                    self.adopt(workspace, target);
-                }
-            }
-            // No survivor: park them rather than destroying every window.
-            None => self.headless.extend(orphans),
-        }
-
-        if let Some(global) = monitor.take_global() {
+        let survivor = self.survivor_for(removed);
+        if let Some(global) = self
+            .dismantle(removed, survivor)
+            .and_then(|mut monitor| monitor.take_global())
+        {
             dh.remove_global::<State>(global);
         }
         self.refresh_identities();
@@ -546,65 +522,6 @@ impl Shell {
 
         self.arrange_outputs();
         self.normalize_all();
-    }
-
-    /// Moves a rescued workspace onto the end of a monitor's list.
-    fn adopt(&mut self, workspace: Workspace, target: OutputId) {
-        let ids: Vec<WindowId> = workspace.tiles().iter().map(Tile::id).collect();
-        let workspace_id = workspace.id();
-
-        let Some(monitor) = self.monitor_by_id_mut(target) else {
-            self.headless.push(workspace);
-            return;
-        };
-
-        let mut workspace = workspace;
-        workspace.set_output(target);
-        let output = monitor.output().clone();
-        monitor.push_workspace(workspace);
-        self.readvertise_output(&output);
-
-        for id in ids {
-            self.window_to_location.insert(
-                id,
-                Location {
-                    output: target,
-                    workspace: workspace_id,
-                },
-            );
-        }
-    }
-
-    fn reclaim_migrated(&mut self, connector: &ConnectorId, target: OutputId) {
-        let Some(ids) = self.migrated.remove(connector) else {
-            return;
-        };
-        for id in ids {
-            let Some(source) = self
-                .monitors
-                .iter()
-                .position(|monitor| monitor.index_of(id).is_some())
-            else {
-                continue;
-            };
-            if self.monitors[source].id() == target {
-                continue;
-            }
-            let Some(workspace) = self.monitors[source].take_workspace(id) else {
-                continue;
-            };
-            let source_output = self.monitors[source].output();
-            for tile in workspace.tiles() {
-                tile.window().output_leave(source_output);
-            }
-            self.adopt(workspace, target);
-        }
-    }
-
-    fn adopt_headless(&mut self, target: OutputId) {
-        for workspace in std::mem::take(&mut self.headless) {
-            self.adopt(workspace, target);
-        }
     }
 
     /// Re-derives one output's usable area from its layer map.

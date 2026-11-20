@@ -5,7 +5,7 @@ use smithay::utils::{Logical, Point};
 
 use crate::{
     shell::{Shell, monitor::Monitor, output_kind::OutputKind},
-    utils::panel,
+    utils::{id::OutputId, panel},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -49,7 +49,22 @@ pub fn choose_primary(candidates: &[PrimaryCandidate], configured: Option<&str>)
 impl Shell {
     /// The primary among the shown monitors, decided afresh on every call.
     pub fn primary(&self) -> Option<&Monitor> {
-        let shown: Vec<&Monitor> = self.shown_monitors().collect();
+        self.primary_among(self.shown_monitors())
+    }
+
+    /// The primary the shown monitors would have without `excluded`.
+    pub(super) fn primary_besides(&self, excluded: OutputId) -> Option<&Monitor> {
+        self.primary_among(
+            self.shown_monitors()
+                .filter(move |monitor| monitor.id() != excluded),
+        )
+    }
+
+    fn primary_among<'a>(
+        &'a self,
+        monitors: impl Iterator<Item = &'a Monitor>,
+    ) -> Option<&'a Monitor> {
+        let shown: Vec<&Monitor> = monitors.collect();
         let candidates: Vec<PrimaryCandidate> = shown
             .iter()
             .map(|monitor| PrimaryCandidate {

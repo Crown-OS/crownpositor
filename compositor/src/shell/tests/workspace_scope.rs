@@ -252,3 +252,39 @@ fn ext_workspace_lists_one_group_per_shown_monitor_in_either_scope() -> anyhow::
     }
     Ok(())
 }
+
+#[test]
+fn a_monitor_plugged_into_a_shared_desk_joins_the_workspace_on_screen() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::Shared)?;
+    let focused = desk.focused()?;
+    desk.fixture.shell.ensure_workspace(focused, 2);
+    desk.fixture.shell.activate_index(focused, 2);
+
+    let late = desk.fixture.plug("DP-4", (1920, 1080));
+    desk.refresh();
+
+    let monitor = desk.fixture.monitor(&late)?;
+    assert_eq!((monitor.workspaces().len(), monitor.active_index()), (3, 2));
+    assert_eq!(desk.shape()?, [(3, 2), (3, 2), (3, 2), (1, 0)]);
+    Ok(())
+}
+
+#[test]
+fn unplugging_the_middle_shared_monitor_keeps_the_others_in_step() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::Shared)?;
+    let focused = desk.focused()?;
+    desk.fixture.shell.ensure_workspace(focused, 1);
+    desk.fixture.shell.activate_index(focused, 1);
+    let middle = desk.shown[1].clone();
+
+    desk.fixture.unplug(&middle);
+    desk.refresh();
+    let again = desk.fixture.plug("DP-2", (1920, 1080));
+    desk.refresh();
+
+    for output in [&desk.shown[0], &again, &desk.shown[2]] {
+        let monitor = desk.fixture.monitor(output)?;
+        assert_eq!((monitor.workspaces().len(), monitor.active_index()), (2, 1));
+    }
+    Ok(())
+}
