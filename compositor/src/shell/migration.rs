@@ -351,7 +351,7 @@ impl Shell {
             }
             Migration::Merged(windows) => self.reclaim_merged(&windows, target),
         }
-        self.restore_home_rects(&home_rects);
+        self.restore_home_rects(&home_rects, target);
     }
 
     fn reclaim_workspaces(&mut self, ids: &[WorkspaceId], target: OutputId) {

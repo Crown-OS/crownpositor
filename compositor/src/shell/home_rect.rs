@@ -7,11 +7,13 @@
 use smithay::utils::{Logical, Rectangle};
 
 use crate::{
+    layout::placement,
     shell::{
         Shell,
         migration::{Departing, Migration},
+        workspace::Workspace,
     },
-    utils::id::WindowId,
+    utils::id::{OutputId, WindowId},
 };
 
 /// A floating window's rect in the space of the monitor it left.
@@ -38,16 +40,40 @@ pub fn home_rects(
         .collect()
 }
 
+/// The home rects of the windows that are back on `target`. A window the
+/// user moved away while its monitor was gone stays where it was put.
+pub fn reclaimed<'a>(
+    homes: &'a [HomeRect],
+    target: OutputId,
+    output_of: impl Fn(WindowId) -> Option<OutputId> + 'a,
+) -> impl Iterator<Item = HomeRect> + 'a {
+    homes
+        .iter()
+        .copied()
+        .filter(move |(id, _)| output_of(*id) == Some(target))
+}
+
 impl Shell {
-    /// Puts each reclaimed window back where it sat before it left, when
-    /// that place still lies on its output.
-    pub(super) fn restore_home_rects(&mut self, homes: &[HomeRect]) {
-        for &(id, rect) in homes {
-            let fits = self
+    /// Puts each window reclaimed onto `target` back where it sat before it
+    /// left, when that place can still be reached on the output. A window
+    /// that sat partly off the screen goes back there too.
+    pub(super) fn restore_home_rects(&mut self, homes: &[HomeRect], target: OutputId) {
+        let back: Vec<HomeRect> = reclaimed(homes, target, |id| {
+            self.location(id).map(|location| location.output)
+        })
+        .collect();
+        for (id, rect) in back {
+            let Some(output_area) = self
                 .location(id)
                 .and_then(|location| self.workspace(location))
-                .is_some_and(|workspace| workspace.output_area().contains_rect(rect));
-            if let Some(tile) = self.tile_mut(id).filter(|_| fits) {
+                .map(Workspace::output_area)
+            else {
+                continue;
+            };
+            let Some(tile) = self.tile_mut(id) else {
+                continue;
+            };
+            if placement::keep_reachable(rect, output_area, tile.insets().top) == rect {
                 tile.set_floating_rect(rect);
                 self.mark_dirty(id);
             }
@@ -59,6 +85,18 @@ impl Shell {
 mod tests {
     use super::*;
     use crate::utils::id::WorkspaceId;
+
+    #[test]
+    fn only_the_windows_back_on_the_returning_monitor_go_home() {
+        let (back, moved_away) = (WindowId::next(), WindowId::next());
+        let (returning, survivor) = (OutputId::from_raw(2), OutputId::from_raw(3));
+        let homes = [(back, rect(36)), (moved_away, rect(80))];
+        let restored: Vec<HomeRect> = reclaimed(&homes, returning, |id| {
+            Some(if id == back { returning } else { survivor })
+        })
+        .collect();
+        assert_eq!(restored, vec![(back, rect(36))]);
+    }
 
     fn rect(y: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((8, y).into(), (217, 365).into())
