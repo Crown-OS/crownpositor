@@ -82,3 +82,6 @@ name = "data_control_probe"
 
 [[example]]
 name = "capture_sources"
+
+[[example]]
+name = "multi_monitor_probe"

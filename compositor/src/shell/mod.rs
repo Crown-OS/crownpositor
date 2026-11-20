@@ -24,6 +24,9 @@ pub mod windowcontrol;
 pub mod workspace;
 pub mod workspace_switch;
 
+#[cfg(test)]
+mod tests;
+
 use std::{collections::HashMap, time::Instant};
 
 use smithay::{
