@@ -75,7 +75,7 @@ impl State {
     pub fn launch_location(&mut self, target: &LaunchTarget) -> Option<Location> {
         match target {
             LaunchTarget::Output(name) => {
-                let monitor = self.shell.monitor_by_name(name)?;
+                let monitor = self.shell.monitor_named(name)?;
                 Some(Location {
                     output: monitor.id(),
                     workspace: monitor.active().id(),

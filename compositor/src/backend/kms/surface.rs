@@ -53,6 +53,7 @@ use smithay::{
 };
 
 use crate::rendering::{corners::CornerMemory, warp::WarpCanvases};
+use crate::utils::output_setting::output_setting;
 use crate::{
     backend::{
         frame_clock::FrameClock,
@@ -296,11 +297,11 @@ pub fn enable_head(
         },
     );
 
-    let deep_color = wants_deep_color(
-        config
-            .current
-            .output_setting(&head.name, head.identity.as_str()),
-    );
+    let deep_color = wants_deep_color(output_setting(
+        &config.current,
+        &head.name,
+        head.identity.as_str(),
+    ));
     let allocator = device.create_allocator(api, vulkan);
     let compositor = SurfaceCompositor::new(
         smithay::output::OutputModeSource::Auto(output.downgrade()),

@@ -65,6 +65,8 @@ pub struct CardNode {
 pub struct ProbeTarget {
     pub output: OutputId,
     pub card: CardNode,
+    /// The kernel's connector name, without a GPU address: sysfs knows the
+    /// connector as `cardN-<connector>`.
     pub connector: String,
     pub has_gamma: bool,
 }

@@ -17,6 +17,7 @@ pub mod map_focus;
 pub mod migration;
 pub mod monitor;
 pub mod morph;
+pub mod named_monitor;
 pub mod output_info;
 pub mod output_kind;
 pub mod output_move;
@@ -69,6 +70,7 @@ use crownos_config::schema::{WorkspaceScope, output_identity};
 use protocols::{crownos_app_icons::IconRef, crownos_surface_animation::SurfaceAnimations};
 use spacecontrol::animations::spring::SpringProfile;
 
+use crate::utils::output_setting::output_setting;
 use crate::{
     color::surfaces::DescribedSurfaces,
     handlers::seat::{KeyboardFocusTarget, PointerFocusTarget},
@@ -492,7 +494,7 @@ impl Shell {
         // `enabled` is deliberately not read here: a `Monitor` in the shell is
         // enabled by definition, and a head the config turns off must never be
         // brought up in the first place. The backend owns that decision.
-        if let Some(setting) = config.output_setting(&descriptor.name, connector.as_str()) {
+        if let Some(setting) = output_setting(config, &descriptor.name, connector.as_str()) {
             output_config.default_mode = setting.layout;
         }
         let returning = MigrationKey::of(&output_config);
@@ -585,7 +587,7 @@ impl Shell {
                 monitor.config().connector.as_str().to_owned(),
                 monitor.config().name.clone(),
             );
-            let setting = config.output_setting(&connector, &identity);
+            let setting = output_setting(config, &connector, &identity);
             let names = OutputNames {
                 identity: &identity,
                 connector: &connector,

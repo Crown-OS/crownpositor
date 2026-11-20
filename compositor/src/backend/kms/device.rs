@@ -30,6 +30,9 @@ pub struct Device {
     /// The node rendering happens on. Falls back to `node` for split
     /// display/render SoCs where the query fails.
     pub render_node: DrmNode,
+    /// Its udev `ID_PATH`, a PCI address for a PCI GPU, which a head name
+    /// carries when another GPU has a connector of the same name.
+    pub address: String,
     pub drm: DrmDevice,
     pub gbm: GbmDevice<DrmDeviceFd>,
     /// Tracks which connectors appeared/disappeared between udev `Changed`

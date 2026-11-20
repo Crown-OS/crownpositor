@@ -3,6 +3,7 @@
 
 use smithay::output::Output;
 
+use crate::utils::{head_name::unqualified, output_setting::output_setting};
 use crate::{
     brightness::{Control, Device, FULL, Operation, Outcome, ProbeTarget, Reading, software_level},
     controls::{Gauge, Level, Step},
@@ -26,7 +27,7 @@ impl State {
                 let target = ProbeTarget {
                     output: id,
                     card,
-                    connector: config.name.clone(),
+                    connector: unqualified(&config.name).to_owned(),
                     has_gamma: self.backend.gamma_size(output).is_some(),
                 };
                 self.brightness.probe(target);
@@ -111,10 +112,12 @@ impl State {
     fn saved_software_level(&self, output: OutputId) -> u32 {
         let saved = self.shell.monitor_by_id(output).and_then(|monitor| {
             let config = monitor.config();
-            self.config
-                .current
-                .output_setting(&config.name, config.connector.as_str())?
-                .software_brightness
+            output_setting(
+                &self.config.current,
+                &config.name,
+                config.connector.as_str(),
+            )?
+            .software_brightness
         });
         software_level(saved)
     }

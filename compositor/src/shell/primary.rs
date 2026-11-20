@@ -5,7 +5,7 @@ use smithay::utils::{Logical, Point};
 
 use crate::{
     shell::{Shell, monitor::Monitor, output_kind::OutputKind},
-    utils::{id::OutputId, panel},
+    utils::{head_name, id::OutputId, panel},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -16,14 +16,19 @@ pub struct PrimaryCandidate<'a> {
     pub position: Point<i32, Logical>,
 }
 
-/// Which candidate is primary: the configured one, by connector or identity,
-/// then a built-in panel, then the top-left monitor (one that is not virtual
+/// Which candidate is primary: the configured one, by connector, identity
+/// or the connector name it had before it gained a GPU address, then a built-in panel, then the top-left monitor (one that is not virtual
 /// first).
 pub fn choose_primary(candidates: &[PrimaryCandidate], configured: Option<&str>) -> Option<usize> {
     let configured = configured.and_then(|name| {
         candidates
             .iter()
             .position(|candidate| candidate.connector == name || candidate.identity == name)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .position(|candidate| head_name::was_named(candidate.connector, name))
+            })
     });
     let internal_panel = || {
         candidates
@@ -113,6 +118,17 @@ mod tests {
         let candidates = [tablet, candidate("DP-1", 1920, 0)];
         assert_eq!(choose_primary(&candidates, None), Some(1));
         assert_eq!(choose_primary(&candidates[..1], None), Some(0));
+    }
+
+    #[test]
+    fn a_configured_old_name_finds_the_head_that_gained_a_gpu_address() {
+        let candidates = [
+            candidate("eDP-1", 0, 0),
+            candidate("HDMI-A-1@0000:01:00.0", 1920, 0),
+        ];
+        assert_eq!(choose_primary(&candidates, Some("HDMI-A-1")), Some(1));
+        let colliding = [candidates[1], candidate("HDMI-A-1", 3840, 0)];
+        assert_eq!(choose_primary(&colliding, Some("HDMI-A-1")), Some(1));
     }
 
     #[test]

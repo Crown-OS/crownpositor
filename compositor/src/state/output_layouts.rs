@@ -3,6 +3,7 @@
 
 use config::{OutputLayout, OutputSetting};
 
+use crate::utils::output_setting::output_setting;
 use crate::{
     shell::{Shell, output_kind::NestedPersistence},
     state::{BackendState, State},
@@ -113,7 +114,7 @@ impl State {
             connector,
         };
         should_enable(
-            self.config.current.output_setting(connector, identity),
+            output_setting(&self.config.current, connector, identity),
             self.matched_output_layout().as_ref(),
             names,
             &[],

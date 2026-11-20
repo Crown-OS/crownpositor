@@ -20,6 +20,7 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Transform},
 };
 
+use crate::utils::output_setting::{output_entry, output_setting};
 use crate::{
     brightness::{Control, Reading, software_share},
     shell::{
@@ -304,14 +305,12 @@ impl State {
             .iter()
             .filter(|head| head.kind.is_persisted(nested))
         {
-            on_disk
-                .output_entry(&head.connector, &head.identity)
-                .enabled = Some(false);
+            output_entry(on_disk, &head.connector, &head.identity).enabled = Some(false);
         }
 
         for monitor in self.shell.persisted_monitors(nested) {
             let config = monitor.config();
-            let entry = on_disk.output_entry(&config.name, config.connector.as_str());
+            let entry = output_entry(on_disk, &config.name, config.connector.as_str());
 
             // Explicitly on, so a monitor switched back on stops being
             // suppressed by a stale `enabled: false`.
@@ -479,7 +478,7 @@ impl State {
         configured_position(
             self.matched_output_layout().as_ref(),
             names,
-            self.config.current.output_setting(&head.name, identity),
+            output_setting(&self.config.current, &head.name, identity),
         )
         .map_or_else(
             || {

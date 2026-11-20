@@ -21,7 +21,7 @@ use smithay::{
 use crate::{
     backend::kms::props,
     shell::monitor::ConnectorId,
-    utils::{edid::EdidInfo, mode},
+    utils::{edid::EdidInfo, head_name, mode},
 };
 
 /// Whether this connector is currently driving an output.
@@ -49,9 +49,13 @@ impl HeadState {
 /// One connector, as the backend knows it.
 #[derive(Debug, Clone)]
 pub struct Head {
-    /// `"DP-1"`, built the same way the shell names the output.
+    /// `"DP-1"`, or `"DP-1@0000:01:00.0"` off the primary GPU when another
+    /// GPU has a `DP-1` too (see [`crate::utils::head_name`]).
     pub name: String,
     pub connector: connector::Handle,
+    pub interface: connector::Interface,
+    /// The `N` of the kernel's `IFACE-N`.
+    pub interface_id: u32,
     /// Survives a replug; what a config entry may be keyed on.
     pub identity: ConnectorId,
     pub edid: Option<EdidInfo>,
@@ -70,7 +74,9 @@ pub struct Head {
 }
 
 impl Head {
-    /// Reads everything about a connector that does not need a CRTC.
+    /// Reads everything about a connector that does not need a CRTC. The
+    /// head goes by the kernel's name until [`crate::backend::kms::KmsState::head_name`] says
+    /// otherwise.
     ///
     /// Returns `None` for a connector with no modes — one that is plugged in
     /// but cannot display anything is not something the user can configure.
@@ -80,7 +86,7 @@ impl Head {
             return None;
         }
 
-        let name = format!("{}-{}", info.interface().as_str(), info.interface_id());
+        let name = head_name::qualified(info.interface().as_str(), info.interface_id(), None);
         let edid = props::edid(drm, connector);
 
         let physical_mm = edid
@@ -116,6 +122,8 @@ impl Head {
         Some(Self {
             name,
             connector,
+            interface: info.interface(),
+            interface_id: info.interface_id(),
             identity,
             edid,
             modes,

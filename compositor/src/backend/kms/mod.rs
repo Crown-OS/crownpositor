@@ -16,6 +16,7 @@ pub mod deep_color;
 pub mod device;
 pub mod feedback;
 pub mod head;
+pub mod head_names;
 pub mod lighting;
 pub mod present_watch;
 pub mod props;
@@ -55,6 +56,7 @@ use smithay::{
 
 pub use crate::backend::kms::surface::redraw_queued_outputs;
 pub use crate::backend::kms::{device::Device, vulkan::VulkanContext};
+use crate::utils::output_setting::output_setting;
 use crate::{
     backend::render::{CrownRenderer, GraphicsApi, KmsGpuManager, KmsRenderer},
     state::{BackendState, State},
@@ -226,6 +228,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
     }
     if let Some(kms) = state.backend.kms() {
         kms.cold_plug = false;
+        kms.rename_heads_that_are_off();
     }
     bring_up_all(state);
     init_dmabuf(state)?;
@@ -422,6 +425,7 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
         Device {
             node,
             render_node,
+            address: head_names::device_address(node),
             drm,
             gbm,
             scanner: smithay_drm_extras::drm_scanner::DrmScanner::new(),
@@ -442,8 +446,14 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
         },
     );
 
+    // A connector on this GPU may share its name with a switched-off head
+    // on another one.
+    kms.rename_heads_that_are_off();
     // Pick up whatever monitors are already connected.
     device_changed(state, node);
+    if state.backend.kms().is_some_and(|kms| !kms.cold_plug) {
+        state.refresh_output_heads();
+    }
     Ok(())
 }
 
@@ -492,13 +502,16 @@ fn device_changed(state: &mut State, node: DrmNode) {
                     .map(|device| &device.drm)
                     .and_then(|drm| head::Head::probe(drm, handle));
 
-                let Some(probed) = probed else {
+                let Some(mut probed) = probed else {
                     tracing::warn!(
                         connector = connector.interface_id(),
                         "connector has no usable modes, ignoring"
                     );
                     continue;
                 };
+                if let Some(kms) = state.backend.kms() {
+                    probed.name = kms.head_name(node, probed.interface, probed.interface_id);
+                }
 
                 // A VR headset and friends: the kernel says this is not part
                 // of the desktop, so it must never be lit as an output. It is
@@ -673,11 +686,8 @@ fn light_head(state: &mut State, node: DrmNode, connector: connector::Handle) {
         return;
     };
 
-    let setting = state
-        .config
-        .current
-        .output_setting(&head.name, head.identity.as_str())
-        .cloned();
+    let setting =
+        output_setting(&state.config.current, &head.name, head.identity.as_str()).cloned();
 
     if let Some(bpc) = setting.as_ref().and_then(|setting| setting.max_bpc)
         && !head.accepts_max_bpc(bpc)
@@ -764,7 +774,9 @@ fn device_removed(state: &mut State, node: DrmNode) {
 
     kms.gpu_manager.as_mut().remove_node(&device.render_node);
     handle.remove(device.drm_token);
+    kms.rename_heads_that_are_off();
     tracing::info!(%node, "GPU removed");
+    state.refresh_output_heads();
 }
 
 /// Advertises explicit sync when the primary GPU can wait on timeline points.

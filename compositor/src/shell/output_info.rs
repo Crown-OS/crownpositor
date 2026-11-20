@@ -5,6 +5,7 @@ use config::{Config, OutputSetting};
 use crownos_config::schema::ShellRole;
 use protocols::crownos_output_info::{Capability, OutputInfo, Shell as ShellSurfaces, State};
 
+use crate::utils::output_setting::output_setting;
 use crate::{
     shell::{
         Shell,
@@ -53,7 +54,7 @@ impl Shell {
         let identity = self.identity(monitor.id())?;
         let output = monitor.config();
         let is_primary = primary == Some(monitor.id());
-        let setting = config.output_setting(&output.name, identity.as_str());
+        let setting = output_setting(config, &output.name, identity.as_str());
 
         let mut state = State::empty();
         if is_primary {

@@ -12,6 +12,7 @@ use smithay::{
     reexports::drm::control::connector,
 };
 
+use crate::utils::output_setting::output_setting;
 use crate::{
     backend::kms::{KmsState, enable_configured_head, surface::disable_head},
     state::State,
@@ -44,7 +45,7 @@ fn heads_to_rebuild(kms: &KmsState, config: &Config) -> Vec<(DrmNode, connector:
             device.heads.values().filter_map(move |head| {
                 let surface = device.surfaces.get(&head.state.crtc()?)?;
                 let wanted =
-                    wants_deep_color(config.output_setting(&head.name, head.identity.as_str()));
+                    wants_deep_color(output_setting(config, &head.name, head.identity.as_str()));
                 (surface.deep_color != wanted).then_some((*node, head.connector))
             })
         })

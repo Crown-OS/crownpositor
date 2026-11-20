@@ -43,14 +43,6 @@ impl Shell {
             }
         }
     }
-
-    /// A shown monitor by connector name or identity, the two ways the
-    /// config names outputs.
-    fn shown_monitor_named(&self, name: &str) -> Option<&Monitor> {
-        self.shown_monitors().find(|monitor| {
-            monitor.config().name == name || monitor.config().connector.as_str() == name
-        })
-    }
 }
 
 #[cfg(test)]
