@@ -205,3 +205,21 @@ fn the_alt_tab_stack_draws_from_the_linked_monitors() -> anyhow::Result<()> {
     assert_eq!(count(&per_monitor)?, 1);
     Ok(())
 }
+
+#[test]
+fn the_scope_is_the_focused_monitor_then_the_other_shown_ones() -> anyhow::Result<()> {
+    let mut shared = desk(WorkspaceScope::Shared)?;
+    shared.point_on_middle_monitor();
+    assert_eq!(
+        shared.fixture.shell.scope_monitors(),
+        [shared.id(1)?, shared.id(0)?, shared.id(2)?]
+    );
+
+    let mut per_monitor = desk(WorkspaceScope::PerMonitor)?;
+    per_monitor.point_on_middle_monitor();
+    assert_eq!(
+        per_monitor.fixture.shell.scope_monitors(),
+        [per_monitor.id(1)?]
+    );
+    Ok(())
+}
