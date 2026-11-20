@@ -1,10 +1,11 @@
 //! One output's Alt+Tab switcher.
 //!
 //! The `windowcontrol` crate keys its strip by [`WindowId`] and knows nothing
-//! about tiles; this is where the active workspace is fed into it and where the
-//! geometry the renderer and the pointer need is laid out once per frame.
+//! about tiles; this is where the workspaces in scope are fed into it and where
+//! the geometry the renderer and the pointer need is laid out once per frame.
 
 mod icons;
+mod scope;
 
 use std::collections::HashMap;
 
@@ -17,6 +18,7 @@ use spacecontrol::{animations::spring::SpringProfile, scene::Canvas};
 use windowcontrol::{Direction, Metrics, Slot, Switcher, layout};
 
 pub use icons::ICON_SIZE;
+pub use scope::SwitcherWindows;
 
 use crate::{
     shell::{monitor::Monitor, tile::Tile},
@@ -77,9 +79,14 @@ impl Default for WindowControl {
 }
 
 impl WindowControl {
-    /// Comes up over `monitor`'s active workspace. Returns whether there was
-    /// anything to show.
-    pub fn open(&mut self, monitor: &Monitor, direction: Direction) -> bool {
+    /// Comes up over `monitor`'s active workspace with a card for each of
+    /// `windows`. Returns whether there was anything to show.
+    pub fn open(
+        &mut self,
+        monitor: &Monitor,
+        windows: &SwitcherWindows<'_>,
+        direction: Direction,
+    ) -> bool {
         self.aspects.clear();
         self.cards.clear();
         self.icons.forget_windows();
@@ -88,9 +95,9 @@ impl WindowControl {
             .extend(monitor.active().stacking_order().map(Tile::id));
         let opened = self
             .switcher
-            .open(monitor.active().recent_windows(), direction);
+            .open(windows.recent.iter().copied(), direction);
         if opened {
-            self.relayout(monitor);
+            self.relayout(monitor, windows);
         }
         opened
     }
@@ -150,12 +157,15 @@ impl WindowControl {
 
     /// Follows windows opening and closing, then places everything for this
     /// frame.
-    pub fn relayout(&mut self, monitor: &Monitor) {
-        let workspace = monitor.active();
+    pub fn relayout(&mut self, monitor: &Monitor, windows: &SwitcherWindows<'_>) {
         if self.switcher.is_open() {
-            self.switcher.sync(workspace.recent_windows());
+            self.switcher.sync(windows.recent.iter().copied());
         }
-        for tile in workspace.tiles() {
+        let tiles = windows
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.tiles());
+        for tile in tiles {
             let size = tile.target().size;
             if size.w > 0 && size.h > 0 {
                 self.aspects
@@ -167,7 +177,7 @@ impl WindowControl {
             self.cards.entry(entry.key).or_default();
         }
         self.icons.update(
-            workspace,
+            windows,
             entries.iter().map(|entry| entry.key),
             monitor.output().current_scale().fractional_scale(),
         );

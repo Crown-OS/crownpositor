@@ -34,6 +34,7 @@ impl State {
             .map(|tile| centre(tile.target()) + geometry.loc.to_f64())
             .filter(|window| geometry.to_f64().contains(*window))
             .unwrap_or_else(|| centre(geometry));
+        tracing::debug!(output = %monitor.config().name, ?target, "focus moves to another monitor");
         self.warp_pointer(target, InputTime::now());
     }
 

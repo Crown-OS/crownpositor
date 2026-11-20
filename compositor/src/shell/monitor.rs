@@ -428,16 +428,6 @@ impl Monitor {
         &mut self.window_control
     }
 
-    pub fn with_window_control<T>(
-        &mut self,
-        act: impl FnOnce(&mut WindowControl, &Monitor) -> T,
-    ) -> T {
-        let mut control = std::mem::take(&mut self.window_control);
-        let result = act(&mut control, self);
-        self.window_control = control;
-        result
-    }
-
     pub fn switch(&self) -> &WorkspaceSwitch {
         &self.switch
     }

@@ -2,15 +2,15 @@
 //!
 //! The stack lives on the focused monitor — it was raised from the keyboard,
 //! which has no position on screen — and owns the pointer and keyboard as a
-//! mode while it is up, the same way the overview does.
+//! mode while it is up, the same way the overview does. In `Shared` scope its
+//! cards are the windows of every linked monitor, and picking one on another
+//! monitor takes the pointer there.
 
 use smithay::utils::{Logical, Point};
 
 use windowcontrol::Direction;
 
-use crate::{
-    layout::WorkspaceMode, shell::workspace::Workspace, state::State, utils::id::WindowId,
-};
+use crate::{layout::WorkspaceMode, state::State, utils::id::OutputId};
 
 /// Pixels of touchpad scroll that move the row by one window.
 const SCROLL_PER_ENTRY: f64 = 120.0;
@@ -24,23 +24,41 @@ impl State {
     }
 
     /// On a floating workspace, raises the stack on the focused monitor or
-    /// moves its selection once it is up. A tiling workspace already shows
-    /// every window, so there it just hands focus to the next one.
+    /// moves its selection once it is up, wherever the pointer has gone since.
+    /// A tiling workspace already shows every window, so there it just hands
+    /// focus to the next one.
     pub(super) fn window_control_advance(&mut self, direction: Direction) {
         if self.overview_is_open() {
             return;
         }
-        let Some(monitor) = self.shell.focused_monitor_mut() else {
+        if let Some(open) = self
+            .shell
+            .monitors_mut()
+            .iter_mut()
+            .find(|monitor| monitor.window_control().is_open())
+        {
+            open.window_control_mut().advance(direction);
+            return;
+        }
+        let Some((owner, mode)) = self
+            .shell
+            .focused_monitor()
+            .map(|monitor| (monitor.id(), monitor.active().mode()))
+        else {
             return;
         };
-        if monitor.window_control().is_open() {
-            monitor.window_control_mut().advance(direction);
-        } else if monitor.active().mode() == WorkspaceMode::Tiling {
-            if let Some(next) = next_tile(monitor.active(), direction) {
-                self.shell.focus_window(next);
+        match mode {
+            WorkspaceMode::Tiling => {
+                if let Some(next) = self.shell.next_window_in_scope(direction) {
+                    self.focus_window_on_any_monitor(next);
+                }
             }
-        } else {
-            monitor.with_window_control(|control, monitor| control.open(monitor, direction));
+            WorkspaceMode::Floating => {
+                self.shell
+                    .with_window_control(owner, |control, monitor, windows| {
+                        control.open(monitor, windows, direction)
+                    });
+            }
         }
     }
 
@@ -53,7 +71,7 @@ impl State {
             .iter_mut()
             .find_map(|monitor| monitor.window_control_mut().commit());
         if let Some(window) = committed {
-            self.shell.focus_window(window);
+            self.focus_window_on_any_monitor(window);
         }
     }
 
@@ -88,7 +106,7 @@ impl State {
             .monitor_by_id_mut(monitor)
             .and_then(|monitor| monitor.window_control_mut().click(local));
         if let Some(window) = committed {
-            self.shell.focus_window(window);
+            self.focus_window_on_any_monitor(window);
             self.shell.refresh();
             self.update_keyboard_focus();
         }
@@ -124,26 +142,11 @@ impl State {
     fn window_control_at(
         &self,
         at: Point<f64, Logical>,
-    ) -> Option<(crate::utils::id::OutputId, Point<f64, Logical>)> {
+    ) -> Option<(OutputId, Point<f64, Logical>)> {
         let monitor = self
             .shell
             .monitor_at(at)
             .filter(|monitor| monitor.window_control().is_open())?;
         Some((monitor.id(), at - monitor.geometry().loc.to_f64()))
     }
-}
-
-/// The window after the focused one in layout order, wrapping at either end.
-fn next_tile(workspace: &Workspace, direction: Direction) -> Option<WindowId> {
-    let tiles = workspace.tiles();
-    let len = tiles.len();
-    let current = workspace
-        .focus()
-        .and_then(|focused| tiles.iter().position(|tile| tile.id() == focused));
-    let index = match (current, direction) {
-        (None, _) => 0,
-        (Some(at), Direction::Forward) => (at + 1) % len,
-        (Some(at), Direction::Backward) => (at + len - 1) % len,
-    };
-    tiles.get(index).map(|tile| tile.id())
 }

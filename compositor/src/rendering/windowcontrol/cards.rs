@@ -22,10 +22,12 @@ use crate::{
         painter::{Backing, Painter, Thumbnail},
     },
     shell::{
+        Shell,
         monitor::Monitor,
         tile::Tile,
         windowcontrol::{ICON_SIZE, WindowControl},
     },
+    utils::id::WindowId,
 };
 
 const TITLE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -66,7 +68,7 @@ where
     R::TextureId: Send + Clone + 'static,
     D: TileDecorator<R>,
 {
-    pub(super) fn cards(&mut self, monitor: &Monitor) {
+    pub(super) fn cards(&mut self, shell: &Shell, monitor: &Monitor) {
         let control = monitor.window_control();
         let switcher = control.switcher();
         let shown = switcher.eased();
@@ -74,13 +76,12 @@ where
         let lifted = switcher.progress();
         let arrival = ARRIVAL_SCALE + (1.0 - ARRIVAL_SCALE) * shown;
         let entries = switcher.strip().entries();
-        let workspace = monitor.active();
 
         for &index in control.order() {
             let (Some(entry), Some(slot)) = (entries.get(index), control.slots().get(index)) else {
                 continue;
             };
-            let Some(tile) = workspace.tile(entry.key) else {
+            let Some((tile, desktop)) = seen_from(shell, monitor, entry.key) else {
                 continue;
             };
             let focus = entry.focus();
@@ -88,7 +89,7 @@ where
             let flight = 1.0 - focus * (1.0 - lifted);
             let card = Card {
                 tile,
-                rect: scene::between(tile.render_rect(), stacked, flight),
+                rect: scene::between(desktop, stacked, flight),
                 radius: self.flown_radius(slot, arrival, flight),
                 alpha: slot.alpha * (focus * surfaced + (1.0 - focus) * shown),
                 chrome: slot.alpha * shown,
@@ -187,6 +188,20 @@ where
             self.push(element);
         }
     }
+}
+
+/// `window`'s tile and where it is drawn on the desktop, in the space of
+/// `monitor`: a card for a window on another monitor flies in from there.
+fn seen_from<'a>(
+    shell: &'a Shell,
+    monitor: &Monitor,
+    window: WindowId,
+) -> Option<(&'a Tile, Rectangle<f64, Logical>)> {
+    let tile = shell.tile(window)?;
+    let home = shell.monitor_by_id(shell.location(window)?.output)?;
+    let offset = (home.geometry().loc - monitor.geometry().loc).to_f64();
+    let rect = tile.render_rect();
+    Some((tile, Rectangle::new(rect.loc + offset, rect.size)))
 }
 
 /// `shape` rounded by `radius` and blurred by `sigma`, all physical pixels,

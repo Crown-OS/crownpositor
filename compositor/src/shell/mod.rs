@@ -7,6 +7,7 @@ pub mod decoration;
 pub mod dust;
 mod floating_drag;
 pub mod focus;
+pub mod focus_history;
 pub mod gaming;
 pub mod grab;
 pub mod identity;
@@ -74,6 +75,7 @@ use crate::{
     shell::{
         closing::{ClosingWindow, Farewell},
         decoration::resize_edge,
+        focus_history::FocusHistory,
         grab::{moves_left, moves_top},
         identity::OfflineHead,
         lock_screen::LockScreen,
@@ -283,6 +285,8 @@ pub struct Shell {
 
     surface_to_window: HashMap<WlSurface, WindowId>,
     window_to_location: HashMap<WindowId, Location>,
+    /// Which windows had the keyboard, across every monitor.
+    focus_history: FocusHistory,
     layer_to_output: HashMap<WlSurface, OutputId>,
     /// The layer surface that was handed the keyboard on demand — by a click,
     /// never by asking. An `exclusive` surface does not need it: it is found by
@@ -344,6 +348,7 @@ impl Shell {
             offline_heads: Vec::new(),
             surface_to_window: HashMap::new(),
             window_to_location: HashMap::new(),
+            focus_history: FocusHistory::default(),
             layer_to_output: HashMap::new(),
             layer_focus: None,
             xdg_shell_state: XdgShellState::new::<State>(display),
@@ -870,9 +875,17 @@ impl Shell {
         true
     }
 
-    /// The other. Also clears the window from every layout's side tables, so an
-    /// algorithm cannot retain a dead id.
+    /// The other, for a window that is going away. Also clears the window
+    /// from every layout's side tables, so an algorithm cannot retain a dead
+    /// id.
     pub fn remove_tile(&mut self, id: WindowId) -> Option<Tile> {
+        self.focus_history.forget(id);
+        self.detach_tile(id)
+    }
+
+    /// Takes a window out of the model to put it somewhere else, keeping its
+    /// place in the focus history.
+    fn detach_tile(&mut self, id: WindowId) -> Option<Tile> {
         let at = self.window_to_location.remove(&id)?;
         let workspace = self.workspace_mut(at)?;
         let tile = workspace.take_tile(id)?;
@@ -890,7 +903,7 @@ impl Shell {
             .location(id)
             .filter(|from| from.output != to.output)
             .and_then(|from| self.origin_of(from));
-        let Some(tile) = self.remove_tile(id) else {
+        let Some(tile) = self.detach_tile(id) else {
             return false;
         };
         if !self.insert_tile(tile, to) {
@@ -907,6 +920,7 @@ impl Shell {
             return false;
         };
         self.focus_keyboard_on(location.output);
+        self.focus_history.touch(id);
         let Some(workspace) = self.workspace_mut(location) else {
             return false;
         };
@@ -1633,9 +1647,6 @@ impl Shell {
                 monitor.with_spacecontrol(|space, monitor| space.resolve(monitor));
             }
             monitor.window_control_mut().step(dt);
-            if monitor.window_control().is_visible() {
-                monitor.with_window_control(|control, monitor| control.relayout(monitor));
-            }
             for workspace in monitor.workspaces_mut() {
                 for tile in workspace.tiles_mut() {
                     tile.anim_mut().step(dt);
@@ -1646,6 +1657,17 @@ impl Shell {
                     .closing_mut()
                     .retain_mut(|closing| closing.step(dt, &self.choreography));
             }
+        }
+        let stacks: Vec<OutputId> = self
+            .monitors
+            .iter()
+            .filter(|monitor| monitor.window_control().is_visible())
+            .map(Monitor::id)
+            .collect();
+        for owner in stacks {
+            self.with_window_control(owner, |control, monitor, windows| {
+                control.relayout(monitor, windows);
+            });
         }
     }
 

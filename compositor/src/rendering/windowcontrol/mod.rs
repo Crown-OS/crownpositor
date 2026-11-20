@@ -19,7 +19,7 @@ use smithay::{
 
 use crate::{
     rendering::{Elements, FrameStyle, decorate::TileDecorator, painter::Painter},
-    shell::monitor::Monitor,
+    shell::{Shell, monitor::Monitor},
 };
 
 /// How dark the frost behind the stack gets.
@@ -29,6 +29,7 @@ const DIM: f64 = 0.3;
 /// panels are the caller's, drawn as they always are.
 pub fn window_control_elements<R, D>(
     elements: &mut Elements<R, D>,
+    shell: &Shell,
     monitor: &Monitor,
     renderer: &mut R,
     decorator: &mut D,
@@ -40,7 +41,7 @@ pub fn window_control_elements<R, D>(
     D: TileDecorator<R>,
 {
     let mut painter = Painter::new(elements, renderer, decorator, scale, style);
-    painter.cards(monitor);
+    painter.cards(shell, monitor);
 
     let control = monitor.window_control();
     let shown = control.switcher().eased();

@@ -319,6 +319,7 @@ where
         true => {
             windowcontrol::window_control_elements(
                 &mut elements,
+                shell,
                 monitor,
                 renderer,
                 decorator,

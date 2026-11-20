@@ -1,6 +1,6 @@
-//! The overview across three shown monitors and a hidden one: all of them
-//! together in `Shared` scope, the monitor under the pointer alone in
-//! `PerMonitor` scope.
+//! The overview and the Alt+Tab stack across three shown monitors and a
+//! hidden one: all of them together in `Shared` scope, the monitor under the
+//! pointer alone in `PerMonitor` scope.
 
 use anyhow::Context;
 use crownos_config::schema::WorkspaceScope;
@@ -185,5 +185,23 @@ fn a_press_keeps_the_pointer_on_its_overview_off_its_monitor() -> anyhow::Result
         desk.fixture.shell.overview_under(on_right),
         Some((middle, on_right - origin))
     );
+    Ok(())
+}
+
+#[test]
+fn the_alt_tab_stack_draws_from_the_linked_monitors() -> anyhow::Result<()> {
+    let shared = desk(WorkspaceScope::Shared)?;
+    let per_monitor = desk(WorkspaceScope::PerMonitor)?;
+    let count = |desk: &Desk| -> anyhow::Result<usize> {
+        Ok(desk
+            .fixture
+            .shell
+            .switcher_windows(desk.id(1)?)
+            .workspaces
+            .len())
+    };
+
+    assert_eq!(count(&shared)?, 3);
+    assert_eq!(count(&per_monitor)?, 1);
     Ok(())
 }

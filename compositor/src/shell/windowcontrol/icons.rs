@@ -8,10 +8,8 @@ use smithay::{
     utils::{Buffer, Size, Transform},
 };
 
-use crate::{
-    shell::workspace::Workspace,
-    utils::{app_icon, id::WindowId, raster::Pixmap, surface},
-};
+use super::SwitcherWindows;
+use crate::utils::{app_icon, id::WindowId, raster::Pixmap, surface};
 
 /// Logical pixels square.
 pub const ICON_SIZE: f64 = 36.0;
@@ -33,7 +31,7 @@ impl CardIcons {
     /// Finds an icon for every window in `windows` that has none yet.
     pub fn update(
         &mut self,
-        workspace: &Workspace,
+        candidates: &SwitcherWindows<'_>,
         windows: impl Iterator<Item = WindowId>,
         scale: f64,
     ) {
@@ -47,7 +45,7 @@ impl CardIcons {
             if self.by_window.contains_key(&window) {
                 continue;
             }
-            let Some(tile) = workspace.tile(window) else {
+            let Some(tile) = candidates.tile(window) else {
                 continue;
             };
             let icon = surface::with_app_id(tile.surface(), |app_id| {

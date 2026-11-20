@@ -19,10 +19,6 @@ impl Shell {
         self.monitor_by_id(self.focused?)
     }
 
-    pub fn focused_monitor_mut(&mut self) -> Option<&mut Monitor> {
-        self.monitor_by_id_mut(self.focused?)
-    }
-
     pub fn focused_output(&self) -> Option<&Output> {
         self.focused_monitor().map(Monitor::output)
     }
