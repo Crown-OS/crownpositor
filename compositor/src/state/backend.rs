@@ -14,10 +14,11 @@ use protocols::gamma_control::GammaRamps;
 use crate::{
     backend::{
         Preference,
-        kms::{KmsState, head::Head, reconfigure},
+        kms::{KmsState, head::Head, lighting, reconfigure},
         winit::WinitState,
     },
     shell::output_kind::OutputKind,
+    state::outputs::ResolvedHead,
 };
 
 /// A connected monitor that is switched off, as the protocol needs to see it.
@@ -195,6 +196,20 @@ impl BackendState {
                 .filter(|head| !head.state.is_enabled())
                 .map(DisabledHead::from_head)
                 .collect(),
+        }
+    }
+
+    /// Whether the GPUs can drive every head that is on once `heads` is
+    /// applied. A nested window can always show its viewports.
+    pub fn can_light(&self, heads: &[ResolvedHead]) -> bool {
+        match self {
+            Self::Unset | Self::Winit(_) => true,
+            Self::Kms(kms) => lighting::can_light(kms, |name| {
+                heads
+                    .iter()
+                    .find(|head| head.id.as_str() == name)
+                    .map(|head| head.enabled)
+            }),
         }
     }
 

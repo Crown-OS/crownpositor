@@ -15,6 +15,7 @@ pub mod crtc_pool;
 pub mod device;
 pub mod feedback;
 pub mod head;
+pub mod lighting;
 pub mod present_watch;
 pub mod props;
 pub mod reconfigure;

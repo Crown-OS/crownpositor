@@ -46,48 +46,84 @@ pub fn assign(
     if wanted.is_empty() {
         return Ok(Assignment::new());
     }
+    CrtcTopology::read(drm, wanted)?.assign(wanted, pinned, leased)
+}
 
-    let resources = drm.resource_handles().map_err(CrtcError::Resources)?;
-    let crtcs: Vec<crtc::Handle> = resources
-        .crtcs()
-        .iter()
-        .filter(|crtc| !leased.contains(crtc))
-        .copied()
-        .collect();
-    let crtc_index: HashMap<crtc::Handle, usize> = crtcs
-        .iter()
-        .enumerate()
-        .map(|(index, handle)| (*handle, index))
-        .collect();
+/// Which CRTCs a GPU has and which of them can drive each connector, read
+/// once so assignment needs no device.
+#[derive(Debug, Clone, Default)]
+pub struct CrtcTopology {
+    crtcs: Vec<crtc::Handle>,
+    possible: HashMap<connector::Handle, Vec<crtc::Handle>>,
+}
 
-    let candidates: Vec<Vec<usize>> = wanted
-        .iter()
-        .map(|connector| {
-            possible_crtcs(drm, &resources, *connector)
-                .into_iter()
-                .filter_map(|handle| crtc_index.get(&handle).copied())
-                .collect()
-        })
-        .collect();
+impl CrtcTopology {
+    pub fn new(
+        crtcs: Vec<crtc::Handle>,
+        possible: HashMap<connector::Handle, Vec<crtc::Handle>>,
+    ) -> Self {
+        Self { crtcs, possible }
+    }
 
-    let seeds: Vec<Option<usize>> = wanted
-        .iter()
-        .map(|connector| {
-            pinned
-                .get(connector)
-                .and_then(|crtc| crtc_index.get(crtc))
-                .copied()
-        })
-        .collect();
+    pub fn read(drm: &DrmDevice, connectors: &[connector::Handle]) -> Result<Self, CrtcError> {
+        let resources = drm.resource_handles().map_err(CrtcError::Resources)?;
+        let possible = connectors
+            .iter()
+            .map(|connector| (*connector, possible_crtcs(drm, &resources, *connector)))
+            .collect();
+        Ok(Self::new(resources.crtcs().to_vec(), possible))
+    }
 
-    let matched = match_connectors(&candidates, &seeds, crtcs.len())
-        .map_err(|index| CrtcError::Exhausted(wanted[index]))?;
+    /// See [`assign`].
+    pub fn assign(
+        &self,
+        wanted: &[connector::Handle],
+        pinned: &Assignment,
+        leased: &HashSet<crtc::Handle>,
+    ) -> Result<Assignment, CrtcError> {
+        let crtcs: Vec<crtc::Handle> = self
+            .crtcs
+            .iter()
+            .filter(|crtc| !leased.contains(crtc))
+            .copied()
+            .collect();
+        let crtc_index: HashMap<crtc::Handle, usize> = crtcs
+            .iter()
+            .enumerate()
+            .map(|(index, handle)| (*handle, index))
+            .collect();
 
-    Ok(wanted
-        .iter()
-        .zip(matched)
-        .map(|(connector, crtc)| (*connector, crtcs[crtc]))
-        .collect())
+        let candidates: Vec<Vec<usize>> = wanted
+            .iter()
+            .map(|connector| {
+                self.possible
+                    .get(connector)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|handle| crtc_index.get(handle).copied())
+                    .collect()
+            })
+            .collect();
+
+        let seeds: Vec<Option<usize>> = wanted
+            .iter()
+            .map(|connector| {
+                pinned
+                    .get(connector)
+                    .and_then(|crtc| crtc_index.get(crtc))
+                    .copied()
+            })
+            .collect();
+
+        let matched = match_connectors(&candidates, &seeds, crtcs.len())
+            .map_err(|index| CrtcError::Exhausted(wanted[index]))?;
+
+        Ok(wanted
+            .iter()
+            .zip(matched)
+            .map(|(connector, crtc)| (*connector, crtcs[crtc]))
+            .collect())
+    }
 }
 
 /// The CRTCs the kernel says can drive this connector.

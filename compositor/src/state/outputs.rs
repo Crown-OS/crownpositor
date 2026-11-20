@@ -53,9 +53,9 @@ pub enum ApplyMode {
 /// One head with every field decided — the client's request merged onto what
 /// the head has now, so validation never has to reason about `None`.
 #[derive(Debug, Clone)]
-struct ResolvedHead {
-    id: HeadId,
-    enabled: bool,
+pub(crate) struct ResolvedHead {
+    pub(crate) id: HeadId,
+    pub(crate) enabled: bool,
     mode: Mode,
     position: Point<i32, Logical>,
     transform: Transform,
@@ -131,6 +131,8 @@ enum Rejection {
     Overlap(String, String),
     /// Needs hardware work the backend cannot do yet.
     Unsupported(String),
+    /// More heads would be on than the GPUs have CRTCs to drive.
+    NotEnoughCrtcs,
 }
 
 impl std::fmt::Display for Rejection {
@@ -145,6 +147,7 @@ impl std::fmt::Display for Rejection {
             }
             Self::Overlap(left, right) => write!(f, "heads {left} and {right} would overlap"),
             Self::Unsupported(what) => write!(f, "{what} is not supported yet"),
+            Self::NotEnoughCrtcs => write!(f, "the GPUs cannot drive every enabled head at once"),
         }
     }
 }
@@ -388,6 +391,9 @@ impl State {
     /// without a GPU, and so a nested session refuses exactly the things it
     /// genuinely cannot do rather than pretending.
     fn validate_against_hardware(&self, heads: &[ResolvedHead]) -> Result<(), Rejection> {
+        if !self.backend.can_light(heads) {
+            return Err(Rejection::NotEnoughCrtcs);
+        }
         for head in heads.iter().filter(|head| head.enabled) {
             // A head being switched on has no `Output` to ask yet; its mode
             // was already checked against the list the backend advertised.
