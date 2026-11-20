@@ -5,7 +5,10 @@ use smithay::backend::input::InputTime;
 use crate::{
     shell::monitor::Monitor,
     state::State,
-    utils::{geometry::centre, id::OutputId},
+    utils::{
+        geometry::centre,
+        id::{OutputId, WindowId},
+    },
 };
 
 impl State {
@@ -32,6 +35,18 @@ impl State {
             .filter(|window| geometry.to_f64().contains(*window))
             .unwrap_or_else(|| centre(geometry));
         self.warp_pointer(target, InputTime::now());
+    }
+
+    /// Gives `window` the keyboard, and takes the pointer to its monitor when
+    /// that is not the one under the pointer.
+    pub fn focus_window_on_any_monitor(&mut self, window: WindowId) {
+        self.shell.focus_window(window);
+        let Some(output) = self.shell.location(window).map(|location| location.output) else {
+            return;
+        };
+        if self.shell.focused_monitor().map(Monitor::id) != Some(output) {
+            self.focus_output(output);
+        }
     }
 
     /// Starts the session on the primary monitor, keyboard and pointer both.

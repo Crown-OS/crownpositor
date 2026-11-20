@@ -91,10 +91,8 @@ pub fn script(state: &mut State) {
             if action == "snap" {
                 let _ = std::fs::write(harness.dir.join("snap"), b"");
             }
-            if action == "overview"
-                && let Some(monitor) = state.shell.focused_monitor_mut()
-            {
-                monitor.with_spacecontrol(|space, monitor| space.toggle(monitor));
+            if action == "overview" {
+                state.shell.toggle_overview();
             }
             let mut parts = action.split('@');
             if parts.next() == Some("click")

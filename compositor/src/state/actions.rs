@@ -151,21 +151,9 @@ impl State {
                 self.shell.apply_layout_op(LayoutOp::ResetSize);
             }
 
-            Action::OpenWorkspaceView => {
-                if let Some(monitor) = self.shell.focused_monitor_mut() {
-                    monitor.with_spacecontrol(|space, monitor| space.open(monitor));
-                }
-            }
-            Action::CloseWorkspaceView => {
-                if let Some(monitor) = self.shell.focused_monitor_mut() {
-                    monitor.spacecontrol_mut().close();
-                }
-            }
-            Action::ToggleWorkspaceView => {
-                if let Some(monitor) = self.shell.focused_monitor_mut() {
-                    monitor.with_spacecontrol(|space, monitor| space.toggle(monitor));
-                }
-            }
+            Action::OpenWorkspaceView => self.shell.open_overview(),
+            Action::CloseWorkspaceView => self.shell.close_overviews(),
+            Action::ToggleWorkspaceView => self.shell.toggle_overview(),
 
             Action::WindowControlNext => self.window_control_advance(Cycle::Forward),
             Action::WindowControlPrevious => self.window_control_advance(Cycle::Backward),

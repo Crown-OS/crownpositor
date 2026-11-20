@@ -400,6 +400,11 @@ impl Interaction {
         self.press.and_then(|press| press.reorder)
     }
 
+    /// Whether the button went down on something and has not come up yet.
+    pub fn is_pressed(&self) -> bool {
+        self.press.is_some()
+    }
+
     /// Forgets everything. Called when the overview closes, so a press that was
     /// never released cannot survive into the next time it opens.
     pub fn clear(&mut self) {
@@ -619,6 +624,22 @@ mod tests {
             input.step(1.0 / 60.0);
         }
         assert!(input.snap() < 0.05, "{}", input.snap());
+    }
+
+    #[test]
+    fn a_press_is_held_until_it_is_released_or_cancelled() {
+        let slots = slots();
+        let mut input = Interaction::new();
+        assert!(!input.is_pressed());
+
+        input.press(at(150.0, 150.0), &grid(), bar(&slots));
+        assert!(input.is_pressed());
+        input.release(at(150.0, 150.0), bar(&slots));
+        assert!(!input.is_pressed());
+
+        input.press(at(150.0, 150.0), &grid(), bar(&slots));
+        input.cancel();
+        assert!(!input.is_pressed());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! they check what the shell does with outputs and their empty workspaces.
 
 mod cross_monitor;
+mod overview_scope;
 mod workspace_scope;
 
 use anyhow::Context;

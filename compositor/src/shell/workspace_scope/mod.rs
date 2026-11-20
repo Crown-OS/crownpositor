@@ -55,6 +55,14 @@ impl Shell {
         linked
     }
 
+    /// The monitors the overview and the Alt+Tab stack act on: the focused
+    /// monitor first, then those linked to it.
+    pub fn scope_monitors(&self) -> Vec<OutputId> {
+        self.focused
+            .map(|focused| self.linked(focused))
+            .unwrap_or_default()
+    }
+
     /// Whether a workspace switch on `output` moves no other monitor.
     pub(in crate::shell) fn switches_alone(&self, output: OutputId) -> bool {
         self.linked(output) == [output]

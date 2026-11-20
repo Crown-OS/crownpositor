@@ -18,6 +18,7 @@ pub mod morph;
 pub mod output_kind;
 pub mod output_move;
 pub mod overview;
+pub mod overview_scope;
 pub mod popup;
 pub mod primary;
 mod rehome;

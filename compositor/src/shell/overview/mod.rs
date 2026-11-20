@@ -293,14 +293,6 @@ impl SpaceControl {
         self.overview.close();
     }
 
-    pub fn toggle(&mut self, monitor: &Monitor) {
-        if self.overview.is_open() {
-            self.close();
-        } else {
-            self.open(monitor);
-        }
-    }
-
     pub fn is_open(&self) -> bool {
         self.overview.is_open()
     }
@@ -372,6 +364,12 @@ impl SpaceControl {
 
     pub fn is_dragging(&self) -> bool {
         self.overview.is_dragging()
+    }
+
+    /// Whether a press or a carried window is in progress here. Until it is
+    /// released the pointer belongs to this overview, wherever it goes.
+    pub fn is_holding(&self) -> bool {
+        self.input.is_pressed()
     }
 
     /// Moves the pointer over the overview. Returns whether anything needs

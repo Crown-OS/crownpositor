@@ -1,9 +1,10 @@
 //! Driving the overview from input.
 //!
 //! The gesture side and the pointer side both land here so there is one place
-//! that knows what clicking a thumbnail means. Everything acts on the *focused*
-//! monitor for gestures — a touchpad has no position on screen — and on the
-//! monitor under the pointer for clicks, which does.
+//! that knows what clicking a thumbnail means. Gestures act on the monitors in
+//! scope — a touchpad has no position on screen — and clicks on the monitor
+//! under the pointer, which does; a change to the shared workspaces then lays
+//! out every overview linked to it.
 
 use smithay::utils::{Logical, Point};
 
@@ -15,10 +16,7 @@ impl State {
     /// Whether any output is showing the overview, which is what makes the rest
     /// of the compositor treat input as belonging to it.
     pub fn overview_is_open(&self) -> bool {
-        self.shell
-            .monitors()
-            .iter()
-            .any(|monitor| monitor.spacecontrol().is_open())
+        self.shell.any_overview_open()
     }
 
     /// Whether the overview or the Alt+Tab strip owns input.
@@ -31,52 +29,21 @@ impl State {
         self.overview_is_open() || self.window_control_is_open()
     }
 
-    /// Points the focused monitor's overview at the fingers, opening it on the
-    /// first update rather than waiting for the release.
+    /// Points the overviews in scope at the fingers.
     pub fn drive_overview(&mut self, travelled: f64) {
-        let Some(monitor) = self.shell.focused_monitor_mut() else {
-            return;
-        };
-        monitor.with_spacecontrol(|space, monitor| {
-            space.begin_gesture(monitor);
-            space.update_gesture(travelled);
-        });
+        self.shell.drive_overview(travelled);
     }
 
     /// Lets a swipe go. Returns whether there was one to let go of, so the
     /// caller knows the release is spoken for.
     pub fn release_overview(&mut self, cancelled: bool, velocity: f64) -> bool {
-        let Some(monitor) = self.shell.focused_monitor_mut() else {
-            return false;
-        };
-        if !monitor.spacecontrol().is_dragging() {
-            return false;
-        }
-
-        let space = monitor.spacecontrol_mut();
-        if cancelled {
-            space.cancel_gesture();
-        } else {
-            space.end_gesture(velocity);
-        }
-        true
-    }
-
-    /// The output whose overview should take this pointer position, if any,
-    /// and the position in that output's own space, which the overview is
-    /// laid out in.
-    fn overview_under(&self, at: Point<f64, Logical>) -> Option<(OutputId, Point<f64, Logical>)> {
-        let monitor = self
-            .shell
-            .monitor_at(at)
-            .filter(|monitor| monitor.spacecontrol().is_open())?;
-        Some((monitor.id(), at - monitor.geometry().loc.to_f64()))
+        self.shell.release_overview(cancelled, velocity)
     }
 
     /// Moves the pointer over an open overview. Returns whether the overview
     /// took the motion, in which case it must not also reach a client.
     pub fn overview_motion(&mut self, at: Point<f64, Logical>) -> bool {
-        let Some((id, local)) = self.overview_under(at) else {
+        let Some((id, local)) = self.shell.overview_under(at) else {
             return false;
         };
         let Some(monitor) = self.shell.monitor_by_id_mut(id) else {
@@ -91,7 +58,7 @@ impl State {
 
     /// Presses a button over an open overview.
     pub fn overview_press(&mut self, at: Point<f64, Logical>) -> bool {
-        let Some((id, local)) = self.overview_under(at) else {
+        let Some((id, local)) = self.shell.overview_under(at) else {
             return false;
         };
         if let Some(monitor) = self.shell.monitor_by_id_mut(id) {
@@ -104,7 +71,7 @@ impl State {
     /// Releases a button over an open overview, and does whatever that turned
     /// out to mean.
     pub fn overview_release(&mut self, at: Point<f64, Logical>) -> bool {
-        let Some((id, local)) = self.overview_under(at) else {
+        let Some((id, local)) = self.shell.overview_under(at) else {
             return false;
         };
         let Some(monitor) = self.shell.monitor_by_id_mut(id) else {
@@ -115,26 +82,26 @@ impl State {
         match release {
             Release::Click(Target::Window(index)) => {
                 let window = monitor.spacecontrol().window(index);
-                monitor.spacecontrol_mut().close();
+                self.shell.close_linked_overviews(id);
                 if let Some(window) = window {
-                    self.shell.focus_window(window);
+                    self.focus_window_on_any_monitor(window);
                 }
             }
             Release::Click(Target::Workspace(index)) => {
-                monitor.spacecontrol_mut().close();
+                self.shell.close_linked_overviews(id);
                 self.shell.activate_index(id, index);
             }
             // A new workspace is added and shown in the bar, not switched to:
             // the user is arranging, and usually has windows to drop on it.
             Release::Click(Target::NewWorkspace) => {
                 self.shell.create_workspace(id);
-                self.resolve_overview(id);
+                self.shell.resolve_linked_overviews(id);
             }
             Release::Click(Target::Close(index)) => {
                 if let Some(workspace) = monitor.workspaces().get(index).map(|it| it.id()) {
                     self.shell.remove_workspace(id, workspace);
                 }
-                self.resolve_overview(id);
+                self.shell.resolve_linked_overviews(id);
             }
             Release::Dropped { window, workspace } => {
                 self.drop_window(id, window, workspace);
@@ -153,7 +120,7 @@ impl State {
                 .return_window(window, from, velocity),
             Release::Reordered { from, to, .. } => {
                 self.shell.move_workspace(id, from, to);
-                self.resolve_overview(id);
+                self.shell.resolve_linked_overviews(id);
             }
             Release::None => {}
         }
