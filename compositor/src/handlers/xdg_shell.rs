@@ -1,5 +1,6 @@
 use smithay::{
     desktop::{PopupKind, Window},
+    output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
         wayland_server::protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
@@ -17,9 +18,12 @@ use smithay::{
 use super::xdg_decoration::requested_chrome;
 use crate::{
     layout::placement,
-    shell::tile::{Chrome, Tile, WindowState},
+    shell::{
+        monitor::Monitor,
+        tile::{Chrome, Tile, WindowState},
+    },
     state::{State, launch_target::LaunchTarget},
-    utils::id::WindowId,
+    utils::id::{OutputId, WindowId},
 };
 
 impl XdgShellHandler for State {
@@ -132,9 +136,12 @@ impl XdgShellHandler for State {
         self.request_state(&surface, None);
     }
 
-    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
-        // TODO: honour the requested output by moving the window there first.
-        self.request_state(&surface, Some(WindowState::Fullscreen));
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
+        let requested = output
+            .as_ref()
+            .and_then(Output::from_resource)
+            .and_then(|output| self.shell.monitor(&output).map(Monitor::id));
+        self.request_state_on(&surface, Some(WindowState::Fullscreen), requested);
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
@@ -180,12 +187,27 @@ impl State {
     /// request is answered with one, and a client that does not hear back will
     /// sit waiting.
     fn request_state(&mut self, surface: &ToplevelSurface, state: Option<WindowState>) {
+        self.request_state_on(surface, state, None);
+    }
+
+    /// The same, on the shown monitor `output` when it names one: a mapped
+    /// window moves there first, an unmapped one maps there.
+    fn request_state_on(
+        &mut self,
+        surface: &ToplevelSurface,
+        state: Option<WindowState>,
+        output: Option<OutputId>,
+    ) {
         let Some(id) = self.shell.window_id(surface.wl_surface()) else {
             self.shell
-                .request_unmapped_state(surface.wl_surface(), state);
+                .request_unmapped_state(surface.wl_surface(), state, output);
             surface.send_configure();
             return;
         };
+
+        if let Some(output) = output {
+            self.shell.move_window_to_output(id, output);
+        }
 
         match state {
             Some(state) => self.shell.set_window_state(id, state),
@@ -273,8 +295,20 @@ impl State {
         let mut rules =
             self.shell
                 .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
-        let location = carried
-            .and_then(|_| self.carried_location())
+        // A window carried by a drag, or launched for a guest or the hidden
+        // output, does not pick its own monitor.
+        let picks_its_monitor = carried.is_none()
+            && !matches!(
+                target,
+                Some(LaunchTarget::Headless | LaunchTarget::Output(_))
+            )
+            && rules.fullscreen != Some(false);
+        let fullscreen_on = unmapped
+            .requested_output
+            .filter(|_| picks_its_monitor)
+            .and_then(|output| self.shell.active_location_on(output));
+        let location = fullscreen_on
+            .or_else(|| carried.and_then(|_| self.carried_location()))
             .or_else(|| {
                 target
                     .as_ref()
@@ -374,9 +408,7 @@ impl State {
         self.shell.insert_tile(tile, location);
         self.grow_if_launched(id);
 
-        if rules.focus.unwrap_or(true) {
-            self.shell.focus_window(id);
-        }
+        self.shell.focus_mapped(id, rules.focus);
         if let Some(offset) = carried {
             self.carry_mapped(id, offset);
         }

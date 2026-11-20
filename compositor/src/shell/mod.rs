@@ -11,6 +11,7 @@ pub mod gaming;
 pub mod grab;
 pub mod identity;
 pub mod lock_screen;
+pub mod map_focus;
 pub mod migration;
 pub mod monitor;
 pub mod morph;
@@ -258,6 +259,8 @@ pub struct UnmappedWindow {
     /// What the client asked to become before it mapped: SDL sets fullscreen
     /// on an X11 window before mapping it.
     pub requested_state: Option<WindowState>,
+    /// The shown monitor a fullscreen request named.
+    pub requested_output: Option<OutputId>,
 }
 
 pub struct Shell {
@@ -804,14 +807,17 @@ impl Shell {
             window,
             surface,
             requested_state: None,
+            requested_output: None,
         });
     }
 
     /// Returns whether `surface` was an unmapped window to record it on.
+    /// `output` counts only for a fullscreen request.
     pub fn request_unmapped_state(
         &mut self,
         surface: &WlSurface,
         state: Option<WindowState>,
+        output: Option<OutputId>,
     ) -> bool {
         let Some(entry) = self
             .unmapped
@@ -821,7 +827,20 @@ impl Shell {
             return false;
         };
         entry.requested_state = state;
+        entry.requested_output = output.filter(|_| state == Some(WindowState::Fullscreen));
         true
+    }
+
+    /// The active workspace of a shown monitor, where a window that asked
+    /// for that monitor maps.
+    pub fn active_location_on(&self, output: OutputId) -> Option<Location> {
+        let monitor = self
+            .monitor_by_id(output)
+            .filter(|monitor| !monitor.is_hidden())?;
+        Some(Location {
+            output,
+            workspace: monitor.active().id(),
+        })
     }
 
     pub fn take_unmapped(&mut self, surface: &WlSurface) -> Option<UnmappedWindow> {
