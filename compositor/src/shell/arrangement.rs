@@ -9,7 +9,12 @@
 
 use smithay::utils::{Logical, Point, Rectangle};
 
-use crate::{layout::Direction, shell::Shell, shell::monitor::Monitor, utils::id::OutputId};
+use crate::{
+    layout::{Direction, Edges},
+    shell::Shell,
+    shell::monitor::Monitor,
+    utils::id::OutputId,
+};
 
 const HIDDEN_GAP: i32 = 1024;
 
@@ -135,6 +140,38 @@ impl Shell {
         )?;
         candidates.get(nearest).map(|monitor| monitor.id())
     }
+
+    /// The edges of `output` a drag can snap at: those no other shown
+    /// monitor touches.
+    pub fn open_edges(&self, output: OutputId) -> Edges {
+        let Some(source) = self.monitor_by_id(output).map(Monitor::geometry) else {
+            return Edges::ALL;
+        };
+        open_edges(
+            source,
+            self.shown_monitors()
+                .filter(|monitor| monitor.id() != output)
+                .map(Monitor::geometry),
+        )
+    }
+}
+
+/// The snap edges of `source` that no other monitor touches.
+pub fn open_edges(
+    source: Rectangle<i32, Logical>,
+    others: impl Iterator<Item = Rectangle<i32, Logical>>,
+) -> Edges {
+    let mut open = Edges::ALL;
+    for other in others {
+        let touches = |dir| {
+            gap_towards(source, other, dir) == Some(0)
+                && perpendicular_overlap(source, other, dir) > 0
+        };
+        open.left &= !touches(Direction::Left);
+        open.right &= !touches(Direction::Right);
+        open.top &= !touches(Direction::Up);
+    }
+    open
 }
 
 /// Which pins hold, in order: a pin that overlaps an earlier one that holds
@@ -391,5 +428,68 @@ mod tests {
         let behind = rect(0, 0, 1920, 1080);
         assert_eq!(gap_towards(source, behind, Direction::Right), None);
         assert_eq!(gap_towards(source, behind, Direction::Left), Some(0));
+    }
+
+    fn open_edges_of(layout: &[Rectangle<i32, Logical>], index: usize) -> Edges {
+        open_edges(
+            layout[index],
+            layout
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, rect)| *rect),
+        )
+    }
+
+    #[test]
+    fn a_row_of_three_closes_only_the_shared_edges() {
+        let row = [
+            rect(0, 0, 1920, 1080),
+            rect(1920, 0, 2560, 1440),
+            rect(4480, 0, 1920, 1080),
+        ];
+        let edges = |left, right| Edges {
+            left,
+            right,
+            top: true,
+        };
+        assert_eq!(open_edges_of(&row, 0), edges(true, false));
+        assert_eq!(open_edges_of(&row, 1), edges(false, false));
+        assert_eq!(open_edges_of(&row, 2), edges(false, true));
+    }
+
+    #[test]
+    fn an_l_shape_closes_the_top_under_a_monitor_and_the_side_beside_one() {
+        let layout = l_shape();
+        assert_eq!(
+            open_edges_of(&layout, 0),
+            Edges {
+                left: true,
+                right: false,
+                top: false,
+            }
+        );
+        assert_eq!(open_edges_of(&layout, 1), Edges::ALL);
+        assert_eq!(
+            open_edges_of(&layout, 2),
+            Edges {
+                left: false,
+                right: true,
+                top: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_monitor_touching_only_at_a_corner_closes_nothing() {
+        let diagonal = [rect(0, 0, 1920, 1080), rect(1920, 1080, 1920, 1080)];
+        assert_eq!(open_edges_of(&diagonal, 0), Edges::ALL);
+        assert_eq!(open_edges_of(&diagonal, 1), Edges::ALL);
+    }
+
+    #[test]
+    fn a_monitor_with_a_gap_beside_it_keeps_that_edge_open() {
+        let apart = [rect(0, 0, 1920, 1080), rect(2000, 0, 1920, 1080)];
+        assert_eq!(open_edges_of(&apart, 0), Edges::ALL);
     }
 }

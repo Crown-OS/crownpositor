@@ -28,11 +28,29 @@ pub struct SnapBounds {
     /// Exclusive zones and the outer gap already subtracted.
     pub area: Rectangle<i32, Logical>,
     pub gaps: Gaps,
+    pub open: Edges,
+}
+
+/// The screen edges a drag can snap at. An edge that another monitor touches
+/// is closed: the pointer crosses it to that monitor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Edges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+}
+
+impl Edges {
+    pub const ALL: Self = Self {
+        left: true,
+        right: true,
+        top: true,
+    };
 }
 
 impl SnapBounds {
     pub fn zone_at(self, pointer: Point<f64, Logical>) -> Option<SnapZone> {
-        SnapZone::at(pointer, self.output)
+        SnapZone::at(pointer, self.output, self.open)
     }
 
     pub fn rect(self, zone: SnapZone) -> Rectangle<i32, Logical> {
@@ -64,8 +82,13 @@ impl SnapZone {
     ///
     /// The vertical edges are tested first, so the very corner of the screen —
     /// where the pointer is near the left edge *and* the top — gives a quarter
-    /// rather than a maximize.
-    pub fn at(pointer: Point<f64, Logical>, bounds: Rectangle<i32, Logical>) -> Option<Self> {
+    /// rather than a maximize. A closed edge gives no zone, so the corner
+    /// beside a closed side edge maximizes.
+    pub fn at(
+        pointer: Point<f64, Logical>,
+        bounds: Rectangle<i32, Logical>,
+        open: Edges,
+    ) -> Option<Self> {
         if bounds.is_empty() {
             return None;
         }
@@ -89,7 +112,7 @@ impl SnapZone {
         let near_top = pointer.y <= top + corner;
         let near_bottom = pointer.y >= bottom - corner;
 
-        if pointer.x <= left + EDGE_REACH {
+        if open.left && pointer.x <= left + EDGE_REACH {
             return Some(match (near_top, near_bottom) {
                 (true, _) => Self::TopLeft,
                 (_, true) => Self::BottomLeft,
@@ -97,7 +120,7 @@ impl SnapZone {
             });
         }
 
-        if pointer.x >= right - EDGE_REACH {
+        if open.right && pointer.x >= right - EDGE_REACH {
             return Some(match (near_top, near_bottom) {
                 (true, _) => Self::TopRight,
                 (_, true) => Self::BottomRight,
@@ -105,7 +128,7 @@ impl SnapZone {
             });
         }
 
-        (pointer.y <= top + EDGE_REACH).then_some(Self::Maximize)
+        (open.top && pointer.y <= top + EDGE_REACH).then_some(Self::Maximize)
     }
 
     /// The rect this zone occupies inside `area`.
@@ -153,7 +176,11 @@ mod tests {
     const NO_GAPS: Gaps = Gaps { inner: 0, outer: 0 };
 
     fn at(x: f64, y: f64) -> Option<SnapZone> {
-        SnapZone::at((x, y).into(), area(1000, 800))
+        SnapZone::at((x, y).into(), area(1000, 800), Edges::ALL)
+    }
+
+    fn at_with(x: f64, y: f64, open: Edges) -> Option<SnapZone> {
+        SnapZone::at((x, y).into(), area(1000, 800), open)
     }
 
     #[test]
@@ -189,12 +216,18 @@ mod tests {
 
     #[test]
     fn a_pointer_far_outside_the_area_snaps_to_nothing() {
-        assert_eq!(SnapZone::at((-200.0, 400.0).into(), area(1000, 800)), None);
+        assert_eq!(
+            SnapZone::at((-200.0, 400.0).into(), area(1000, 800), Edges::ALL),
+            None
+        );
     }
 
     #[test]
     fn an_empty_area_has_no_zones() {
-        assert_eq!(SnapZone::at((0.0, 0.0).into(), area(0, 0)), None);
+        assert_eq!(
+            SnapZone::at((0.0, 0.0).into(), area(0, 0), Edges::ALL),
+            None
+        );
     }
 
     #[test]
@@ -253,6 +286,7 @@ mod tests {
             output: area(1000, 800),
             area: Rectangle::new((8, 48).into(), (984, 744).into()),
             gaps: GAPS,
+            open: Edges::ALL,
         };
 
         assert_eq!(
@@ -274,9 +308,42 @@ mod tests {
             output: area(1000, 800),
             area: usable,
             gaps: GAPS,
+            open: Edges::ALL,
         };
 
         assert_eq!(bounds.rect(SnapZone::Maximize), usable);
         assert_eq!(bounds.rect(SnapZone::LeftHalf).loc.y, usable.loc.y);
+    }
+
+    /// The edge shared with the monitor to the right is a way across, so
+    /// the pointer passing over it arms nothing, while the outer edge snaps.
+    #[test]
+    fn a_closed_side_edge_gives_no_zone() {
+        let right_closed = Edges {
+            right: false,
+            ..Edges::ALL
+        };
+        assert_eq!(at_with(998.0, 400.0, right_closed), None);
+        assert_eq!(at_with(998.0, 790.0, right_closed), None);
+        assert_eq!(at_with(2.0, 400.0, right_closed), Some(SnapZone::LeftHalf));
+    }
+
+    #[test]
+    fn the_corner_beside_a_closed_side_edge_maximizes() {
+        let right_closed = Edges {
+            right: false,
+            ..Edges::ALL
+        };
+        assert_eq!(at_with(999.0, 1.0, right_closed), Some(SnapZone::Maximize));
+    }
+
+    #[test]
+    fn a_closed_top_edge_does_not_maximize_but_keeps_its_corners() {
+        let top_closed = Edges {
+            top: false,
+            ..Edges::ALL
+        };
+        assert_eq!(at_with(500.0, 1.0, top_closed), None);
+        assert_eq!(at_with(1.0, 1.0, top_closed), Some(SnapZone::TopLeft));
     }
 }

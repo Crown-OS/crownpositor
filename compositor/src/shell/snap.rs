@@ -133,7 +133,7 @@ impl SnapPreviews {
         let zone = bounds.zone_at(pointer);
 
         match (&mut self.current, zone) {
-            (Some(preview), Some(zone)) if preview.window == window => {
+            (Some(preview), Some(zone)) if preview.window == window && preview.output == output => {
                 if preview.zone == zone && !preview.leaving {
                     return false;
                 }
@@ -181,18 +181,19 @@ impl SnapPreviews {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Gaps, testing::area};
+    use crate::layout::{Edges, Gaps, testing::area};
 
     fn bounds() -> SnapBounds {
         SnapBounds {
             output: area(1000, 800),
             area: area(1000, 800),
             gaps: Gaps { inner: 8, outer: 8 },
+            open: Edges::ALL,
         }
     }
 
     fn track(previews: &mut SnapPreviews, window: WindowId, x: f64, y: f64) -> bool {
-        previews.track(window, OutputId::next(), (x, y).into(), bounds())
+        previews.track(window, OutputId::from_raw(1), (x, y).into(), bounds())
     }
 
     #[test]
@@ -295,5 +296,18 @@ mod tests {
 
         assert_eq!(previews.get().unwrap().window(), second);
         assert_eq!(previews.get().unwrap().zone(), Some(SnapZone::RightHalf));
+    }
+
+    /// A window carried onto another monitor takes its preview with it
+    /// rather than leaving it drawn on the monitor it left.
+    #[test]
+    fn a_preview_follows_its_window_onto_another_output() {
+        let mut previews = SnapPreviews::default();
+        let id = WindowId::next();
+        let (first, second) = (OutputId::next(), OutputId::next());
+
+        previews.track(id, first, (2.0, 400.0).into(), bounds());
+        assert!(previews.track(id, second, (998.0, 400.0).into(), bounds()));
+        assert_eq!(previews.get().map(SnapPreview::output), Some(second));
     }
 }

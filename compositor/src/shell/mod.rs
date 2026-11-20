@@ -1391,6 +1391,7 @@ impl Shell {
                 output: workspace.output_area(),
                 area: workspace.area(),
                 gaps: workspace.gaps(),
+                open: self.open_edges(location.output),
             },
         )
     }

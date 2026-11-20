@@ -24,7 +24,7 @@ use crate::utils::id::WindowId;
 /// the config's own type rather than a mirror of it, because a second two-variant
 /// enum and the conversion between them would say nothing the first does not.
 pub use config::WorkspaceMode;
-pub use snap::{SnapBounds, SnapZone};
+pub use snap::{Edges, SnapBounds, SnapZone};
 pub use tiling::TilingLayout;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
