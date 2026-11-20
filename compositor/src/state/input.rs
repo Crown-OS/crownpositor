@@ -68,7 +68,10 @@ pub struct InputState {
 impl InputState {
     pub fn new(config: &Config) -> Self {
         Self {
-            bindings: Bindings::with_custom(&config.keybinds.custom_keybinds),
+            bindings: Bindings::with_custom(
+                &config.keybinds.custom_keybinds,
+                crate::backend::Preference::detect(),
+            ),
             gesture_bindings: GestureBindings::defaults(),
             gesture: GestureState::new(),
             intercepted: HashSet::new(),

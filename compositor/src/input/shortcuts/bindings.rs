@@ -23,13 +23,13 @@ pub struct Bindings {
 }
 
 impl Bindings {
-    pub fn defaults() -> Self {
-        Self::built_in(Preference::detect() == Preference::Winit)
-    }
-
-    fn built_in(nested: bool) -> Self {
+    /// The built-in table for a session on `backend`.
+    pub fn defaults(backend: Preference) -> Self {
         let mut bindings = Self::default();
-        let nested = nested.then(defaults::nested_bindings).into_iter().flatten();
+        let nested = (backend == Preference::Winit)
+            .then(defaults::nested_bindings)
+            .into_iter()
+            .flatten();
         for (bind, action) in defaults::bindings().chain(nested) {
             bindings.bind(bind.into(), action);
         }
@@ -42,8 +42,8 @@ impl Bindings {
     /// shortcut cannot cost the user their way out of the session. Binding
     /// `none` deletes a chord instead, which hands the key back to whatever has
     /// focus — the only way to reach an application's own `Super+L`.
-    pub fn with_custom(custom: &[Binding]) -> Self {
-        let mut bindings = Self::defaults();
+    pub fn with_custom(custom: &[Binding], backend: Preference) -> Self {
+        let mut bindings = Self::defaults(backend);
 
         for Override { chord, action } in custom::overrides(custom) {
             if chord.is_empty() {
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn the_defaults_cover_every_core_operation() {
-        let bindings = Bindings::defaults();
+        let bindings = Bindings::defaults(Preference::Kms);
         let has = |predicate: fn(&Action) -> bool| bindings.keys.values().any(predicate);
 
         assert!(has(|a| matches!(a, Action::Quit)), "no way to quit");
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn all_four_focus_directions_are_bound() {
-        let bindings = Bindings::defaults();
+        let bindings = Bindings::defaults(Preference::Kms);
 
         for direction in [
             Direction::Left,
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn defaults_bind_a_way_out() {
         assert_eq!(
-            bound(&Bindings::defaults(), "Super+Shift+E"),
+            bound(&Bindings::defaults(Preference::Kms), "Super+Shift+E"),
             Some(Action::Quit),
             "a fresh install must have a quit binding"
         );
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn alt_tab_raises_the_window_switcher_both_ways() {
-        let bindings = Bindings::defaults();
+        let bindings = Bindings::defaults(Preference::Kms);
         assert_eq!(bound(&bindings, "Alt+Tab"), Some(Action::WindowControlNext));
         assert_eq!(
             bound(&bindings, "Alt+Shift+Tab"),
@@ -185,7 +185,7 @@ mod tests {
     /// A digit reaches the workspace it is written on, not the one after it.
     #[test]
     fn the_workspace_digits_line_up_with_their_index() {
-        let bindings = Bindings::defaults();
+        let bindings = Bindings::defaults(Preference::Kms);
 
         assert_eq!(
             bound(&bindings, "Super+1"),
@@ -200,10 +200,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_a_nested_session_can_unplug_outputs() {
+        assert_eq!(
+            bound(&Bindings::defaults(Preference::Winit), "Super+Shift+F1"),
+            Some(Action::NestedDisconnect(1))
+        );
+        assert_eq!(
+            bound(&Bindings::defaults(Preference::Kms), "Super+Shift+F1"),
+            None
+        );
+    }
+
     /// Two defaults on one chord would let the later row win silently.
     #[test]
     fn no_default_chord_is_bound_twice() {
-        let bindings = Bindings::built_in(true);
+        let bindings = Bindings::defaults(Preference::Winit);
 
         assert_eq!(
             defaults::bindings().count() + defaults::nested_bindings().count(),
@@ -214,7 +226,7 @@ mod tests {
     #[test]
     fn an_empty_config_leaves_the_defaults_alone() {
         assert_eq!(
-            bound(&Bindings::with_custom(&[]), "Super+Q"),
+            bound(&Bindings::with_custom(&[], Preference::Kms), "Super+Q"),
             Some(Action::CloseWindow)
         );
     }
@@ -222,14 +234,14 @@ mod tests {
     #[test]
     fn super_alt_l_locks_the_screen() {
         assert_eq!(
-            bound(&Bindings::defaults(), "Super+Alt+L"),
+            bound(&Bindings::defaults(Preference::Kms), "Super+Alt+L"),
             Some(Action::Lock)
         );
     }
 
     #[test]
     fn a_custom_row_adds_without_costing_a_default() {
-        let bindings = Bindings::with_custom(&[row("Super+B", "spawn firefox")]);
+        let bindings = Bindings::with_custom(&[row("Super+B", "spawn firefox")], Preference::Kms);
 
         assert_eq!(
             bound(&bindings, "Super+B"),
@@ -244,7 +256,8 @@ mod tests {
 
     #[test]
     fn a_custom_row_replaces_the_default_on_the_same_chord() {
-        let bindings = Bindings::with_custom(&[row("Super+Enter", "spawn alacritty")]);
+        let bindings =
+            Bindings::with_custom(&[row("Super+Enter", "spawn alacritty")], Preference::Kms);
 
         assert_eq!(
             bound(&bindings, "Super+Enter"),
@@ -255,7 +268,7 @@ mod tests {
     /// Deleted rather than bound to a no-op, so the key reaches the client.
     #[test]
     fn binding_none_gives_the_chord_back_to_the_client() {
-        let bindings = Bindings::with_custom(&[row("Super+L", "none")]);
+        let bindings = Bindings::with_custom(&[row("Super+L", "none")], Preference::Kms);
 
         assert_eq!(bound(&bindings, "Super+L"), None);
         assert_eq!(
@@ -267,7 +280,8 @@ mod tests {
 
     #[test]
     fn a_modifier_only_row_fires_on_its_own_mask() {
-        let bindings = Bindings::with_custom(&[row("Super+Ctrl", "spawn crownlauncher")]);
+        let bindings =
+            Bindings::with_custom(&[row("Super+Ctrl", "spawn crownlauncher")], Preference::Kms);
 
         assert_eq!(
             bindings.lookup_mod_only(chord("Super+Ctrl").mods),
@@ -278,7 +292,7 @@ mod tests {
 
     #[test]
     fn a_row_with_no_shortcut_is_ignored() {
-        let bindings = Bindings::with_custom(&[row("None", "quit")]);
+        let bindings = Bindings::with_custom(&[row("None", "quit")], Preference::Kms);
 
         assert_eq!(
             bound(&bindings, "Super+Shift+E"),
@@ -289,10 +303,13 @@ mod tests {
 
     #[test]
     fn the_last_row_on_a_chord_wins() {
-        let bindings = Bindings::with_custom(&[
-            row("Super+B", "spawn firefox"),
-            row("Super+B", "spawn chromium"),
-        ]);
+        let bindings = Bindings::with_custom(
+            &[
+                row("Super+B", "spawn firefox"),
+                row("Super+B", "spawn chromium"),
+            ],
+            Preference::Kms,
+        );
 
         assert_eq!(
             bound(&bindings, "Super+B"),

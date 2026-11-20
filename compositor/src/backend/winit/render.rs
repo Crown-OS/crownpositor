@@ -172,13 +172,29 @@ fn render_single(
 ) -> anyhow::Result<Vec<usize>> {
     // A hardcoded age of 0 makes every frame a full repaint.
     let age = winit.backend.buffer_age().unwrap_or(0);
-    let Some(viewport) = winit
-        .viewports
-        .first_mut()
-        .filter(|viewport| viewport.is_connected())
-    else {
+    let Some(viewport) = winit.viewports.first_mut() else {
         return Ok(Vec::new());
     };
+    if !viewport.is_connected() {
+        let damage = {
+            let (renderer, mut framebuffer) = winit
+                .backend
+                .bind()
+                .map_err(|err| anyhow!("Failed to bind the winit framebuffer: {err}"))?;
+            let nothing: [TextureRenderElement<GlesTexture>; 0] = [];
+            viewport
+                .damage_tracker
+                .render_output(renderer, &mut framebuffer, 0, &nothing, DISCONNECTED_COLOR)
+                .with_context(|| "Failed to clear the nested window")?
+                .damage
+                .cloned()
+        };
+        winit
+            .backend
+            .submit(damage.as_deref())
+            .map_err(|err| anyhow!("Failed to submit the winit frame: {err}"))?;
+        return Ok(Vec::new());
+    }
     let damage = {
         let (renderer, mut framebuffer) = winit
             .backend
@@ -246,30 +262,33 @@ fn render_split(
                 })
             })
             .collect();
-        winit
-            .window_damage_tracker
-            .render_output(
-                renderer,
-                &mut framebuffer,
-                age,
-                &elements,
-                DISCONNECTED_COLOR,
-            )
-            .with_context(|| "Failed to composite the nested outputs")?
-            .damage
-            .cloned()
+        let tracker = &mut winit.window_damage_tracker;
+        let mut composite = |age| {
+            tracker
+                .render_output(
+                    renderer,
+                    &mut framebuffer,
+                    age,
+                    &elements,
+                    DISCONNECTED_COLOR,
+                )
+                .map(|result| result.damage.cloned())
+                .with_context(|| "Failed to composite the nested outputs")
+        };
+        // The swap paces the next frame, and only drawing makes the surface
+        // current for it, so a frame with nothing new still draws it all.
+        match composite(age)? {
+            Some(damage) if !damage.is_empty() => Some(damage),
+            _ => composite(0)?,
+        }
     };
-    // Only drawing makes the window's surface current, and a swap of a
-    // surface that is not current fails and loses it.
-    if damage.as_ref().is_some_and(|damage| !damage.is_empty()) {
-        winit
-            .backend
-            .submit(damage.as_deref())
-            .map_err(|err| anyhow!("Failed to submit the winit frame: {err}"))?;
-        // Read now, while the swap left the surface current: drawing the
-        // viewports into their textures next frame makes it not current.
-        winit.window_buffer_age = winit.backend.buffer_age().unwrap_or(0);
-    }
+    winit
+        .backend
+        .submit(damage.as_deref())
+        .map_err(|err| anyhow!("Failed to submit the winit frame: {err}"))?;
+    // Read now, while the swap left the surface current: drawing the
+    // viewports into their textures next frame makes it not current.
+    winit.window_buffer_age = winit.backend.buffer_age().unwrap_or(0);
     Ok(drawn)
 }
 

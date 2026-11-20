@@ -11,6 +11,7 @@ use smithay::{
 use protocols::gamma_control::GammaRamps;
 
 use crate::backend::{
+    Preference,
     kms::{KmsState, head::Head, reconfigure},
     winit::WinitState,
 };
@@ -70,6 +71,14 @@ impl BackendState {
             Self::Unset => "none",
             Self::Winit(_) => "winit",
             Self::Kms(_) => "kms",
+        }
+    }
+
+    /// Which kind of session this backend runs.
+    pub fn preference(&self) -> Preference {
+        match self {
+            Self::Winit(_) => Preference::Winit,
+            Self::Unset | Self::Kms(_) => Preference::Kms,
         }
     }
 

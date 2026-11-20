@@ -266,7 +266,8 @@ impl State {
     /// Only the presentation half of window rules is retro-applied: a window
     /// floated by hand must not be re-tiled because an unrelated rule was edited.
     pub fn apply_config(&mut self, new: Config) {
-        self.input.bindings = Bindings::with_custom(&new.keybinds.custom_keybinds);
+        self.input.bindings =
+            Bindings::with_custom(&new.keybinds.custom_keybinds, self.backend.preference());
 
         self.shell.set_default_mode(new.compositor.layout);
         self.shell.set_gaps(Gaps {
@@ -358,7 +359,7 @@ impl State {
             }
 
             Update::CustomKeybinds(custom) => {
-                self.input.bindings = Bindings::with_custom(&custom);
+                self.input.bindings = Bindings::with_custom(&custom, self.backend.preference());
                 config.keybinds.custom_keybinds = custom;
             }
             Update::Appearance(appearance) => {
