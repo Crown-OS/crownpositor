@@ -5,13 +5,17 @@
 //! window moves to the survivor's workspace at its own index. Otherwise the
 //! monitor's non-empty workspaces are appended to the survivor whole.
 
+use std::collections::HashSet;
+
 use crownos_config::schema::WorkspaceScope;
 use smithay::desktop::space::SpaceElement;
 
 use crate::{
     shell::{
         Location, Shell,
-        monitor::{ConnectorId, Monitor},
+        arrangement::nearest_by_centre,
+        monitor::{Monitor, OutputConfig},
+        stash::kept_for_stash,
         tile::Tile,
         workspace::Workspace,
     },
@@ -32,6 +36,48 @@ pub enum Migration {
     Merged(Vec<(usize, WindowId)>),
 }
 
+impl Migration {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Workspaces { workspaces, .. } => workspaces.is_empty(),
+            Self::Merged(windows) => windows.is_empty(),
+        }
+    }
+}
+
+/// Which monitor a migration belongs to. The EDID identity follows a monitor
+/// to another port; the connector tells twins with one identity apart.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MigrationKey {
+    pub edid_identity: String,
+    pub connector: String,
+}
+
+impl MigrationKey {
+    pub fn of(config: &OutputConfig) -> Self {
+        Self {
+            edid_identity: config.edid_identity.clone(),
+            connector: config.name.clone(),
+        }
+    }
+}
+
+/// The record a returning monitor takes back: the one filed under its EDID
+/// identity and connector, else the only one filed under its EDID identity,
+/// which is the same monitor plugged into another port.
+pub fn claimed_key<'a>(
+    keys: impl Iterator<Item = &'a MigrationKey> + Clone,
+    returning: &MigrationKey,
+) -> Option<&'a MigrationKey> {
+    keys.clone().find(|key| *key == returning).or_else(|| {
+        let mut same_monitor = keys.filter(|key| key.edid_identity == returning.edid_identity);
+        match (same_monitor.next(), same_monitor.next()) {
+            (Some(only), None) => Some(only),
+            _ => None,
+        }
+    })
+}
+
 /// How an unplugged monitor's windows are rescued.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rescue {
@@ -40,8 +86,8 @@ pub enum Rescue {
 }
 
 impl Rescue {
-    /// Merging needs a survivor that shares the workspace list, which only a
-    /// shown monitor in `Shared` scope does.
+    /// Merging keeps the workspace list shared, which only a shown monitor in
+    /// `Shared` scope does.
     pub fn choose(scope: WorkspaceScope, departing_is_shown: bool) -> Self {
         match scope {
             WorkspaceScope::Shared if departing_is_shown => Self::MergeByIndex,
@@ -58,20 +104,66 @@ pub struct Departing {
     pub active: bool,
 }
 
-/// What to rescue from the departing workspaces, in list order.
-pub fn plan_unplug(rescue: Rescue, departing: &[Departing]) -> Migration {
+/// The windows and workspaces that already belong to the record of a monitor
+/// that left earlier. Each belongs to one record only, so a monitor that
+/// leaves after them carries them on without claiming them.
+#[derive(Debug, Default)]
+pub struct Owned {
+    windows: HashSet<WindowId>,
+    workspaces: HashSet<WorkspaceId>,
+}
+
+impl Owned {
+    pub fn by<'a>(records: impl Iterator<Item = &'a Migration>) -> Self {
+        let mut owned = Self::default();
+        for record in records {
+            match record {
+                Migration::Workspaces { workspaces, .. } => {
+                    owned.workspaces.extend(workspaces.iter().copied());
+                }
+                Migration::Merged(windows) => {
+                    owned.windows.extend(windows.iter().map(|(_, id)| *id));
+                }
+            }
+        }
+        owned
+    }
+
+    fn holds(&self, workspace: WorkspaceId, window: WindowId) -> bool {
+        self.workspaces.contains(&workspace) || self.windows.contains(&window)
+    }
+}
+
+/// Every window of the departing workspaces, with the index it was at.
+pub fn indexed_windows(departing: &[Departing]) -> Vec<(usize, WindowId)> {
+    departing
+        .iter()
+        .enumerate()
+        .flat_map(|(index, workspace)| workspace.windows.iter().map(move |id| (index, *id)))
+        .collect()
+}
+
+/// What the departing monitor's own record holds, in list order. What an
+/// earlier record already owns moves with the rest but stays with that record.
+pub fn plan_unplug(rescue: Rescue, departing: &[Departing], owned: &Owned) -> Migration {
     match rescue {
         Rescue::MergeByIndex => Migration::Merged(
             departing
                 .iter()
                 .enumerate()
-                .flat_map(|(index, workspace)| workspace.windows.iter().map(move |id| (index, *id)))
+                .flat_map(|(index, workspace)| {
+                    workspace
+                        .windows
+                        .iter()
+                        .filter(|id| !owned.holds(workspace.id, **id))
+                        .map(move |id| (index, *id))
+                })
                 .collect(),
         ),
         Rescue::AppendWorkspaces => {
-            let kept = departing
-                .iter()
-                .filter(|workspace| !workspace.windows.is_empty());
+            let kept = departing.iter().filter(|workspace| {
+                !workspace.windows.is_empty() && !owned.workspaces.contains(&workspace.id)
+            });
             Migration::Workspaces {
                 workspaces: kept.clone().map(|workspace| workspace.id).collect(),
                 active: kept
@@ -109,25 +201,33 @@ pub fn still_in_place(
 
 impl Shell {
     /// The monitor that takes in a departing monitor's windows: the focused
-    /// one, else the primary among the others.
+    /// one, else the shown monitor nearest to it, else the primary.
     pub(super) fn survivor_for(&self, departing: OutputId) -> Option<OutputId> {
-        self.focused
-            .filter(|focused| *focused != departing)
+        let focused = self.focused.filter(|focused| *focused != departing);
+        let nearest = || {
+            let from = self.monitor_by_id(departing)?.geometry();
+            nearest_by_centre(
+                from,
+                self.shown_monitors()
+                    .filter(|monitor| monitor.id() != departing)
+                    .map(|monitor| (monitor.id(), monitor.geometry())),
+            )
+        };
+        focused
+            .or_else(nearest)
             .or_else(|| self.primary_besides(departing).map(Monitor::id))
     }
 
     /// Takes the monitor out of the list, its windows going to `survivor`,
-    /// or to the headless stash when there is none.
+    /// or to the stash when there is none. Either way they are recorded
+    /// against the monitor, so they come back with it.
     pub(super) fn dismantle(
         &mut self,
         departing: OutputId,
         survivor: Option<OutputId>,
     ) -> Option<Monitor> {
         let monitor = self.monitor_by_id(departing)?;
-        let rescue = match survivor {
-            Some(_) => Rescue::choose(self.scope, !monitor.is_hidden()),
-            None => Rescue::AppendWorkspaces,
-        };
+        let rescue = Rescue::choose(self.scope, !monitor.is_hidden());
         let active = monitor.active().id();
         let summary: Vec<Departing> = monitor
             .workspaces()
@@ -138,11 +238,11 @@ impl Shell {
                 active: workspace.id() == active,
             })
             .collect();
-        let connector = monitor.config().connector.clone();
-        let migration = plan_unplug(rescue, &summary);
+        let key = MigrationKey::of(monitor.config());
+        let record = plan_unplug(rescue, &summary, &Owned::by(self.migrated.values()));
 
-        if let (Migration::Merged(windows), Some(target)) = (&migration, survivor) {
-            self.merge_windows(windows, target);
+        if let (Rescue::MergeByIndex, Some(target)) = (rescue, survivor) {
+            self.merge_windows(&indexed_windows(&summary), target);
         }
 
         let index = self
@@ -150,20 +250,24 @@ impl Shell {
             .iter()
             .position(|monitor| monitor.id() == departing)?;
         let mut monitor = self.monitors.remove(index);
-        let mut orphans = monitor.drain_workspaces();
-        orphans.retain(|workspace| !workspace.is_empty());
+        let orphans = monitor.drain_workspaces();
         for tile in orphans.iter().flat_map(Workspace::tiles) {
             tile.window().output_leave(monitor.output());
         }
 
         match survivor {
             Some(target) => {
-                self.migrated.insert(connector, migration);
-                for workspace in orphans {
+                for workspace in orphans
+                    .into_iter()
+                    .filter(|workspace| !workspace.is_empty())
+                {
                     self.adopt(workspace, target);
                 }
             }
-            None => self.headless.extend(orphans),
+            None => self.stash(kept_for_stash(orphans, Workspace::is_empty)),
+        }
+        if !record.is_empty() {
+            self.migrated.insert(key, record);
         }
         Some(monitor)
     }
@@ -192,14 +296,19 @@ impl Shell {
 
     /// Gives a returning monitor back what was rescued from it, whichever
     /// scope is active now.
-    pub(super) fn reclaim_migrated(&mut self, connector: &ConnectorId, target: OutputId) {
-        match self.migrated.remove(connector) {
+    pub(super) fn reclaim_migrated(&mut self, returning: &MigrationKey, target: OutputId) {
+        let Some(key) = claimed_key(self.migrated.keys(), returning).cloned() else {
+            return;
+        };
+        match self.migrated.remove(&key) {
             Some(Migration::Workspaces { workspaces, active }) => {
                 self.reclaim_workspaces(&workspaces, target);
-                if let Some(monitor) = self.monitor_by_id_mut(target)
-                    && let Some(index) = active.and_then(|active| monitor.index_of(active))
+                if let Some(index) = active.and_then(|active| {
+                    self.monitor_by_id(target)
+                        .and_then(|monitor| monitor.index_of(active))
+                }) && self.switches_alone(target)
                 {
-                    monitor.activate(index);
+                    self.activate_index(target, index);
                 }
             }
             Some(Migration::Merged(windows)) => self.reclaim_merged(&windows, target),
@@ -248,16 +357,9 @@ impl Shell {
         }
     }
 
-    /// Hands the windows parked while no monitor was shown to the first one
-    /// that is.
-    pub(super) fn adopt_headless(&mut self, target: OutputId) {
-        let stashed = std::mem::take(&mut self.headless);
-        self.adopt_all(stashed, target);
-    }
-
     /// Adopts a list of workspaces in place of the empty one a new monitor
     /// starts with, so they keep the indices they had.
-    fn adopt_all(&mut self, workspaces: Vec<Workspace>, target: OutputId) {
+    pub(super) fn adopt_all(&mut self, workspaces: Vec<Workspace>, target: OutputId) {
         if workspaces.is_empty() {
             return;
         }
@@ -280,7 +382,7 @@ impl Shell {
         let workspace_id = workspace.id();
 
         let Some(monitor) = self.monitor_by_id_mut(target) else {
-            self.headless.push(workspace);
+            self.stash(vec![workspace]);
             return;
         };
 
@@ -321,7 +423,7 @@ mod tests {
             workspace(&[third], false),
         ];
         assert_eq!(
-            plan_unplug(Rescue::MergeByIndex, &departing),
+            plan_unplug(Rescue::MergeByIndex, &departing, &Owned::default()),
             Migration::Merged(vec![(1, first), (1, second), (2, third)])
         );
     }
@@ -331,7 +433,7 @@ mod tests {
         let window = WindowId::next();
         let departing = [workspace(&[], true), workspace(&[window], false)];
         assert_eq!(
-            plan_unplug(Rescue::AppendWorkspaces, &departing),
+            plan_unplug(Rescue::AppendWorkspaces, &departing, &Owned::default()),
             Migration::Workspaces {
                 workspaces: vec![departing[1].id],
                 active: None,
@@ -344,7 +446,7 @@ mod tests {
         let window = WindowId::next();
         let departing = [workspace(&[], false), workspace(&[window], true)];
         assert_eq!(
-            plan_unplug(Rescue::AppendWorkspaces, &departing),
+            plan_unplug(Rescue::AppendWorkspaces, &departing, &Owned::default()),
             Migration::Workspaces {
                 workspaces: vec![departing[1].id],
                 active: Some(departing[1].id),
@@ -385,5 +487,74 @@ mod tests {
             _ => None,
         };
         assert_eq!(still_in_place(&merged, index_now), [(1, stayed)]);
+    }
+
+    #[test]
+    fn a_window_an_earlier_record_owns_moves_on_but_stays_with_that_record() {
+        let (first_away, own) = (WindowId::next(), WindowId::next());
+        let earlier = Migration::Merged(vec![(1, first_away)]);
+        let departing = [workspace(&[], false), workspace(&[first_away, own], true)];
+
+        let owned = Owned::by([&earlier].into_iter());
+        assert_eq!(
+            plan_unplug(Rescue::MergeByIndex, &departing, &owned),
+            Migration::Merged(vec![(1, own)])
+        );
+        assert_eq!(indexed_windows(&departing), [(1, first_away), (1, own)]);
+    }
+
+    #[test]
+    fn a_workspace_an_earlier_record_owns_is_not_appended_to_a_second_one() {
+        let (first_away, own) = (WindowId::next(), WindowId::next());
+        let departing = [workspace(&[own], true), workspace(&[first_away], false)];
+        let earlier = Migration::Workspaces {
+            workspaces: vec![departing[1].id],
+            active: Some(departing[1].id),
+        };
+
+        let owned = Owned::by([&earlier].into_iter());
+        assert_eq!(
+            plan_unplug(Rescue::AppendWorkspaces, &departing, &owned),
+            Migration::Workspaces {
+                workspaces: vec![departing[0].id],
+                active: Some(departing[0].id),
+            }
+        );
+    }
+
+    fn key(edid_identity: &str, connector: &str) -> MigrationKey {
+        MigrationKey {
+            edid_identity: edid_identity.to_owned(),
+            connector: connector.to_owned(),
+        }
+    }
+
+    #[test]
+    fn twins_take_back_only_what_left_through_their_own_connector() {
+        let keys = [key("Dell A1", "DP-1"), key("Dell A1", "DP-2")];
+        assert_eq!(
+            claimed_key(keys.iter(), &key("Dell A1", "DP-1")),
+            Some(&keys[0])
+        );
+        assert_eq!(claimed_key(keys.iter(), &key("Dell A1", "DP-3")), None);
+    }
+
+    #[test]
+    fn a_monitor_plugged_into_another_port_takes_back_its_own_record() {
+        let keys = [key("Dell A1", "DP-1"), key("eDP-1", "eDP-1")];
+        assert_eq!(
+            claimed_key(keys.iter(), &key("Dell A1", "DP-4")),
+            Some(&keys[0])
+        );
+        assert_eq!(claimed_key(keys.iter(), &key("HDMI-A-1", "HDMI-A-1")), None);
+    }
+
+    #[test]
+    fn a_twin_that_left_first_and_returns_alone_still_finds_its_record() {
+        let keys = [key("Dell A1", "DP-2"), key("Dell A1", "DP-1")];
+        assert_eq!(
+            claimed_key(keys.iter(), &key("Dell A1", "DP-1")),
+            Some(&keys[1])
+        );
     }
 }

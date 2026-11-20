@@ -5,8 +5,30 @@
 //! be told apart by it, so both fall back to their connector name and their
 //! settings follow the port instead.
 
-use crate::shell::{Shell, monitor::ConnectorId};
+use crate::shell::{Shell, monitor::ConnectorId, output_kind::OutputKind};
 use crate::utils::id::OutputId;
+
+/// A connected head that is switched off. It has no monitor, but a twin of
+/// it still has to give up its EDID identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineHead {
+    pub connector: String,
+    pub edid_identity: String,
+    /// The identity it goes by now, decided with the monitors.
+    pub identity: String,
+    pub kind: OutputKind,
+}
+
+impl OfflineHead {
+    pub fn new(connector: &str, edid_identity: &str, kind: OutputKind) -> Self {
+        Self {
+            connector: connector.to_owned(),
+            edid_identity: edid_identity.to_owned(),
+            identity: edid_identity.to_owned(),
+            kind,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct HeadIdentity<'a> {
@@ -39,6 +61,18 @@ impl Shell {
             .map(|monitor| &monitor.config().connector)
     }
 
+    /// The heads that are connected but switched off, as the backend last
+    /// listed them. Returns the monitors whose identity changed.
+    pub fn set_offline_heads(&mut self, mut heads: Vec<OfflineHead>) -> Vec<OutputId> {
+        heads.retain(|head| self.monitor_by_name(&head.connector).is_none());
+        self.offline_heads = heads;
+        self.refresh_identities()
+    }
+
+    pub fn offline_heads(&self) -> &[OfflineHead] {
+        &self.offline_heads
+    }
+
     /// The identity a monitor about to be added goes by, given the ones
     /// already here.
     pub(super) fn identity_beside_others(
@@ -60,29 +94,36 @@ impl Shell {
     /// Re-decides every monitor's identity. Returns the monitors whose
     /// identity changed.
     pub(super) fn refresh_identities(&mut self) -> Vec<OutputId> {
-        let identities: Vec<ConnectorId> = current_identities(&self.head_identities())
+        let identities: Vec<String> = current_identities(&self.head_identities())
             .into_iter()
-            .map(ConnectorId::from_identity)
+            .map(str::to_owned)
             .collect();
+        let (of_monitors, of_offline) = identities.split_at(self.monitors.len());
 
+        for (head, identity) in self.offline_heads.iter_mut().zip(of_offline) {
+            head.identity.clone_from(identity);
+        }
         let mut changed = Vec::new();
-        for (monitor, identity) in self.monitors.iter_mut().zip(identities) {
-            if monitor.config().connector != identity {
-                monitor.config_mut().connector = identity;
+        for (monitor, identity) in self.monitors.iter_mut().zip(of_monitors) {
+            if monitor.config().connector.as_str() != identity {
+                monitor.config_mut().connector = ConnectorId::from_identity(identity);
                 changed.push(monitor.id());
             }
         }
         changed
     }
 
+    /// Every monitor, then every offline head.
     fn head_identities(&self) -> Vec<HeadIdentity<'_>> {
-        self.monitors
-            .iter()
-            .map(|monitor| HeadIdentity {
-                connector: &monitor.config().name,
-                edid_identity: &monitor.config().edid_identity,
-            })
-            .collect()
+        let monitors = self.monitors.iter().map(|monitor| HeadIdentity {
+            connector: &monitor.config().name,
+            edid_identity: &monitor.config().edid_identity,
+        });
+        let offline = self.offline_heads.iter().map(|head| HeadIdentity {
+            connector: &head.connector,
+            edid_identity: &head.edid_identity,
+        });
+        monitors.chain(offline).collect()
     }
 }
 

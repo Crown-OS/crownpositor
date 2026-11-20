@@ -23,6 +23,7 @@ pub mod rule_placement;
 pub mod scale;
 pub mod session_lock;
 pub mod snap;
+pub mod stash;
 pub mod tile;
 pub mod toplevel_drag;
 pub mod transaction;
@@ -70,16 +71,17 @@ use crate::{
         closing::{ClosingWindow, Farewell},
         decoration::resize_edge,
         grab::{moves_left, moves_top},
+        identity::OfflineHead,
         lock_screen::LockScreen,
-        migration::Migration,
+        migration::{Migration, MigrationKey},
         monitor::{
-            ConnectorId, Monitor, OutputConfig, OutputDescriptor, Presence, output_from_descriptor,
-            output_id,
+            Monitor, OutputConfig, OutputDescriptor, Presence, output_from_descriptor, output_id,
         },
         morph::{Choreography, IconOrigin},
         output_kind::NestedPersistence,
         session_lock::SessionLock,
         snap::{SnapPreview, SnapPreviews},
+        stash::STASH,
         tile::{Chrome, Tile, WindowState},
         toplevel_drag::ToplevelDragSession,
         transaction::Transaction,
@@ -265,8 +267,10 @@ pub struct Shell {
     scope: WorkspaceScope,
     /// Workspaces rescued from the last output to be unplugged. Without this, a
     /// lid close on a single-output session would destroy every window.
-    headless: Vec<Workspace>,
-    migrated: HashMap<ConnectorId, Migration>,
+    stashed: Vec<Workspace>,
+    migrated: HashMap<MigrationKey, Migration>,
+    /// Connected heads that are switched off, which twin detection counts.
+    offline_heads: Vec<OfflineHead>,
 
     surface_to_window: HashMap<WlSurface, WindowId>,
     window_to_location: HashMap<WindowId, Location>,
@@ -324,8 +328,9 @@ impl Shell {
             keyboard: None,
             primary_output: config.compositor.primary_output.clone(),
             scope: config.compositor.workspace_scope,
-            headless: Vec::new(),
+            stashed: Vec::new(),
             migrated: HashMap::new(),
+            offline_heads: Vec::new(),
             surface_to_window: HashMap::new(),
             window_to_location: HashMap::new(),
             layer_to_output: HashMap::new(),
@@ -442,6 +447,8 @@ impl Shell {
             &descriptor.physical.model,
             descriptor.serial.as_deref(),
         );
+        self.offline_heads
+            .retain(|head| head.connector != descriptor.name);
         let connector = self.identity_beside_others(&descriptor.name, &edid_identity);
 
         let mut output_config = OutputConfig {
@@ -468,6 +475,7 @@ impl Shell {
         if let Some(setting) = config.output_setting(&descriptor.name, connector.as_str()) {
             output_config.default_mode = setting.layout;
         }
+        let returning = MigrationKey::of(&output_config);
 
         let mut monitor = Monitor::new(
             id,
@@ -481,10 +489,10 @@ impl Shell {
         self.monitors.push(monitor);
         self.refresh_identities();
 
-        self.reclaim_migrated(&connector, id);
         if descriptor.presence == Presence::Shown {
-            self.adopt_headless(id);
+            self.adopt_stash(id);
         }
+        self.reclaim_migrated(&returning, id);
         self.seed_focus(id);
         self.apply_output_settings(config);
         self.arrange_outputs();
@@ -746,13 +754,19 @@ impl Shell {
     }
 
     pub fn workspace(&self, location: Location) -> Option<&Workspace> {
-        self.monitor_by_id(location.output)?
-            .workspace(location.workspace)
+        match location.output {
+            STASH => self.stashed_workspace(location.workspace),
+            output => self.monitor_by_id(output)?.workspace(location.workspace),
+        }
     }
 
     pub fn workspace_mut(&mut self, location: Location) -> Option<&mut Workspace> {
-        self.monitor_by_id_mut(location.output)?
-            .workspace_mut(location.workspace)
+        match location.output {
+            STASH => self.stashed_workspace_mut(location.workspace),
+            output => self
+                .monitor_by_id_mut(output)?
+                .workspace_mut(location.workspace),
+        }
     }
 
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<&Window> {
@@ -1681,7 +1695,7 @@ impl Shell {
         self.monitors
             .iter()
             .flat_map(Monitor::workspaces)
-            .chain(self.headless.iter())
+            .chain(self.stashed.iter())
             .flat_map(Workspace::tiles)
     }
 
@@ -1720,7 +1734,7 @@ impl Shell {
             .monitors
             .iter()
             .flat_map(Monitor::workspaces)
-            .chain(self.headless.iter())
+            .chain(self.stashed.iter())
             .map(Workspace::len)
             .sum();
         assert_eq!(

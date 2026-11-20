@@ -15,13 +15,17 @@ use smithay::{
 use config::Config;
 
 use crate::{
+    layout::{Gaps, WorkspaceMode},
     shell::{
-        Shell,
+        Location, Shell,
+        identity::OfflineHead,
         monitor::{Monitor, OutputDescriptor, Presence},
         output_kind::{NestedPersistence, OutputKind},
+        stash::STASH,
+        workspace::Workspace,
     },
     state::State,
-    utils::id::WorkspaceId,
+    utils::id::{OutputId, WorkspaceId},
 };
 
 struct Fixture {
@@ -221,6 +225,28 @@ fn twin_monitors_go_by_their_connectors_until_one_leaves() -> anyhow::Result<()>
 }
 
 #[test]
+fn a_switched_off_twin_still_makes_both_go_by_their_connectors() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let lit = fixture.plug_head(Head::physical("DP-1", (1920, 1080)).with_serial("A1"));
+    fixture.shell.set_offline_heads(vec![OfflineHead::new(
+        "DP-2",
+        "Test Monitor A1",
+        OutputKind::Physical,
+    )]);
+    assert_eq!(identity_of(&fixture, &lit)?, "DP-1");
+    assert_eq!(fixture.shell.offline_heads()[0].identity, "DP-2");
+
+    let switched_on = fixture.plug_head(Head::physical("DP-2", (1920, 1080)).with_serial("A1"));
+    assert_eq!(identity_of(&fixture, &switched_on)?, "DP-2");
+    assert!(fixture.shell.offline_heads().is_empty());
+
+    fixture.shell.set_offline_heads(Vec::new());
+    fixture.unplug(&switched_on);
+    assert_eq!(identity_of(&fixture, &lit)?, "Test Monitor A1");
+    Ok(())
+}
+
+#[test]
 fn only_physical_monitors_are_persisted_unless_nested_is_asked_for() -> anyhow::Result<()> {
     let mut fixture = Fixture::new()?;
     fixture.plug("DP-1", (1920, 1080));
@@ -295,11 +321,54 @@ fn unplugging_the_focused_monitor_hands_both_focuses_on() -> anyhow::Result<()> 
     fixture.unplug(&middle);
     fixture.shell.refresh();
 
-    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-1"));
-    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-1"));
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-3"));
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-3"));
     fixture.unplug(&left);
     assert_eq!(focused_name(&fixture).as_deref(), Some("DP-3"));
     assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-3"));
+    Ok(())
+}
+
+#[test]
+fn the_nearest_monitor_survives_when_the_focused_one_is_unplugged() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let left = fixture.plug("DP-1", (1920, 1080));
+    let middle = fixture.plug("DP-2", (1920, 1080));
+    let right = fixture.plug("DP-3", (1920, 1080));
+    fixture.shell.focus_at((4000.0, 100.0).into());
+    fixture.shell.focus_keyboard_on_focused();
+
+    fixture.unplug(&right);
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-2"));
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-2"));
+
+    fixture.unplug(&middle);
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-1"));
+    assert!(fixture.shell.monitor(&left).is_some());
+    Ok(())
+}
+
+#[test]
+fn a_stashed_workspace_is_found_while_it_waits_and_comes_back_in_place() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let only = fixture.plug("DP-1", (1920, 1080));
+    fixture.unplug(&only);
+    assert!(fixture.shell.monitors().is_empty());
+    assert_eq!(focused_name(&fixture), None);
+
+    let waiting = Workspace::new(OutputId::next(), WorkspaceMode::Floating, Gaps::default());
+    let waiting_id = waiting.id();
+    fixture.shell.stash(vec![waiting]);
+    let stashed_at = Location {
+        output: STASH,
+        workspace: waiting_id,
+    };
+    assert!(fixture.shell.workspace(stashed_at).is_some());
+
+    let back = fixture.plug("DP-1", (1920, 1080));
+    assert_eq!(fixture.workspace_ids(&back)?, [waiting_id]);
+    assert!(fixture.shell.workspace(stashed_at).is_none());
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-1"));
     Ok(())
 }
 

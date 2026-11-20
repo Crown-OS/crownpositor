@@ -116,6 +116,16 @@ impl Shell {
     }
 }
 
+/// The candidate whose centre is nearest to `from`'s.
+pub fn nearest_by_centre(
+    from: Rectangle<i32, Logical>,
+    candidates: impl Iterator<Item = (OutputId, Rectangle<i32, Logical>)>,
+) -> Option<OutputId> {
+    candidates
+        .min_by_key(|(_, candidate)| centre_distance_squared(from, *candidate))
+        .map(|(id, _)| id)
+}
+
 /// Picks the neighbour a directional focus move should land on.
 ///
 /// Monitors whose perpendicular span overlaps the source are strongly
@@ -241,6 +251,21 @@ mod tests {
             .enumerate()
             .filter(|(index, _)| *index != from);
         nearest_in_direction(layout[from], candidates, dir)
+    }
+
+    #[test]
+    fn the_nearest_monitor_is_measured_centre_to_centre() {
+        let [left, right] = [1, 3].map(OutputId::from_raw);
+        let departing = rect(1920, 0, 1920, 1080);
+        let candidates = [
+            (left, rect(0, 0, 1920, 1080)),
+            (right, rect(3840, 0, 1280, 720)),
+        ];
+        assert_eq!(
+            nearest_by_centre(departing, candidates.into_iter()),
+            Some(right)
+        );
+        assert_eq!(nearest_by_centre(departing, std::iter::empty()), None);
     }
 
     #[test]

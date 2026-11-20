@@ -5,7 +5,7 @@
 
 use smithay::output::Output;
 
-use crate::state::State;
+use crate::{shell::identity::OfflineHead, state::State};
 
 impl State {
     /// Everything that follows an output the backend has just recorded.
@@ -25,5 +25,17 @@ impl State {
         self.refresh_output_heads();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output removed");
+    }
+
+    /// Tells the shell which heads are connected but switched off, so a twin
+    /// of one gives up its EDID identity too.
+    pub fn sync_offline_heads(&mut self) {
+        let heads = self
+            .backend
+            .disabled_heads()
+            .iter()
+            .map(|head| OfflineHead::new(&head.name, &head.identity, head.kind))
+            .collect();
+        self.shell.set_offline_heads(heads);
     }
 }

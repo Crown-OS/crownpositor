@@ -55,6 +55,11 @@ impl Shell {
         linked
     }
 
+    /// Whether a workspace switch on `output` moves no other monitor.
+    pub(in crate::shell) fn switches_alone(&self, output: OutputId) -> bool {
+        self.linked(output) == [output]
+    }
+
     fn each_linked_monitor<T>(
         &mut self,
         from: OutputId,

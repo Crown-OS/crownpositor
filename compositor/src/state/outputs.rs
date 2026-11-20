@@ -190,6 +190,7 @@ impl State {
     /// lookup table, so an output that has just been reconfigured has lost
     /// whatever night light put there.
     pub fn refresh_output_heads(&mut self) {
+        self.sync_offline_heads();
         let heads = self.output_head_snapshots();
         self.wayland
             .output_management_state
