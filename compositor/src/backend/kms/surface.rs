@@ -388,8 +388,8 @@ pub fn disable_head(state: &mut State, node: DrmNode, connector: connector::Hand
         return;
     };
 
-    remove_surface(state, node, crtc);
-
+    // Disabled first, so the head list sent while the output goes already
+    // has this head as switched off rather than missing.
     if let Some(head) = state
         .backend
         .kms()
@@ -400,7 +400,7 @@ pub fn disable_head(state: &mut State, node: DrmNode, connector: connector::Hand
         tracing::info!(output = head.name, %node, "monitor disabled");
     }
 
-    state.refresh_output_heads();
+    remove_surface(state, node, crtc);
 }
 
 /// Takes down the surface on `crtc`, detaching its output from the shell.

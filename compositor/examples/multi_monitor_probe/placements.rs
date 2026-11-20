@@ -37,6 +37,9 @@ pub fn run() -> anyhow::Result<()> {
     while !placements.complete {
         queue.blocking_dispatch(&mut placements)?;
     }
+    // The directory catches up with the model only once someone is bound,
+    // so the first answer can be one change behind; the second is current.
+    queue.roundtrip(&mut placements)?;
     queue.roundtrip(&mut placements)?;
     for (window, placement) in &placements.windows {
         let keyboard = match placements.focused.as_ref() == Some(window) {

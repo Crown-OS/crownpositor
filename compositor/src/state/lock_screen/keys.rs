@@ -120,6 +120,7 @@ impl State {
         let previous = self.input.pointer_location;
         let location = self.clamp_to_outputs(location);
         self.input.pointer_location = location;
+        self.shell.focus_at(location);
         pointer.motion(
             self,
             None,

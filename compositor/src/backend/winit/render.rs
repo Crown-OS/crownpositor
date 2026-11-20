@@ -64,6 +64,9 @@ pub fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
     let mut released = ReleasedClients::default();
 
     debug_frames::script(state);
+    // Rendered inside a dispatch, so whatever that dispatch changed is not
+    // laid out by the idle hook yet.
+    state.layout_menus();
 
     let State {
         backend,

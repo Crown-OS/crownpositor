@@ -181,6 +181,7 @@ impl State {
     fn follow_pen(&mut self, location: Point<f64, Logical>) {
         let previous = self.input.pointer_location;
         self.input.pointer_location = location;
+        self.shell.focus_at(location);
         self.queue_redraw_at(previous);
         self.queue_redraw_at(location);
     }

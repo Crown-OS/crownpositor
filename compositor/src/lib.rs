@@ -32,7 +32,7 @@ pub fn run() -> anyhow::Result<Exit> {
         backend::Preference::Kms => backend::kms::init(&mut state)?,
     }
     tracing::info!(backend = state.backend.name(), "backend started");
-    state.warp_pointer_to_primary();
+    state.focus_primary();
     state.configure_capture_sync();
     state.init_lock_screen();
 
