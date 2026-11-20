@@ -14,6 +14,7 @@ pub mod migration;
 pub mod monitor;
 pub mod morph;
 pub mod output_kind;
+pub mod output_move;
 pub mod overview;
 pub mod popup;
 pub mod primary;
@@ -1165,29 +1166,6 @@ impl Shell {
         };
         self.workspace_mut(location)
             .is_some_and(|workspace| workspace.swap(from, to))
-    }
-
-    /// Moves the focused window onto the active workspace of the monitor
-    /// next to its own, and returns that monitor.
-    pub fn move_focused_to_output(&mut self, dir: Direction) -> Option<OutputId> {
-        let id = self.focused_window_id()?;
-        let from = self.location(id)?.output;
-        let target = self.monitor_in_direction(from, dir)?;
-        let workspace = self.monitor_by_id(target)?.active().id();
-
-        if !self.move_tile(
-            id,
-            Location {
-                output: target,
-                workspace,
-            },
-        ) {
-            return None;
-        }
-
-        self.focus_window(id);
-        self.normalize_all();
-        Some(target)
     }
 
     pub fn toggle_floating(&mut self) -> bool {

@@ -10,6 +10,7 @@ use config::Config;
 use super::{Fixture, Head};
 use crate::{
     handlers::ext_workspace::workspace_model,
+    layout::Direction,
     shell::{output_kind::OutputKind, workspace::WorkspaceRef},
     utils::id::OutputId,
 };
@@ -354,5 +355,64 @@ fn a_rule_with_only_an_output_takes_its_active_workspace() -> anyhow::Result<()>
             .rule_location(&rule(Some(40), None))
             .is_none()
     );
+    Ok(())
+}
+
+#[test]
+fn moving_a_per_monitor_workspace_hands_it_to_the_neighbour_active() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::PerMonitor)?;
+    let focused = desk.focused()?;
+    desk.fixture.shell.ensure_workspace(focused, 1);
+    desk.fixture.shell.activate_index(focused, 1);
+    let moving = desk.fixture.monitor(&desk.shown[0])?.active().id();
+
+    let target = desk
+        .fixture
+        .shell
+        .move_workspace_to_output(Direction::Right);
+    desk.refresh();
+
+    assert_eq!(target, Some(desk.id(&desk.shown[1])?));
+    assert_eq!(desk.fixture.monitor(&desk.shown[1])?.active().id(), moving);
+    assert_eq!(desk.shape()?, [(1, 0), (2, 1), (1, 0), (1, 0)]);
+    Ok(())
+}
+
+#[test]
+fn moving_the_last_workspace_leaves_a_fresh_one_behind() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::PerMonitor)?;
+    let before = desk.fixture.workspace_ids(&desk.shown[0])?;
+
+    desk.fixture
+        .shell
+        .move_workspace_to_output(Direction::Right);
+    desk.refresh();
+
+    let after = desk.fixture.workspace_ids(&desk.shown[0])?;
+    assert_eq!(after.len(), 1);
+    assert_ne!(after, before);
+    assert!(
+        desk.fixture
+            .workspace_ids(&desk.shown[1])?
+            .contains(&before[0])
+    );
+    Ok(())
+}
+
+#[test]
+fn moving_a_shared_workspace_keeps_every_monitor_in_step() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::Shared)?;
+    let focused = desk.focused()?;
+    desk.fixture.shell.ensure_workspace(focused, 1);
+    desk.fixture.shell.activate_index(focused, 1);
+
+    let target = desk
+        .fixture
+        .shell
+        .move_workspace_to_output(Direction::Right);
+    desk.refresh();
+
+    assert_eq!(target, Some(desk.id(&desk.shown[1])?));
+    assert_eq!(desk.shape()?, [(2, 1), (2, 1), (2, 1), (1, 0)]);
     Ok(())
 }

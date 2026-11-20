@@ -172,8 +172,10 @@ impl State {
             Action::WindowControlCommit => self.window_control_commit(),
             Action::WindowControlDismiss => self.window_control_dismiss(),
 
-            Action::MoveWorkspaceToOutput(_) => {
-                tracing::warn!(?action, "action is not implemented yet");
+            Action::MoveWorkspaceToOutput(dir) => {
+                if let Some(output) = self.shell.move_workspace_to_output(dir.into()) {
+                    self.focus_output(output);
+                }
             }
 
             Action::NestedDisconnect(number) => {
