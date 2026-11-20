@@ -27,6 +27,7 @@ impl State {
     pub fn output_removed(&mut self, output: &Output) {
         self.capture.output_removed(output);
         self.wayland.workspace_mode_state.output_removed(output);
+        self.wayland.output_info_state.output_removed(output);
         self.shell.session_lock.output_removed(output);
         self.shell
             .lock_screen

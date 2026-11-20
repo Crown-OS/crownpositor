@@ -69,6 +69,7 @@ pub fn run() -> anyhow::Result<Exit> {
             state.refresh_foreign_toplevels();
             state.refresh_ext_workspaces();
             state.refresh_workspace_mode();
+            state.refresh_output_info();
             state.sync_window_directory();
             state.refresh_virtual_output_titles();
             // Frames queued during dispatch render here, after the burst of

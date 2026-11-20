@@ -73,6 +73,7 @@ use protocols::{
     crownos_context::ContextState,
     crownos_guest_seat::GuestSeatState,
     crownos_input::InputState as CrownosInputState,
+    crownos_output_info::OutputInfoState,
     crownos_plugin_host::PluginHostState,
     crownos_screencast::ScreencastState,
     crownos_surface_animation::SurfaceAnimationState,
@@ -174,6 +175,9 @@ pub struct WaylandState {
     /// `crownos_workspace_mode_v1`. Privileged: it rearranges every window
     /// on the focused workspace.
     pub workspace_mode_state: WorkspaceModeState,
+    /// `crownos_output_info_v1`. Privileged: it names every monitor and says
+    /// which shell surfaces go where.
+    pub output_info_state: OutputInfoState,
     /// `crownos_virtual_output_v1`. Privileged: it adds outputs windows can
     /// be moved onto, out of the user's sight.
     pub virtual_output_state: VirtualOutputState,
@@ -352,6 +356,7 @@ impl WaylandState {
             foreign_toplevels: ForeignToplevels::default(),
             ext_workspace_state: ExtWorkspaceState::new::<State, _>(display, is_privileged),
             workspace_mode_state: WorkspaceModeState::new::<State, _>(display, is_privileged),
+            output_info_state: OutputInfoState::new::<State, _>(display, is_privileged),
             output_capture_source_state: OutputCaptureSourceState::new_with_filter::<State, _>(
                 display,
                 is_privileged,

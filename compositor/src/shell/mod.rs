@@ -16,6 +16,7 @@ pub mod map_focus;
 pub mod migration;
 pub mod monitor;
 pub mod morph;
+pub mod output_info;
 pub mod output_kind;
 pub mod output_move;
 pub mod overview;

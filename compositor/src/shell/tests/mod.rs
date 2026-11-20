@@ -4,6 +4,7 @@
 //! they check what the shell does with outputs and their empty workspaces.
 
 mod cross_monitor;
+mod output_info;
 mod overview_scope;
 mod workspace_scope;
 
