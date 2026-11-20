@@ -286,6 +286,8 @@ impl State {
             .set_workspace_animation(SpringProfile::from_config(new.appearance.animations));
         self.shell
             .set_choreography(Choreography::of(new.appearance.minimize_effect));
+        self.shell
+            .set_primary_output(new.compositor.primary_output.clone());
 
         if self.input.cursor.set_theme(&new.appearance.cursor_theme) {
             self.queue_pointer_redraw();
@@ -347,6 +349,10 @@ impl State {
                 self.shell.set_default_mode(mode);
             }
             Update::FocusFollowsMouse(follows) => config.compositor.focus_follows_mouse = follows,
+            Update::PrimaryOutput(primary_output) => {
+                self.shell.set_primary_output(primary_output.clone());
+                config.compositor.primary_output = primary_output;
+            }
             Update::WindowRules(rules) => {
                 config.window_rules = rules;
                 self.reapply_window_rules();

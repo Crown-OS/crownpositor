@@ -316,3 +316,51 @@ fn the_keyboard_never_goes_to_a_hidden_monitor() -> anyhow::Result<()> {
     assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-1"));
     Ok(())
 }
+
+fn primary_name(fixture: &Fixture) -> Option<String> {
+    fixture
+        .shell
+        .primary()
+        .map(|monitor| monitor.config().name.clone())
+}
+
+fn configured_primary(primary_output: &str) -> Config {
+    let mut config = Config::default();
+    config.compositor.primary_output = Some(primary_output.to_owned());
+    config
+}
+
+#[test]
+fn the_configured_primary_wins_by_connector_or_identity() -> anyhow::Result<()> {
+    let mut by_connector = Fixture::with_config(configured_primary("HDMI-A-1"))?;
+    by_connector.plug("eDP-1", (1920, 1200));
+    by_connector.plug("HDMI-A-1", (2560, 1440));
+    assert_eq!(primary_name(&by_connector).as_deref(), Some("HDMI-A-1"));
+
+    let mut by_identity = Fixture::with_config(configured_primary("Test Monitor S1"))?;
+    by_identity.plug("eDP-1", (1920, 1200));
+    by_identity.plug_head(Head::physical("DP-3", (2560, 1440)).with_serial("S1"));
+    assert_eq!(primary_name(&by_identity).as_deref(), Some("DP-3"));
+    Ok(())
+}
+
+#[test]
+fn the_internal_panel_is_primary_when_nothing_is_configured() -> anyhow::Result<()> {
+    let mut fixture = Fixture::with_config(configured_primary("DP-9"))?;
+    fixture.plug("HDMI-A-1", (2560, 1440));
+    fixture.plug("eDP-1", (1920, 1200));
+    assert_eq!(primary_name(&fixture).as_deref(), Some("eDP-1"));
+    Ok(())
+}
+
+#[test]
+fn the_top_left_monitor_is_primary_without_a_panel() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    fixture.plug("DP-2", (2560, 1440));
+    fixture.plug("DP-1", (1920, 1080));
+    assert_eq!(primary_name(&fixture).as_deref(), Some("DP-2"));
+
+    fixture.shell.set_primary_output(Some("DP-1".to_owned()));
+    assert_eq!(primary_name(&fixture).as_deref(), Some("DP-1"));
+    Ok(())
+}

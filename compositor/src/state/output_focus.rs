@@ -29,6 +29,19 @@ impl State {
         self.warp_pointer(target, InputTime::now());
     }
 
+    /// Puts the pointer in the middle of the primary monitor, where a session
+    /// starts.
+    pub fn warp_pointer_to_primary(&mut self) {
+        let Some(target) = self
+            .shell
+            .primary()
+            .map(|monitor| centre(monitor.geometry()))
+        else {
+            return;
+        };
+        self.warp_pointer(target, InputTime::now());
+    }
+
     /// Pulls the pointer back onto a shown monitor when the one it was on
     /// went away, moved or shrank.
     pub fn refresh_pointer_bounds(&mut self) {

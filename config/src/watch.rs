@@ -25,6 +25,7 @@ type Sink = dyn Fn(Update) + Send + Sync;
 pub enum Update {
     DefaultMode(WorkspaceMode),
     FocusFollowsMouse(bool),
+    PrimaryOutput(Option<String>),
     Outputs(Vec<OutputSetting>),
     OutputLayouts(Vec<OutputLayout>),
     WindowRules(WindowRules),
@@ -59,6 +60,7 @@ impl Watch {
                     compositor::FocusFollowsMouse,
                     Update::FocusFollowsMouse,
                 ),
+                key(&sink, compositor::PrimaryOutput, Update::PrimaryOutput),
                 key(&sink, compositor::Outputs, Update::Outputs),
                 key(&sink, compositor::OutputLayouts, Update::OutputLayouts),
                 key(&sink, compositor::WindowRules, |rules| {

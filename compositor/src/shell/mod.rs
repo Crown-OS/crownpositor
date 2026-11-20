@@ -15,6 +15,7 @@ pub mod morph;
 pub mod output_kind;
 pub mod overview;
 pub mod popup;
+pub mod primary;
 pub mod resize_blur;
 pub mod scale;
 pub mod session_lock;
@@ -253,6 +254,8 @@ pub struct Shell {
     focused: Option<OutputId>,
     /// The monitor whose active workspace holds the keyboard.
     keyboard: Option<OutputId>,
+    /// `compositor.primary_output`: a connector or an identity.
+    primary_output: Option<String>,
     /// Workspaces rescued from the last output to be unplugged. Without this, a
     /// lid close on a single-output session would destroy every window.
     headless: Vec<Workspace>,
@@ -312,6 +315,7 @@ impl Shell {
             monitors: Vec::new(),
             focused: None,
             keyboard: None,
+            primary_output: config.compositor.primary_output.clone(),
             headless: Vec::new(),
             migrated: HashMap::new(),
             surface_to_window: HashMap::new(),
@@ -508,12 +512,7 @@ impl Shell {
         let survivor = self
             .focused
             .filter(|focused| *focused != removed)
-            .or_else(|| {
-                self.monitors
-                    .iter()
-                    .find(|monitor| !monitor.is_hidden())
-                    .map(Monitor::id)
-            });
+            .or_else(|| self.primary().map(Monitor::id));
         let connector = monitor.config().connector.clone();
 
         // An empty workspace carries nothing worth moving to another screen.
