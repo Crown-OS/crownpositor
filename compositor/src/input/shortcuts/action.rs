@@ -149,6 +149,9 @@ pub enum Action {
     /// Into or out of the master column.
     PromoteDemote,
     ResetSize,
+
+    /// Unplugs a nested output, counted from 1, or plugs it back in.
+    NestedDisconnect(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -268,6 +271,13 @@ impl FromStr for Action {
             }
             "promote" | "demote" => Ok(Self::PromoteDemote),
             "reset-size" => Ok(Self::ResetSize),
+            "nested-disconnect" => {
+                let raw = arg("output", parts)?;
+                let number: u8 = raw
+                    .parse()
+                    .map_err(|_| ParseActionError::bad_argument("output", &raw))?;
+                Ok(Self::NestedDisconnect(number))
+            }
 
             other => Err(ParseActionError::UnknownAction(other.to_owned())),
         }
@@ -329,6 +339,13 @@ mod tests {
     #[test]
     fn spawn_without_a_program_is_an_error() {
         assert!("spawn".parse::<Action>().is_err());
+    }
+
+    #[test]
+    fn nested_disconnect_takes_an_output_number() {
+        assert_eq!(parse("nested-disconnect 2"), Action::NestedDisconnect(2));
+        assert!("nested-disconnect".parse::<Action>().is_err());
+        assert!("nested-disconnect winit-2".parse::<Action>().is_err());
     }
 
     #[test]

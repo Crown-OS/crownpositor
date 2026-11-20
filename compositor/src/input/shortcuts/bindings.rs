@@ -7,6 +7,7 @@ use smithay::input::keyboard::{KeysymHandle, ModifiersState};
 
 use config::Binding;
 
+use crate::backend::Preference;
 use crate::input::shortcuts::{
     action::Action,
     chord::{Chord, ModMask},
@@ -23,8 +24,13 @@ pub struct Bindings {
 
 impl Bindings {
     pub fn defaults() -> Self {
+        Self::built_in(Preference::detect() == Preference::Winit)
+    }
+
+    fn built_in(nested: bool) -> Self {
         let mut bindings = Self::default();
-        for (bind, action) in defaults::bindings() {
+        let nested = nested.then(defaults::nested_bindings).into_iter().flatten();
+        for (bind, action) in defaults::bindings().chain(nested) {
             bindings.bind(bind.into(), action);
         }
         bindings
@@ -197,10 +203,10 @@ mod tests {
     /// Two defaults on one chord would let the later row win silently.
     #[test]
     fn no_default_chord_is_bound_twice() {
-        let bindings = Bindings::defaults();
+        let bindings = Bindings::built_in(true);
 
         assert_eq!(
-            defaults::bindings().count(),
+            defaults::bindings().count() + defaults::nested_bindings().count(),
             bindings.keys.len() + bindings.mod_only.len()
         );
     }

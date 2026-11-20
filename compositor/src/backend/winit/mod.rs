@@ -1,7 +1,10 @@
 //! The nested backend: one host window, split into one or more viewports.
 
+mod hotplug;
 mod render;
 mod viewport;
+
+pub use hotplug::{set_head_enabled, toggle_connection};
 
 use anyhow::anyhow;
 use smithay::{
@@ -21,10 +24,10 @@ use crate::{
         present::{self, ReleasedClients},
         render::CrownRenderer as _,
     },
-    state::{BackendState, State},
+    state::{BackendState, DisabledHead, State},
 };
 
-use viewport::{Viewport, descriptor, mode_of, split_window, viewport_names};
+use viewport::{Connection, Viewport, descriptor, mode_of, split_window, viewport_names};
 
 pub struct WinitState {
     pub backend: WinitGraphicsBackend<GlesRenderer>,
@@ -45,6 +48,11 @@ impl WinitState {
         self.viewports.len() > 1
     }
 
+    /// One viewport draws straight into the window, which renders bottom-up.
+    fn output_transform(&self) -> Transform {
+        output_transform(self.viewports.len())
+    }
+
     pub fn queue_redraw(&mut self, output: Option<&Output>) {
         let mut queued = false;
         for viewport in &mut self.viewports {
@@ -62,6 +70,14 @@ impl WinitState {
         for viewport in &mut self.viewports {
             viewport.dirty = true;
         }
+    }
+
+    pub fn disabled_heads(&self) -> Vec<DisabledHead> {
+        self.viewports
+            .iter()
+            .filter(|viewport| viewport.connection == Connection::Disabled)
+            .map(Viewport::disabled_head)
+            .collect()
     }
 
     fn connected_outputs(&self) -> Vec<Output> {

@@ -164,6 +164,10 @@ impl State {
             Action::MoveWorkspaceToOutput(_) => {
                 tracing::warn!(?action, "action is not implemented yet");
             }
+
+            Action::NestedDisconnect(number) => {
+                crate::backend::winit::toggle_connection(self, number);
+            }
         }
 
         // One place recomputes geometry, one place moves keyboard focus.

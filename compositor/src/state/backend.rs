@@ -168,7 +168,8 @@ impl BackendState {
     /// it, and the only way it can be switched back on.
     pub fn disabled_heads(&self) -> Vec<DisabledHead> {
         match self {
-            Self::Unset | Self::Winit(_) => Vec::new(),
+            Self::Unset => Vec::new(),
+            Self::Winit(winit) => winit.disabled_heads(),
             Self::Kms(kms) => kms
                 .devices
                 .values()
@@ -189,6 +190,9 @@ impl BackendState {
         name: &str,
         enabled: bool,
     ) -> anyhow::Result<bool> {
+        if state.backend.winit().is_some() {
+            return crate::backend::winit::set_head_enabled(state, name, enabled);
+        }
         let Some(kms) = state.backend.kms() else {
             anyhow::bail!("this backend cannot enable or disable outputs");
         };

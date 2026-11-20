@@ -33,7 +33,7 @@ use smithay::{
 };
 
 pub use crate::state::{
-    backend::BackendState,
+    backend::{BackendState, DisabledHead},
     client::ClientState,
     common::{CommonState, Exit, RESTART_SESSION_STATUS},
     config::ConfigState,

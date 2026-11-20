@@ -83,6 +83,20 @@ const HARDWARE_KEYS: [(KeyCode, Control); 12] = [
     ),
 ];
 
+/// The nested outputs `Super+Shift+F<n>` unplugs and plugs back in.
+const NESTED_OUTPUT_KEYS: [KeyCode; 4] = [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4];
+
+/// Bindings that only a nested session has, because only there can an
+/// output be unplugged on purpose.
+pub fn nested_bindings() -> impl Iterator<Item = (Keybind, Action)> {
+    (1..).zip(NESTED_OUTPUT_KEYS).map(|(number, key)| {
+        (
+            Keybind::new(SUPER_SHIFT, Some(key)),
+            Action::NestedDisconnect(number),
+        )
+    })
+}
+
 /// Every built-in binding.
 ///
 /// `Super+Space` is left alone: `keybinds.launcher` defaults to it, and a

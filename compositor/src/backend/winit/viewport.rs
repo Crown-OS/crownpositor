@@ -17,6 +17,7 @@ use smithay::{
 use crate::{
     rendering::{blur::BlurCache, corners::CornerMemory, warp::WarpCanvases},
     shell::monitor::{OutputDescriptor, Presence},
+    state::DisabledHead,
 };
 
 pub const REFRESH_RATE: i32 = 60_000;
@@ -69,12 +70,35 @@ impl Viewport {
         }
     }
 
+    /// Starts over with the output the shell made for the same descriptor.
+    pub fn reconnect(&mut self, output: Output) {
+        *self = Self::new(std::mem::take(&mut self.name), output, self.rect);
+    }
+
     pub fn is_connected(&self) -> bool {
         self.connection == Connection::Connected
     }
 
     pub fn mode(&self) -> Mode {
         mode_of(self.rect.size)
+    }
+
+    pub fn descriptor(&self, transform: Transform) -> OutputDescriptor {
+        descriptor(&self.name, self.mode(), transform)
+    }
+
+    pub fn disabled_head(&self) -> DisabledHead {
+        DisabledHead {
+            name: self.name.clone(),
+            identity: self.name.clone(),
+            make: Some(MAKE.to_owned()),
+            model: Some(MODEL.to_owned()),
+            serial: None,
+            physical_mm: (0, 0),
+            modes: vec![self.mode()],
+            preferred: Some(0),
+            vrr_capable: false,
+        }
     }
 
     /// The layout point under `window_point`, for a monitor at `origin`.
