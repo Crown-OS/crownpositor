@@ -1,4 +1,4 @@
-//! Backlights through `brightnessctl`.
+//! The keyboard backlight through `brightnessctl`.
 
 use std::process::Command;
 
@@ -7,48 +7,20 @@ use super::{
     osd::{Gauge, Level},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Panel {
-    Display,
-    Keyboard,
-}
-
-impl Panel {
-    fn selector(self) -> &'static str {
-        match self {
-            Self::Display => "--class=backlight",
-            Self::Keyboard => "--device=*::kbd_backlight",
-        }
-    }
-
-    fn gauge(self) -> Gauge {
-        match self {
-            Self::Display => Gauge::Display,
-            Self::Keyboard => Gauge::Keyboard,
-        }
-    }
-}
-
-/// `--min-value` keeps the display from stepping into a fully dark backlight,
-/// which on most panels is indistinguishable from the screen being off.
-pub fn step(panel: Panel, step: Step) -> Option<Level> {
-    let mut command = Command::new("brightnessctl");
-    command.args([panel.selector(), "--machine-readable"]);
-    if panel == Panel::Display {
-        command.arg("--min-value=1");
-    }
-    let output = command
+pub fn step_keyboard(step: Step) -> Option<Level> {
+    let output = Command::new("brightnessctl")
+        .args(["--device=*::kbd_backlight", "--machine-readable"])
         .args(["set", &step.to_string()])
         .output()
         .inspect_err(|error| tracing::warn!(%error, "cannot run brightnessctl"))
         .ok()?;
     if !output.status.success() {
-        tracing::debug!(?panel, "no backlight brightnessctl can drive");
+        tracing::debug!("no keyboard backlight brightnessctl can drive");
         return None;
     }
     let percent = parse_percent(&String::from_utf8_lossy(&output.stdout))?;
     Some(Level {
-        gauge: panel.gauge(),
+        gauge: Gauge::Keyboard,
         percent,
         muted: false,
     })

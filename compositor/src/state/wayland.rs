@@ -73,6 +73,7 @@ use protocols::{
     crownos_context::ContextState,
     crownos_guest_seat::GuestSeatState,
     crownos_input::InputState as CrownosInputState,
+    crownos_output_brightness::OutputBrightnessState,
     crownos_output_info::OutputInfoState,
     crownos_plugin_host::PluginHostState,
     crownos_screencast::ScreencastState,
@@ -178,6 +179,8 @@ pub struct WaylandState {
     /// `crownos_output_info_v1`. Privileged: it names every monitor and says
     /// which shell surfaces go where.
     pub output_info_state: OutputInfoState,
+    /// `crownos_output_brightness_v1`. Privileged: it can dim every screen.
+    pub output_brightness_state: OutputBrightnessState,
     /// `crownos_virtual_output_v1`. Privileged: it adds outputs windows can
     /// be moved onto, out of the user's sight.
     pub virtual_output_state: VirtualOutputState,
@@ -357,6 +360,7 @@ impl WaylandState {
             ext_workspace_state: ExtWorkspaceState::new::<State, _>(display, is_privileged),
             workspace_mode_state: WorkspaceModeState::new::<State, _>(display, is_privileged),
             output_info_state: OutputInfoState::new::<State, _>(display, is_privileged),
+            output_brightness_state: OutputBrightnessState::new::<State, _>(display, is_privileged),
             output_capture_source_state: OutputCaptureSourceState::new_with_filter::<State, _>(
                 display,
                 is_privileged,

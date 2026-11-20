@@ -11,6 +11,7 @@ mod crownos_capture_privacy;
 mod crownos_context;
 mod crownos_guest_seat;
 mod crownos_input;
+mod crownos_output_brightness;
 mod crownos_output_info;
 mod crownos_screencast;
 mod crownos_surface_animation;

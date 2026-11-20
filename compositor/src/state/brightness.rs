@@ -4,7 +4,8 @@
 use smithay::output::Output;
 
 use crate::{
-    brightness::{Device, FULL, Operation, Outcome, ProbeTarget, software_level},
+    brightness::{Device, FULL, Operation, Outcome, ProbeTarget, Reading, software_level},
+    controls::{Gauge, Level, Step},
     shell::output_kind::OutputKind,
     state::State,
     utils::OutputId,
@@ -46,6 +47,7 @@ impl State {
                 let level = self.saved_software_level(output);
                 if let Some(reading) = self.brightness.probed(output, found, level) {
                     tracing::info!(%output, ?reading, "output brightness found");
+                    self.brightness_changed(output, reading);
                 }
             }
             Outcome::Level {
@@ -54,7 +56,7 @@ impl State {
                 raw,
             } => {
                 if let Some(reading) = self.brightness.read_back(output, sequence, raw) {
-                    tracing::debug!(%output, ?reading, "output brightness changed");
+                    self.brightness_changed(output, reading);
                 }
             }
             Outcome::Failed {
@@ -67,6 +69,33 @@ impl State {
                     self.brightness.refresh(output);
                 }
             }
+        }
+    }
+
+    /// A brightness key: steps the monitor under the pointer and shows its
+    /// new level.
+    pub fn step_focused_brightness(&mut self, step: Step) {
+        let Some(output) = self.shell.focused_monitor().map(|monitor| monitor.id()) else {
+            return;
+        };
+        let Some(reading) = self.brightness.step(output, step) else {
+            return;
+        };
+        self.brightness_changed(output, reading);
+        self.common.controls.show(Level {
+            gauge: Gauge::Display,
+            percent: (reading.level * 100 / FULL) as u8,
+            muted: false,
+        });
+    }
+
+    fn brightness_changed(&mut self, output: OutputId, reading: Reading) {
+        if let Some(output) = self
+            .shell
+            .monitor_by_id(output)
+            .map(|monitor| monitor.output().clone())
+        {
+            self.announce_brightness(&output, reading);
         }
     }
 

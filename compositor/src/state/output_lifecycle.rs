@@ -29,6 +29,7 @@ impl State {
         self.capture.output_removed(output);
         self.wayland.workspace_mode_state.output_removed(output);
         self.wayland.output_info_state.output_removed(output);
+        self.wayland.output_brightness_state.output_removed(output);
         self.brightness.forget(output_id(output));
         self.shell.session_lock.output_removed(output);
         self.shell

@@ -18,6 +18,7 @@ use windowcontrol::Direction as Cycle;
 
 use crate::utils::privilege::trusted_executables;
 use crate::{
+    controls::Control,
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
     shell::{morph::Choreography, tile::WindowState},
@@ -101,6 +102,10 @@ impl State {
                     self.shell.switch_workspace(WorkspaceRef::Index(index));
                     self.shell.focus_keyboard_on_focused();
                 }
+            }
+            Action::Control(Control::Brightness(step)) => {
+                self.step_focused_brightness(step);
+                return;
             }
             Action::Control(control) => {
                 self.common.controls.apply(control);

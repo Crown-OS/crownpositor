@@ -3,7 +3,9 @@
 //! Each control runs a system tool (`wpctl`, `brightnessctl`, `playerctl`) on
 //! the async pool and reports the new level through an on-screen display. One
 //! worker applies them in order, so a held key queues steps rather than racing
-//! a dozen tool invocations against each other.
+//! a dozen tool invocations against each other. Display brightness is the
+//! compositor's own (see [`crate::brightness`]); only its OSD comes through
+//! here.
 
 mod audio;
 mod brightness;
@@ -19,6 +21,7 @@ use crate::utils::runtime::TaskSender;
 
 pub use media::MediaCommand;
 use osd::Osd;
+pub use osd::{Gauge, Level};
 
 /// A signed change, in percent of the full range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,8 +90,8 @@ impl Control {
             Self::Volume(step) => audio::step_volume(step),
             Self::ToggleMute => audio::toggle_mute(),
             Self::ToggleMicMute => audio::toggle_mic_mute(),
-            Self::Brightness(step) => brightness::step(brightness::Panel::Display, step),
-            Self::KeyboardBrightness(step) => brightness::step(brightness::Panel::Keyboard, step),
+            Self::Brightness(_) => None,
+            Self::KeyboardBrightness(step) => brightness::step_keyboard(step),
             Self::Media(command) => {
                 media::send(command);
                 None
@@ -97,9 +100,14 @@ impl Control {
     }
 }
 
+enum Request {
+    Apply(Control),
+    Show(Level),
+}
+
 /// The compositor's handle on the control worker.
 pub struct Controls {
-    requests: UnboundedSender<Control>,
+    requests: UnboundedSender<Request>,
 }
 
 impl Controls {
@@ -110,19 +118,32 @@ impl Controls {
     }
 
     pub fn apply(&self, control: Control) {
-        if self.requests.send(control).is_err() {
-            tracing::warn!(?control, "the control worker is gone");
+        self.send(Request::Apply(control));
+    }
+
+    /// Shows a level the compositor changed itself, in the same bubble as
+    /// the others.
+    pub fn show(&self, level: Level) {
+        self.send(Request::Show(level));
+    }
+
+    fn send(&self, request: Request) {
+        if self.requests.send(request).is_err() {
+            tracing::warn!("the control worker is gone");
         }
     }
 }
 
-async fn work(mut queue: UnboundedReceiver<Control>) {
+async fn work(mut queue: UnboundedReceiver<Request>) {
     let mut osd = Osd::default();
-    while let Some(control) = queue.recv().await {
-        let level = tokio::task::spawn_blocking(move || control.apply())
-            .await
-            .ok()
-            .flatten();
+    while let Some(request) = queue.recv().await {
+        let level = match request {
+            Request::Apply(control) => tokio::task::spawn_blocking(move || control.apply())
+                .await
+                .ok()
+                .flatten(),
+            Request::Show(level) => Some(level),
+        };
         if let Some(level) = level {
             osd.show(level).await;
         }

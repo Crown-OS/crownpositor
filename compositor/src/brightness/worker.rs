@@ -18,10 +18,6 @@ use crate::utils::OutputId;
 #[derive(Debug, Clone)]
 pub enum Job {
     Probe(ProbeTarget),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used once the protocol and the keys land")
-    )]
     Write {
         output: OutputId,
         device: Device,

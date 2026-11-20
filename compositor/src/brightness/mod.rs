@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 pub use device::{CardNode, Device, Found, ProbeTarget};
-pub use level::{FULL, Reading, software_level};
+pub use level::{Control, FULL, Reading, software_level};
 pub use worker::{Operation, Outcome};
 
 use crate::{
@@ -85,10 +85,6 @@ impl Brightness {
         self.nested.clone()
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used once the protocol and the keys land")
-    )]
     pub fn reading(&self, output: OutputId) -> Reading {
         self.outputs
             .get(&output)
@@ -141,10 +137,6 @@ impl Brightness {
 
     /// Sets a level, raised to the control's floor. `None` when the level
     /// of `output` cannot change.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used once the protocol and the keys land")
-    )]
     pub fn set(&mut self, output: OutputId, level: u32) -> Option<Reading> {
         let entry = self.outputs.get_mut(&output)?;
         entry.level = entry.device.control().clamp(level)?;
@@ -164,10 +156,6 @@ impl Brightness {
         Some(reading)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used once the protocol and the keys land")
-    )]
     pub fn step(&mut self, output: OutputId, step: Step) -> Option<Reading> {
         let current = self.outputs.get(&output)?.level;
         self.set(output, level::stepped(current, step))
@@ -205,7 +193,7 @@ impl Brightness {
     /// The share of full brightness the gamma ramp of `output` keeps.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "used once the protocol and the keys land")
+        expect(dead_code, reason = "used once the software dim lands")
     )]
     pub fn software_dim(&self, output: OutputId) -> f64 {
         match self.outputs.get(&output) {
@@ -220,7 +208,7 @@ impl Brightness {
     /// written once for a burst of changes.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "used once the protocol and the keys land")
+        expect(dead_code, reason = "used once the software dim lands")
     )]
     pub fn take_software_changed(&mut self) -> bool {
         std::mem::take(&mut self.software_changed)

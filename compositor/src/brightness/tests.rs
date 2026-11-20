@@ -1,6 +1,6 @@
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
-use super::{level::Control, *};
+use super::*;
 
 const PANEL: OutputId = OutputId::from_raw(1);
 const MONITOR: OutputId = OutputId::from_raw(2);

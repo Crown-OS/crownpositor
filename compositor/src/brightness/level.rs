@@ -46,10 +46,6 @@ pub struct Reading {
 }
 
 impl Reading {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used once the protocol and the keys land")
-    )]
     pub const UNCONTROLLED: Self = Self {
         control: Control::None,
         level: FULL,
@@ -57,10 +53,6 @@ impl Reading {
 }
 
 /// `level` moved by `step` percent of the full range.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used once the protocol and the keys land")
-)]
 pub fn stepped(level: u32, step: Step) -> u32 {
     let change = i64::from(step.0) * i64::from(FULL) / 100;
     (i64::from(level) + change).clamp(0, i64::from(FULL)) as u32
@@ -70,7 +62,7 @@ pub fn stepped(level: u32, step: Step) -> u32 {
 /// monitor brought back to full loses its old dim.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "used once the protocol and the keys land")
+    expect(dead_code, reason = "used once the software dim lands")
 )]
 pub fn software_share(level: u32) -> Option<f64> {
     (level < FULL).then(|| f64::from(level) / f64::from(FULL))
