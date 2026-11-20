@@ -52,6 +52,7 @@ pub fn run() -> anyhow::Result<Exit> {
     event_loop
         .run(None, &mut state, |state| {
             state.shell.refresh();
+            state.refresh_pointer_bounds();
             // A layer surface that maps, changes its keyboard interactivity or
             // goes away moves focus with no input event to hang the decision
             // off, so the reconcile belongs here rather than at every mutation.

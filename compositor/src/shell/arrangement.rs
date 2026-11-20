@@ -9,7 +9,7 @@
 
 use smithay::utils::{Logical, Point, Rectangle};
 
-use crate::{layout::Direction, shell::Shell, shell::monitor::Monitor};
+use crate::{layout::Direction, shell::Shell, shell::monitor::Monitor, utils::id::OutputId};
 
 const HIDDEN_GAP: i32 = 1024;
 
@@ -47,7 +47,10 @@ impl Shell {
 
         self.normalize_positions();
         self.park_hidden();
-        self.sort_monitors();
+        self.monitors.sort_by_key(|monitor| {
+            let position = monitor.config().position;
+            (position.y, position.x)
+        });
     }
 
     /// Hidden monitors go past the right edge with a gap, so no surface
@@ -94,38 +97,22 @@ impl Shell {
         }
     }
 
-    /// Orders the list top-to-bottom then left-to-right, carrying focus.
-    ///
-    /// `focused_output` is a position in this list, so a sort that does not
-    /// rebase it silently moves focus to whichever monitor lands there.
-    fn sort_monitors(&mut self) {
-        let focused = self.monitors.get(self.focused_output).map(Monitor::id);
-
-        self.monitors.sort_by_key(|monitor| {
-            let position = monitor.config().position;
-            (position.y, position.x)
-        });
-
-        if let Some(focused) = focused {
-            self.focused_output = self
-                .monitors
+    /// The shown monitor next to `from` in `dir`, by geometry.
+    pub fn monitor_in_direction(&self, from: OutputId, dir: Direction) -> Option<OutputId> {
+        let source = self.monitor_by_id(from)?.geometry();
+        let candidates: Vec<&Monitor> = self
+            .shown_monitors()
+            .filter(|monitor| monitor.id() != from)
+            .collect();
+        let nearest = nearest_in_direction(
+            source,
+            candidates
                 .iter()
-                .position(|monitor| monitor.id() == focused)
-                .unwrap_or(0);
-        }
-    }
-
-    /// The monitor next to `from` in `dir`, by geometry.
-    pub fn monitor_in_direction(&self, from: usize, dir: Direction) -> Option<usize> {
-        let source = self.monitors.get(from)?.geometry();
-        let candidates = self
-            .monitors
-            .iter()
-            .enumerate()
-            .filter(|(index, monitor)| *index != from && !monitor.is_hidden())
-            .map(|(index, monitor)| (index, monitor.geometry()));
-
-        nearest_in_direction(source, candidates, dir)
+                .enumerate()
+                .map(|(index, monitor)| (index, monitor.geometry())),
+            dir,
+        )?;
+        candidates.get(nearest).map(|monitor| monitor.id())
     }
 }
 

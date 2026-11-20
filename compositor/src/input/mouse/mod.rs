@@ -8,7 +8,10 @@ use smithay::{
     },
     input::pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
-    wayland::{seat::WaylandFocus, shell::wlr_layer::KeyboardInteractivity},
+    wayland::{
+        seat::WaylandFocus,
+        shell::wlr_layer::{KeyboardInteractivity, Layer},
+    },
 };
 
 use crate::{
@@ -109,6 +112,7 @@ impl State {
 
         let previous = self.input.pointer_location;
         self.input.pointer_location = location;
+        self.shell.focus_at(location);
 
         // An open menu owns the pointer while it is inside it: highlighting
         // follows the cursor and no client hears a thing.
@@ -135,6 +139,9 @@ impl State {
             .as_ref()
             .is_some_and(|(target, _)| target.is_decoration());
         self.track_frame_hover(on_frame);
+        if !pointer.is_grabbed() && self.config.current.compositor.focus_follows_mouse {
+            self.focus_window_under_hover(under.as_ref().map(|(target, _)| target));
+        }
 
         pointer.motion(
             self,
@@ -264,6 +271,23 @@ impl State {
         }
     }
 
+    /// Focus follows the mouse: the window under the pointer takes the
+    /// keyboard as soon as the pointer reaches it.
+    fn focus_window_under_hover(&mut self, under: Option<&PointerFocusTarget>) {
+        let Some(id) = under
+            .and_then(PointerFocusTarget::window)
+            .and_then(|window| self.window_id_of(window))
+        else {
+            return;
+        };
+        if self.shell.focused_window_id() == Some(id) {
+            return;
+        }
+        self.shell.focus_window(id);
+        self.shell.focus_layer(None);
+        self.update_keyboard_focus();
+    }
+
     /// The window whose frame the pointer is over, by id.
     fn frame_under_pointer(&self) -> Option<WindowId> {
         let (target, _) = self
@@ -315,9 +339,10 @@ impl State {
             return;
         };
 
+        let location = pointer.current_location();
         let under = self
             .shell
-            .pointer_focus_under(pointer.current_location())
+            .pointer_focus_under(location)
             .map(|(target, _)| target);
 
         match under {
@@ -344,7 +369,14 @@ impl State {
             // Window focus is deliberately left where it was. Clearing it would
             // unfocus the terminal the user is typing into every time they
             // reach for the panel or click the wallpaper.
+            //
+            // A press on the desktop itself, a wallpaper or a widget under the
+            // windows, moves the keyboard to that monitor's workspace; a press
+            // on a panel over the windows does not.
             Some(PointerFocusTarget::LayerShell { layer, .. }) => {
+                if matches!(layer.layer(), Layer::Background | Layer::Bottom) {
+                    self.focus_keyboard_on_monitor_at(location);
+                }
                 let on_demand =
                     layer.cached_state().keyboard_interactivity == KeyboardInteractivity::OnDemand;
                 if on_demand {
@@ -352,13 +384,21 @@ impl State {
                 }
             }
 
+            None => self.focus_keyboard_on_monitor_at(location),
+
             // The lock surface already holds the keyboard; nothing to move.
-            // Nor with nothing under the pointer at all — no wallpaper, no
-            // window: there is nothing to move focus to, or take it from.
-            Some(PointerFocusTarget::LockScreen { .. }) | None => {}
+            Some(PointerFocusTarget::LockScreen { .. }) => {}
         }
 
         self.update_keyboard_focus();
+    }
+}
+
+impl State {
+    fn focus_keyboard_on_monitor_at(&mut self, location: Point<f64, Logical>) {
+        if let Some(output) = self.shell.monitor_at(location).map(Monitor::id) {
+            self.shell.focus_keyboard_on(output);
+        }
     }
 }
 

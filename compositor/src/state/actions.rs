@@ -74,14 +74,19 @@ impl State {
                 self.shell.move_focused(dir.into());
             }
             Action::FocusOutput(dir) => {
-                self.shell.focus_output_direction(dir.into());
+                if let Some(output) = self.shell.output_in_direction(dir.into()) {
+                    self.focus_output(output);
+                }
             }
             Action::MoveWindowToOutput(dir) => {
-                self.shell.move_focused_to_output(dir.into());
+                if let Some(output) = self.shell.move_focused_to_output(dir.into()) {
+                    self.focus_output(output);
+                }
             }
 
             Action::Workspace(target) => {
                 self.shell.switch_workspace(target);
+                self.shell.focus_keyboard_on_focused();
             }
             Action::MoveWindowToWorkspace { target, follow } => {
                 self.shell.move_focused_to_workspace(target, follow);
@@ -89,6 +94,7 @@ impl State {
             Action::CreateWorkspace => {
                 if let Some(index) = self.shell.create_workspace() {
                     self.shell.switch_workspace(WorkspaceRef::Index(index));
+                    self.shell.focus_keyboard_on_focused();
                 }
             }
             Action::Control(control) => {

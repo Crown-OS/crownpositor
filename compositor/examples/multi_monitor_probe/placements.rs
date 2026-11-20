@@ -22,6 +22,7 @@ struct Placement {
 #[derive(Default)]
 struct Placements {
     windows: Vec<(CrownosWindowV1, Placement)>,
+    focused: Option<CrownosWindowV1>,
     complete: bool,
 }
 
@@ -37,9 +38,13 @@ pub fn run() -> anyhow::Result<()> {
         queue.blocking_dispatch(&mut placements)?;
     }
     queue.roundtrip(&mut placements)?;
-    for (_, placement) in &placements.windows {
+    for (window, placement) in &placements.windows {
+        let keyboard = match placements.focused.as_ref() == Some(window) {
+            true => " keyboard",
+            false => "",
+        };
         println!(
-            "window {} app_id={} output={} workspace={}",
+            "window {} app_id={} output={} workspace={}{keyboard}",
             placement.identifier, placement.app_id, placement.output, placement.workspace
         );
     }
@@ -71,6 +76,7 @@ impl Dispatch<CrownosWindowControlManagerV1, ()> for Placements {
             crownos_window_control_manager_v1::Event::Window { window } => {
                 state.windows.push((window, Placement::default()))
             }
+            crownos_window_control_manager_v1::Event::Focus { window } => state.focused = window,
             crownos_window_control_manager_v1::Event::Done => state.complete = true,
             _ => {}
         }

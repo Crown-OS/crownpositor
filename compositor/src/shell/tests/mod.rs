@@ -33,6 +33,7 @@ struct Head<'a> {
     size: (i32, i32),
     kind: OutputKind,
     serial: Option<&'a str>,
+    presence: Presence,
 }
 
 impl<'a> Head<'a> {
@@ -42,6 +43,14 @@ impl<'a> Head<'a> {
             size,
             kind: OutputKind::Physical,
             serial: None,
+            presence: Presence::Shown,
+        }
+    }
+
+    fn hidden(self) -> Self {
+        Self {
+            presence: Presence::Hidden,
+            ..self
         }
     }
 
@@ -100,7 +109,7 @@ impl Fixture {
                 refresh_interval: None,
                 serial: head.serial.map(str::to_owned),
                 edid: None,
-                presence: Presence::Shown,
+                presence: head.presence,
                 kind: head.kind,
             },
         )
@@ -226,5 +235,84 @@ fn only_physical_monitors_are_persisted_unless_nested_is_asked_for() -> anyhow::
     };
     assert_eq!(names(NestedPersistence::Skip), ["DP-1"]);
     assert_eq!(names(NestedPersistence::Save), ["DP-1", "winit-1"]);
+    Ok(())
+}
+
+fn focused_name(fixture: &Fixture) -> Option<String> {
+    fixture
+        .shell
+        .focused_monitor()
+        .map(|monitor| monitor.config().name.clone())
+}
+
+fn keyboard_name(fixture: &Fixture) -> Option<String> {
+    fixture
+        .shell
+        .keyboard_monitor()
+        .map(|monitor| monitor.config().name.clone())
+}
+
+#[test]
+fn the_pointer_moves_the_focused_monitor_and_leaves_the_keyboard() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    fixture.plug("DP-1", (1920, 1080));
+    fixture.plug("DP-2", (1280, 720));
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-1"));
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-1"));
+
+    assert!(fixture.shell.focus_at((2000.0, 100.0).into()));
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-2"));
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-1"));
+
+    assert!(fixture.shell.focus_keyboard_on_focused());
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-2"));
+    Ok(())
+}
+
+#[test]
+fn a_point_off_every_monitor_keeps_the_focused_one() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    fixture.plug("DP-1", (1920, 1080));
+    fixture.plug("DP-2", (1280, 720));
+    fixture.shell.focus_at((2000.0, 100.0).into());
+
+    assert!(!fixture.shell.focus_at((2000.0, 900.0).into()));
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-2"));
+    Ok(())
+}
+
+#[test]
+fn unplugging_the_focused_monitor_hands_both_focuses_on() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let left = fixture.plug("DP-1", (1920, 1080));
+    let middle = fixture.plug("DP-2", (1920, 1080));
+    fixture.plug("DP-3", (1280, 720));
+    fixture.shell.focus_at((2000.0, 100.0).into());
+    fixture.shell.focus_keyboard_on_focused();
+
+    fixture.unplug(&middle);
+    fixture.shell.refresh();
+
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-1"));
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-1"));
+    fixture.unplug(&left);
+    assert_eq!(focused_name(&fixture).as_deref(), Some("DP-3"));
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-3"));
+    Ok(())
+}
+
+#[test]
+fn the_keyboard_never_goes_to_a_hidden_monitor() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    fixture.plug("DP-1", (1920, 1080));
+    let hidden = fixture.plug_head(
+        Head::physical("HEADLESS-1", (3840, 2160))
+            .of_kind(OutputKind::Virtual)
+            .hidden(),
+    );
+
+    let hidden_id = fixture.monitor(&hidden)?.id();
+    assert!(!fixture.shell.focus_keyboard_on(hidden_id));
+    assert_eq!(keyboard_name(&fixture).as_deref(), Some("DP-1"));
     Ok(())
 }

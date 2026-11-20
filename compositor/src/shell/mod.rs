@@ -5,6 +5,7 @@ pub mod arrangement;
 pub mod closing;
 pub mod decoration;
 pub mod dust;
+pub mod focus;
 pub mod gaming;
 pub mod grab;
 pub mod identity;
@@ -248,7 +249,10 @@ pub struct UnmappedWindow {
 
 pub struct Shell {
     monitors: Vec<Monitor>,
-    focused_output: usize,
+    /// The monitor under the pointer.
+    focused: Option<OutputId>,
+    /// The monitor whose active workspace holds the keyboard.
+    keyboard: Option<OutputId>,
     /// Workspaces rescued from the last output to be unplugged. Without this, a
     /// lid close on a single-output session would destroy every window.
     headless: Vec<Workspace>,
@@ -306,7 +310,8 @@ impl Shell {
     pub fn try_new(display: &DisplayHandle, config: &Config) -> anyhow::Result<Self> {
         Ok(Self {
             monitors: Vec::new(),
-            focused_output: 0,
+            focused: None,
+            keyboard: None,
             headless: Vec::new(),
             migrated: HashMap::new(),
             surface_to_window: HashMap::new(),
@@ -390,30 +395,12 @@ impl Shell {
             .filter(move |monitor| monitor.config().kind.is_persisted(nested))
     }
 
-    fn first_shown(&self) -> Option<usize> {
-        self.monitors
-            .iter()
-            .position(|monitor| !monitor.is_hidden())
-    }
-
     pub fn monitor_by_id(&self, id: OutputId) -> Option<&Monitor> {
         self.monitors.iter().find(|monitor| monitor.id() == id)
     }
 
     pub fn monitor_by_id_mut(&mut self, id: OutputId) -> Option<&mut Monitor> {
         self.monitors.iter_mut().find(|monitor| monitor.id() == id)
-    }
-
-    pub fn focused_monitor(&self) -> Option<&Monitor> {
-        self.monitors.get(self.focused_output)
-    }
-
-    pub fn focused_monitor_mut(&mut self) -> Option<&mut Monitor> {
-        self.monitors.get_mut(self.focused_output)
-    }
-
-    pub fn focused_output(&self) -> Option<&Output> {
-        self.focused_monitor().map(Monitor::output)
     }
 
     pub fn contains_output(&self, output: &Output) -> bool {
@@ -486,6 +473,7 @@ impl Shell {
         if descriptor.presence == Presence::Shown {
             self.adopt_headless(id);
         }
+        self.seed_focus(id);
         self.apply_output_settings(config);
         self.arrange_outputs();
         self.refresh_usable(&output);
@@ -515,11 +503,17 @@ impl Shell {
         self.layer_to_output
             .retain(|_, owner| *owner != output_id(output));
 
-        let survivor = (0..self.monitors.len())
-            .find(|candidate| *candidate != index && !self.monitors[*candidate].is_hidden())
-            .map(|candidate| self.monitors[candidate].id());
-
+        let removed = output_id(output);
         let mut monitor = self.monitors.remove(index);
+        let survivor = self
+            .focused
+            .filter(|focused| *focused != removed)
+            .or_else(|| {
+                self.monitors
+                    .iter()
+                    .find(|monitor| !monitor.is_hidden())
+                    .map(Monitor::id)
+            });
         let connector = monitor.config().connector.clone();
 
         // An empty workspace carries nothing worth moving to another screen.
@@ -545,12 +539,7 @@ impl Shell {
             dh.remove_global::<State>(global);
         }
         self.refresh_identities();
-        self.focused_output = self
-            .focused_output
-            .min(self.monitors.len().saturating_sub(1));
-        if self.focused_monitor().is_some_and(Monitor::is_hidden) {
-            self.focused_output = self.first_shown().unwrap_or(0);
-        }
+        self.hand_focus_over(removed, survivor);
 
         self.arrange_outputs();
         self.normalize_all();
@@ -696,7 +685,7 @@ impl Shell {
     /// A locked session outranks all of it: nothing but the lock surface is
     /// typeable, and before it maps, nothing at all is.
     pub fn keyboard_focus(&self) -> Option<KeyboardFocusTarget> {
-        let focused = self.focused_output();
+        let focused = self.keyboard_output();
         if self.lock_screen.is_active() {
             return None;
         }
@@ -975,13 +964,7 @@ impl Shell {
         let Some(location) = self.location(id) else {
             return false;
         };
-        if let Some(index) = self
-            .monitors
-            .iter()
-            .position(|monitor| monitor.id() == location.output && !monitor.is_hidden())
-        {
-            self.focused_output = index;
-        }
+        self.focus_keyboard_on(location.output);
         let Some(workspace) = self.workspace_mut(location) else {
             return false;
         };
@@ -989,12 +972,6 @@ impl Shell {
         // would be: callers that know its icon restore it from there first.
         workspace.unminimize(id, IconOrigin::bottom_of(workspace.output_area()));
         workspace.focus_window(id)
-    }
-
-    pub fn focused_window(&self) -> Option<&Window> {
-        let monitor = self.focused_monitor()?;
-        let workspace = monitor.active();
-        workspace.tile(workspace.focus()?).map(Tile::window)
     }
 
     /// Holds a window on a hidden monitor to the monitor's size: with nobody
@@ -1253,12 +1230,15 @@ impl Shell {
             })
     }
 
-    /// Moves the focused window to another workspace on the same output.
+    /// Moves the focused window to another workspace on its own output.
     pub fn move_focused_to_workspace(&mut self, target: WorkspaceRef, follow: bool) -> bool {
         let Some(id) = self.focused_window_id() else {
             return false;
         };
-        let Some(monitor) = self.focused_monitor() else {
+        let Some(monitor) = self
+            .location(id)
+            .and_then(|at| self.monitor_by_id(at.output))
+        else {
             return false;
         };
 
@@ -1282,8 +1262,8 @@ impl Shell {
         if let Some(workspace) = self.workspace_mut(location) {
             workspace.focus_window(id);
         }
-        if follow {
-            self.switch_workspace(WorkspaceRef::Index(index));
+        if follow && let Some(monitor) = self.monitor_by_id_mut(location.output) {
+            monitor.activate(index);
         }
         true
     }
@@ -1332,10 +1312,6 @@ impl Shell {
         true
     }
 
-    pub fn focused_window_id(&self) -> Option<WindowId> {
-        self.focused_monitor()?.active().focus()
-    }
-
     /// Directional focus: the layout's own answer first, then list order.
     pub fn focus_direction(&mut self, dir: Direction) -> bool {
         let Some(next) = self.neighbour(dir) else {
@@ -1345,7 +1321,7 @@ impl Shell {
     }
 
     fn neighbour(&self, dir: Direction) -> Option<WindowId> {
-        let workspace = self.focused_monitor()?.active();
+        let workspace = self.keyboard_monitor()?.active();
         let from = workspace.focus()?;
         workspace.neighbour(from, dir)
     }
@@ -1365,36 +1341,27 @@ impl Shell {
             .is_some_and(|workspace| workspace.swap(from, to))
     }
 
-    pub fn focus_output_direction(&mut self, dir: Direction) -> bool {
-        let Some(next) = self.monitor_in_direction(self.focused_output, dir) else {
-            return false;
-        };
-        self.focused_output = next;
-        true
-    }
+    /// Moves the focused window onto the active workspace of the monitor
+    /// next to its own, and returns that monitor.
+    pub fn move_focused_to_output(&mut self, dir: Direction) -> Option<OutputId> {
+        let id = self.focused_window_id()?;
+        let from = self.location(id)?.output;
+        let target = self.monitor_in_direction(from, dir)?;
+        let workspace = self.monitor_by_id(target)?.active().id();
 
-    pub fn move_focused_to_output(&mut self, dir: Direction) -> bool {
-        let Some(id) = self.focused_window_id() else {
-            return false;
-        };
-        let from = self.focused_output;
-        if !self.focus_output_direction(dir) {
-            return false;
-        }
-
-        let Some(monitor) = self.focused_monitor() else {
-            self.focused_output = from;
-            return false;
-        };
-        let (output, workspace) = (monitor.id(), monitor.active().id());
-
-        if !self.move_tile(id, Location { output, workspace }) {
-            return false;
+        if !self.move_tile(
+            id,
+            Location {
+                output: target,
+                workspace,
+            },
+        ) {
+            return None;
         }
 
         self.focus_window(id);
         self.normalize_all();
-        true
+        Some(target)
     }
 
     pub fn toggle_floating(&mut self) -> bool {
@@ -1416,7 +1383,7 @@ impl Shell {
         if tile.state().is_floating() && tile.floating_rect().is_empty() {
             tile.float_into(area, cascade);
         }
-        self.mark_focused_dirty();
+        self.mark_dirty(id);
         true
     }
 
@@ -1520,15 +1487,13 @@ impl Shell {
             .is_some_and(|monitor| monitor.active_mut().set_mode(mode))
     }
 
+    /// Acts on the layout around the keyboard window.
     pub fn apply_layout_op(&mut self, op: LayoutOp) -> bool {
-        self.focused_monitor_mut()
+        let Some(keyboard) = self.keyboard else {
+            return false;
+        };
+        self.monitor_by_id_mut(keyboard)
             .is_some_and(|monitor| monitor.active_mut().apply_layout_op(op))
-    }
-
-    fn mark_focused_dirty(&mut self) {
-        if let Some(monitor) = self.focused_monitor_mut() {
-            monitor.active_mut().dirty.layout = true;
-        }
     }
 
     /// Sends a window into `origin` and takes it out of the layout. Focus
@@ -1763,12 +1728,12 @@ impl Shell {
     /// Everything configured in one pass goes into one transaction, so a reflow
     /// is tracked as a group rather than as N unrelated resizes.
     fn send_configures(&mut self) {
-        let focused = self.monitors.get(self.focused_output).map(Monitor::id);
+        let keyboard = self.keyboard;
         let mut awaiting = HashMap::new();
 
         for monitor in &mut self.monitors {
             let active = monitor.active().id();
-            let is_focused = Some(monitor.id()) == focused;
+            let is_focused = Some(monitor.id()) == keyboard;
 
             for workspace in monitor.workspaces_mut() {
                 let on_screen = workspace.id() == active;
@@ -1991,10 +1956,7 @@ impl Shell {
             }
         }
 
-        assert!(
-            self.monitors.is_empty() || self.focused_output < self.monitors.len(),
-            "focused output is out of range"
-        );
+        self.assert_focus_invariants();
 
         // `monitor_at` returns the first monitor containing a point, so two
         // that overlap would make "which output is this on?" order-dependent.

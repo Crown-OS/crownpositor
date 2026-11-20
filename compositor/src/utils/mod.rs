@@ -2,6 +2,7 @@ pub mod affine;
 pub mod app_icon;
 pub mod constraint_region;
 pub mod edid;
+pub mod geometry;
 pub mod id;
 pub mod mode;
 pub mod panel;
