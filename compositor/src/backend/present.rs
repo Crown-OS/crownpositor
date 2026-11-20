@@ -181,14 +181,36 @@ pub fn signal_fifo_barriers(
 /// shows, throttled for what nothing shows.
 pub fn send_frame_callbacks(shell: &Shell, output: &Output, cursor: &Cursor, now: Duration) {
     let throttle = Some(OCCLUDED_FRAME_THROTTLE);
+    send_frames_on_output(shell, output, now, throttle, surface_primary_scanout_output);
+    // A client's cursor surface is in neither the shell model nor the layer
+    // map, so it needs its own callback or an animated cursor draws once.
+    cursor.send_frame(output, now, throttle);
+}
+
+/// Answers every frame callback still waiting on what `output` shows, right
+/// before the output goes: its layer surfaces get closed and no later frame
+/// on it would answer them, so a client blocked on one would wait forever.
+pub fn send_last_frame_callbacks(shell: &Shell, output: &Output, now: Duration) {
+    send_frames_on_output(shell, output, now, None, |_, _| Some(output.clone()));
+}
+
+fn send_frames_on_output<F>(
+    shell: &Shell,
+    output: &Output,
+    now: Duration,
+    throttle: Option<Duration>,
+    primary_scanout_output: F,
+) where
+    F: FnMut(&WlSurface, &SurfaceData) -> Option<Output> + Copy,
+{
     if let Some(monitor) = shell.monitor(output) {
         for tile in monitor.workspaces().iter().flat_map(Workspace::tiles) {
             tile.window()
-                .send_frame(output, now, throttle, surface_primary_scanout_output);
+                .send_frame(output, now, throttle, primary_scanout_output);
         }
     }
     for layer in layer_map_for_output(output).layers() {
-        layer.send_frame(output, now, throttle, surface_primary_scanout_output);
+        layer.send_frame(output, now, throttle, primary_scanout_output);
     }
     if let Some(lock) = shell.session_lock.surface_on(output) {
         send_frames_surface_tree(
@@ -196,12 +218,9 @@ pub fn send_frame_callbacks(shell: &Shell, output: &Output, cursor: &Cursor, now
             output,
             now,
             throttle,
-            surface_primary_scanout_output,
+            primary_scanout_output,
         );
     }
-    // A client's cursor surface is in neither the shell model nor the layer
-    // map, so it needs its own callback or an animated cursor draws once.
-    cursor.send_frame(output, now, throttle);
 }
 
 /// Points each visible surface at the planes when its buffer could have been

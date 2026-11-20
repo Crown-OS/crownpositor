@@ -8,6 +8,7 @@
 use smithay::output::Output;
 
 use crate::{
+    backend::present::send_last_frame_callbacks,
     shell::{identity::OfflineHead, monitor::output_id},
     state::State,
 };
@@ -29,6 +30,7 @@ impl State {
     /// Takes an output out of the desktop: its captures end, its windows go
     /// to a survivor, and clients see the head list change.
     pub fn output_removed(&mut self, output: &Output) {
+        send_last_frame_callbacks(&self.shell, output, self.wayland.clock.now().into());
         self.capture.output_removed(output);
         self.wayland.workspace_mode_state.output_removed(output);
         self.wayland.output_info_state.output_removed(output);
