@@ -2,6 +2,7 @@
 members = [
   "compositor",
   "config",
+  "control",
   "depthcut",
   "lockscene",
   "lockscreen",
@@ -14,6 +15,7 @@ members = [
 default-members = [
   "compositor",
   "config",
+  "control",
   "lockscene",
   "lockscreen",
   "protocols",
@@ -28,6 +30,7 @@ crownos-config = { git = "https://github.com/crown-os/crownos-config", default-f
 # dependency rather than a git one: a protocol change and the code that honours
 # it have to land in the same build.
 crownos-protocols = { git = "https://github.com/crown-os/crownos-protocols", default-features = false }
+crownos-ipc = { git = "https://github.com/crown-os/crownos-ipc", default-features = false }
 
 anyhow = "1.0.104"
 thiserror = "2.0.20"
@@ -66,6 +69,9 @@ crownos-protocols = { path = "../crownos-protocols" }
 
 [patch."https://github.com/crown-os/crownos-config"]
 crownos-config = { path = "../crownos-config" }
+
+[patch."https://github.com/crown-os/crownos-ipc"]
+crownos-ipc = { path = "../crownos-ipc" }
 
 # Locking cuts and scales the wallpaper on the CPU. Unoptimised, that takes
 # seconds, and the entrance gives up waiting for its subject.

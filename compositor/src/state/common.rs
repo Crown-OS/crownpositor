@@ -1,4 +1,4 @@
-use std::{ffi::OsString, time::Instant};
+use std::{ffi::OsString, process::ExitCode, time::Instant};
 
 use anyhow::Context;
 use calloop::{EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, generic::Generic};
@@ -14,6 +14,26 @@ use crate::{
     utils::runtime::TaskSender,
 };
 
+/// The exit status that tells the tty launcher to start the compositor again.
+pub const RESTART_SESSION_STATUS: u8 = 75;
+
+/// How the session ended, and so what the launcher does next.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Exit {
+    #[default]
+    Quit,
+    RestartSession,
+}
+
+impl Exit {
+    pub fn status(self) -> ExitCode {
+        match self {
+            Self::Quit => ExitCode::SUCCESS,
+            Self::RestartSession => ExitCode::from(RESTART_SESSION_STATUS),
+        }
+    }
+}
+
 pub struct CommonState {
     pub event_loop_handle: LoopHandle<'static, State>,
     pub event_loop_signal: LoopSignal,
@@ -25,6 +45,7 @@ pub struct CommonState {
     pub tasks: TaskSender,
     /// Volume, brightness and media keys, applied off the compositor thread.
     pub controls: Controls,
+    pub exit: Exit,
 
     pub ready: Once,
 }
@@ -47,8 +68,16 @@ impl CommonState {
             start_time: Instant::now(),
             tasks,
             controls,
+            exit: Exit::default(),
             ready: Once::new(),
         })
+    }
+
+    /// Stops the event loop; `run` returns `exit` once it has unwound.
+    pub fn end_session(&mut self, exit: Exit) {
+        tracing::info!(?exit, "session end requested");
+        self.exit = exit;
+        self.event_loop_signal.stop();
     }
 
     fn init_wayland_display(

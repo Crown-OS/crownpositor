@@ -90,6 +90,8 @@ pub enum Action {
     None,
 
     Quit,
+    /// Ends the session so the launcher starts a fresh compositor.
+    RestartSession,
     ReloadConfig,
     /// Puts the lock screen up.
     Lock,
@@ -189,6 +191,7 @@ impl FromStr for Action {
         match name {
             "none" => Ok(Self::None),
             "quit" | "exit" => Ok(Self::Quit),
+            "restart-session" => Ok(Self::RestartSession),
             "reload-config" => Ok(Self::ReloadConfig),
             "lock" => Ok(Self::Lock),
 
@@ -294,6 +297,7 @@ mod tests {
     #[test]
     fn parses_bare_actions() {
         assert_eq!(parse("quit"), Action::Quit);
+        assert_eq!(parse("restart-session"), Action::RestartSession);
         assert_eq!(parse("close-window"), Action::CloseWindow);
         assert_eq!(parse("toggle-fullscreen"), Action::ToggleFullscreen);
         assert_eq!(parse("create-workspace"), Action::CreateWorkspace);

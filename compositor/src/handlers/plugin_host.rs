@@ -30,7 +30,7 @@ impl PluginHostHandler for State {
         };
         if matches!(
             action,
-            Action::Quit | Action::SwitchVt(_) | Action::Spawn(_)
+            Action::Quit | Action::RestartSession | Action::SwitchVt(_) | Action::Spawn(_)
         ) {
             return ActionOutcome::Refused;
         }

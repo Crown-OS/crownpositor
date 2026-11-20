@@ -7,6 +7,7 @@ mod backend;
 mod client;
 mod common;
 mod config;
+mod control;
 mod cursor;
 mod display;
 pub mod driven_seat;
@@ -32,8 +33,13 @@ use smithay::{
 };
 
 pub use crate::state::{
-    backend::BackendState, client::ClientState, common::CommonState, config::ConfigState,
-    display::DisplayGamma, input::InputState, wayland::WaylandState,
+    backend::BackendState,
+    client::ClientState,
+    common::{CommonState, Exit, RESTART_SESSION_STATUS},
+    config::ConfigState,
+    display::DisplayGamma,
+    input::InputState,
+    wayland::WaylandState,
 };
 use spacecontrol::animations::spring::Clock;
 

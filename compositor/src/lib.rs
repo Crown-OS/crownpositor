@@ -17,8 +17,9 @@ use anyhow::Context;
 use calloop::EventLoop;
 
 use crate::state::State;
+pub use crate::state::{Exit, RESTART_SESSION_STATUS};
 
-pub fn run() -> anyhow::Result<()> {
+pub fn run() -> anyhow::Result<Exit> {
     logging::init();
 
     let mut event_loop =
@@ -46,6 +47,7 @@ pub fn run() -> anyhow::Result<()> {
     // Outputs exist and the socket is live, so a bar or wallpaper that connects
     // immediately has something to anchor to.
     state.run_startup();
+    state.start_control_service();
 
     event_loop
         .run(None, &mut state, |state| {
@@ -73,5 +75,6 @@ pub fn run() -> anyhow::Result<()> {
             state.refresh_app_icons();
             let _ = state.common.display_handle.flush_clients();
         })
-        .with_context(|| "The event loop stopped unexpectedly")
+        .with_context(|| "The event loop stopped unexpectedly")?;
+    Ok(state.common.exit)
 }

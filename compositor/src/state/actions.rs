@@ -21,7 +21,7 @@ use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
     shell::{morph::Choreography, tile::WindowState},
-    state::{State, launch_target, lock_screen::LockReason},
+    state::{Exit, State, launch_target, lock_screen::LockReason},
 };
 
 impl State {
@@ -30,8 +30,12 @@ impl State {
             Action::None => return,
 
             Action::Quit => {
-                tracing::info!("quit requested");
-                self.common.event_loop_signal.stop();
+                self.common.end_session(Exit::Quit);
+                return;
+            }
+
+            Action::RestartSession => {
+                self.common.end_session(Exit::RestartSession);
                 return;
             }
 

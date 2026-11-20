@@ -384,8 +384,10 @@ dependencies = [
  "config",
  "cosmic-text",
  "crownos-config",
+ "crownos-ipc",
  "crownos-protocols",
  "crownplugin-view",
+ "crownpositor-control",
  "depthcut",
  "futures-util",
  "getrandom 0.3.4",
@@ -539,6 +541,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "crownos-ipc"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "postcard",
+ "rustix 1.1.4",
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "crownos-protocols"
 version = "0.1.0"
 dependencies = [
@@ -557,6 +571,14 @@ dependencies = [
  "crownos-config",
  "serde",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "crownpositor-control"
+version = "0.1.0"
+dependencies = [
+ "crownos-ipc",
+ "serde",
 ]
 
 [[package]]

@@ -31,8 +31,10 @@ crownplugin-view = { path = "../../crownos-plugins/view" }
 protocols = { path = "../protocols" }
 spacecontrol = { path = "../spacecontrol" }
 windowcontrol = { path = "../windowcontrol" }
+crownpositor-control = { path = "../control" }
 crownos-config = { workspace = true }
 crownos-protocols = { workspace = true, features = ["server"] }
+crownos-ipc = { workspace = true, features = ["tokio"] }
 anyhow = { workspace = true }
 getrandom = "0.3"
 thiserror = { workspace = true }
