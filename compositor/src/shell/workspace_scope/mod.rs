@@ -16,6 +16,10 @@ use crate::{
     utils::id::{OutputId, WindowId, WorkspaceId},
 };
 
+/// The most workspaces a launch variable or a window rule may ask for. Past
+/// this a number is a typo, not a workspace anyone means to create.
+pub const MAX_WORKSPACES: usize = 32;
+
 /// The monitors a change on `from` acts on. A hidden monitor is never
 /// linked: it keeps its own workspaces in either scope.
 pub fn linked_outputs(scope: WorkspaceScope, from: OutputId, shown: &[OutputId]) -> Vec<OutputId> {

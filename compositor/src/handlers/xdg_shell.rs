@@ -270,6 +270,9 @@ impl State {
         let (min_size, max_size) = size_hints(surface);
         let carried = self.carried_offset(surface);
         let target = self.launch_target(surface);
+        let mut rules =
+            self.shell
+                .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         let location = carried
             .and_then(|_| self.carried_location())
             .or_else(|| {
@@ -277,6 +280,7 @@ impl State {
                     .as_ref()
                     .and_then(|target| self.launch_location(target))
             })
+            .or_else(|| self.shell.rule_location(&rules))
             .or_else(|| self.shell.default_location())?;
         let area = self
             .shell
@@ -284,9 +288,6 @@ impl State {
             .map(|workspace| workspace.area())
             .unwrap_or_default();
 
-        let mut rules =
-            self.shell
-                .resolve_rules(app_id.as_deref(), title.as_deref(), &self.config.current);
         // Structural heuristics apply only where the config is silent, so a rule
         // can always force a dialog back into the tiling.
         let streamed = matches!(target, Some(LaunchTarget::Output(_)));

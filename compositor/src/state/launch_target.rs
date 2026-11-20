@@ -8,11 +8,13 @@ use std::str::FromStr;
 
 use smithay::reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface};
 
-use crate::{shell::Location, state::State, utils::process_env};
+use crate::{
+    shell::{Location, workspace_scope::MAX_WORKSPACES},
+    state::State,
+    utils::process_env,
+};
 
 pub const VARIABLE: &str = "WORKSPACE";
-/// Past this a number is a typo, not a workspace anyone means to create.
-const MAX_WORKSPACE: usize = 32;
 const OUTPUT_PREFIX: &str = "output:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +30,7 @@ pub enum LaunchTarget {
 pub enum LaunchTargetError {
     #[error("expected a workspace number, `headless` or `output:NAME`, got {0:?}")]
     Unknown(String),
-    #[error("workspace {0} is outside 1..={MAX_WORKSPACE}")]
+    #[error("workspace {0} is outside 1..={MAX_WORKSPACES}")]
     OutOfRange(usize),
 }
 
@@ -47,7 +49,7 @@ impl FromStr for LaunchTarget {
         let number: usize = value
             .parse()
             .map_err(|_| LaunchTargetError::Unknown(value.to_owned()))?;
-        if !(1..=MAX_WORKSPACE).contains(&number) {
+        if !(1..=MAX_WORKSPACES).contains(&number) {
             return Err(LaunchTargetError::OutOfRange(number));
         }
         Ok(Self::Workspace(number - 1))

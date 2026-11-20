@@ -14,11 +14,15 @@ use crownos_protocols::workspace_mode::v1::{
     client::crownos_workspace_mode_manager_v1::{
         self as client_manager, CrownosWorkspaceModeManagerV1,
     },
-    server::crownos_workspace_mode_manager_v1::CrownosWorkspaceModeManagerV1 as ServerManager,
+    server::{
+        crownos_workspace_mode_manager_v1::CrownosWorkspaceModeManagerV1 as ServerManager,
+        crownos_workspace_mode_output_v1::CrownosWorkspaceModeOutputV1 as ServerOutputWatch,
+    },
 };
 use protocols::crownos_workspace_mode::{
-    Mode, WorkspaceModeGlobalData, WorkspaceModeHandler, WorkspaceModeState,
+    Mode, VERSION, WorkspaceModeGlobalData, WorkspaceModeHandler, WorkspaceModeState,
 };
+use smithay::output::Output;
 use wayland_client::{
     Connection, DispatchError, EventQueue, Proxy, QueueHandle, WEnum,
     backend::WaylandError,
@@ -42,10 +46,17 @@ impl WorkspaceModeHandler for Server {
     fn set_workspace_mode(&mut self, mode: Mode) {
         self.workspace_mode.update(mode);
     }
+
+    fn output_workspace_mode(&mut self, _output: &Output) -> Option<Mode> {
+        None
+    }
+
+    fn set_output_workspace_mode(&mut self, _output: &Output, _mode: Mode) {}
 }
 
 delegate_global_dispatch!(Server: [ServerManager: WorkspaceModeGlobalData] => WorkspaceModeState);
 delegate_dispatch!(Server: [ServerManager: ()] => WorkspaceModeState);
+delegate_dispatch!(Server: [ServerOutputWatch: ()] => WorkspaceModeState);
 
 struct TestClient;
 impl ClientData for TestClient {}
@@ -92,6 +103,7 @@ struct Harness {
     queue: EventQueue<ClientState>,
     client: ClientState,
     manager: CrownosWorkspaceModeManagerV1,
+    offered_version: Option<u32>,
 }
 
 impl Harness {
@@ -108,7 +120,14 @@ impl Harness {
         let manager = globals
             .bind(&queue.handle(), 1..=1, ())
             .expect("workspace mode");
+        let offered_version = globals
+            .contents()
+            .clone_list()
+            .into_iter()
+            .find(|global| global.interface == "crownos_workspace_mode_manager_v1")
+            .map(|global| global.version);
         Self {
+            offered_version,
             running,
             server: Some(server),
             queue,
@@ -148,6 +167,13 @@ fn serve(socket: UnixStream, initial: Option<Mode>, running: &AtomicBool) {
         let _ = display.flush_clients();
         thread::sleep(Duration::from_millis(1));
     }
+}
+
+#[test]
+fn the_manager_is_offered_at_the_version_with_per_output_objects() {
+    let harness = Harness::new(None);
+    assert_eq!(VERSION, 2);
+    assert_eq!(harness.offered_version, Some(VERSION));
 }
 
 #[test]

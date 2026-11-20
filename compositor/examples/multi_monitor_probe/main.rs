@@ -6,11 +6,14 @@
 //! cargo run -p compositor --example multi_monitor_probe -- spawn 2 --app-id probe [--workspace 2]
 //! cargo run -p compositor --example multi_monitor_probe -- placements
 //! cargo run -p compositor --example multi_monitor_probe -- workspaces
+//! cargo run -p compositor --example multi_monitor_probe -- mode [OUTPUT [tiling|floating]]
 //! ```
 //!
-//! `placements` binds `crownos_window_control_manager_v1`, which the
-//! compositor offers only to executables that `agents.ron` trusts.
+//! `placements` binds `crownos_window_control_manager_v1` and `mode` binds
+//! `crownos_workspace_mode_manager_v1`, which the compositor offers only to
+//! executables that `agents.ron` trusts.
 
+mod mode;
 mod placements;
 mod spawn;
 mod workspaces;
@@ -25,11 +28,15 @@ enum Command {
     },
     Placements,
     Workspaces,
+    Mode {
+        output: Option<String>,
+        mode: Option<String>,
+    },
 }
 
 fn parse(mut arguments: impl Iterator<Item = String>) -> anyhow::Result<Command> {
-    let usage =
-        "usage: multi_monitor_probe spawn N --app-id X [--workspace K] | placements | workspaces";
+    let usage = "usage: multi_monitor_probe spawn N --app-id X [--workspace K] | placements \
+        | workspaces | mode [OUTPUT [tiling|floating]]";
     match arguments.next().as_deref() {
         Some("spawn") => {
             let count = arguments
@@ -59,6 +66,10 @@ fn parse(mut arguments: impl Iterator<Item = String>) -> anyhow::Result<Command>
         }
         Some("placements") => Ok(Command::Placements),
         Some("workspaces") => Ok(Command::Workspaces),
+        Some("mode") => Ok(Command::Mode {
+            output: arguments.next(),
+            mode: arguments.next(),
+        }),
         _ => bail!(usage),
     }
 }
@@ -72,5 +83,6 @@ fn main() -> anyhow::Result<()> {
         } => spawn::run(count, &app_id, workspace),
         Command::Placements => placements::run(),
         Command::Workspaces => workspaces::run(),
+        Command::Mode { output, mode } => mode::run(output.as_deref(), mode.as_deref()),
     }
 }

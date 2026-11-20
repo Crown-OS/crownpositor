@@ -18,6 +18,7 @@ pub mod overview;
 pub mod popup;
 pub mod primary;
 pub mod resize_blur;
+pub mod rule_placement;
 pub mod scale;
 pub mod session_lock;
 pub mod snap;

@@ -19,6 +19,7 @@ impl State {
     /// to a survivor, and clients see the head list change.
     pub fn output_removed(&mut self, output: &Output) {
         self.capture.output_removed(output);
+        self.wayland.workspace_mode_state.output_removed(output);
         self.shell
             .remove_output(&self.common.display_handle, output);
         self.refresh_output_heads();

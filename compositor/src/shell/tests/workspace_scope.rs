@@ -1,6 +1,7 @@
 //! Shared and per-monitor workspace scope across three monitors and a hidden
 //! one.
 
+use anyhow::Context;
 use crownos_config::schema::WorkspaceScope;
 use smithay::output::Output;
 
@@ -286,5 +287,72 @@ fn unplugging_the_middle_shared_monitor_keeps_the_others_in_step() -> anyhow::Re
         let monitor = desk.fixture.monitor(output)?;
         assert_eq!((monitor.workspaces().len(), monitor.active_index()), (2, 1));
     }
+    Ok(())
+}
+
+fn rule(workspace: Option<u16>, output: Option<&str>) -> config::ResolvedRule {
+    config::ResolvedRule {
+        workspace,
+        output: output.map(str::to_owned),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_rule_workspace_lands_on_the_rule_output_and_pads_a_shared_desk() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::Shared)?;
+    let middle = desk.id(&desk.shown[1])?;
+
+    let location = desk
+        .fixture
+        .shell
+        .rule_location(&rule(Some(2), Some("DP-2")))
+        .context("the rule places the window")?;
+    desk.refresh();
+
+    assert_eq!(location.output, middle);
+    assert_eq!(
+        Some(location.workspace),
+        desk.fixture.workspace_ids(&desk.shown[1])?.get(2).copied()
+    );
+    assert_eq!(desk.shape()?, [(3, 0), (3, 0), (3, 0), (1, 0)]);
+    Ok(())
+}
+
+#[test]
+fn a_rule_naming_a_hidden_output_uses_the_focused_monitor() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::PerMonitor)?;
+    let location = desk
+        .fixture
+        .shell
+        .rule_location(&rule(Some(1), Some("HEADLESS-1")))
+        .context("the rule places the window")?;
+    assert_eq!(location.output, desk.focused()?);
+    Ok(())
+}
+
+#[test]
+fn a_rule_with_only_an_output_takes_its_active_workspace() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::PerMonitor)?;
+    let last = desk.id(&desk.shown[2])?;
+    let active = desk.fixture.monitor(&desk.shown[2])?.active().id();
+
+    let location = desk.fixture.shell.rule_location(&rule(None, Some("DP-3")));
+    assert_eq!(
+        location.map(|location| (location.output, location.workspace)),
+        Some((last, active))
+    );
+    assert!(
+        desk.fixture
+            .shell
+            .rule_location(&rule(None, None))
+            .is_none()
+    );
+    assert!(
+        desk.fixture
+            .shell
+            .rule_location(&rule(Some(40), None))
+            .is_none()
+    );
     Ok(())
 }
