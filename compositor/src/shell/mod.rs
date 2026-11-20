@@ -12,6 +12,7 @@ pub mod focus_history;
 pub mod gaming;
 pub mod grab;
 pub mod identity;
+pub mod keyboard_handover;
 pub mod lock_screen;
 pub mod map_focus;
 pub mod migration;
@@ -35,7 +36,6 @@ pub mod stash;
 pub mod tile;
 pub mod toplevel_drag;
 pub mod transaction;
-pub mod unplug_focus;
 pub mod visibility;
 pub mod windowcontrol;
 pub mod workspace;
@@ -83,6 +83,7 @@ use crate::{
         focus_history::FocusHistory,
         grab::{moves_left, moves_top},
         identity::OfflineHead,
+        keyboard_handover::HeldKeyboard,
         lock_screen::LockScreen,
         migration::{Migration, MigrationKey},
         monitor::{
@@ -292,6 +293,9 @@ pub struct Shell {
     window_to_location: HashMap<WindowId, Location>,
     /// Which windows had the keyboard, across every monitor.
     focus_history: FocusHistory,
+    /// The keyboard window noted before an output change, until the change
+    /// is over and the keyboard is given back.
+    keyboard_before_change: Option<HeldKeyboard>,
     layer_to_output: HashMap<WlSurface, OutputId>,
     /// The layer surface that was handed the keyboard on demand — by a click,
     /// never by asking. An `exclusive` surface does not need it: it is found by
@@ -354,6 +358,7 @@ impl Shell {
             surface_to_window: HashMap::new(),
             window_to_location: HashMap::new(),
             focus_history: FocusHistory::default(),
+            keyboard_before_change: None,
             layer_to_output: HashMap::new(),
             layer_focus: None,
             xdg_shell_state: XdgShellState::new::<State>(display),
@@ -459,6 +464,7 @@ impl Shell {
         config: &Config,
         descriptor: OutputDescriptor,
     ) -> Output {
+        self.note_keyboard_before_change();
         let output = output_from_descriptor(&descriptor);
         let global = output.create_global::<State>(dh);
         let id = output_id(&output);
@@ -543,8 +549,8 @@ impl Shell {
         }
         self.layer_to_output.retain(|_, owner| *owner != removed);
 
+        self.note_keyboard_before_change();
         let survivor = self.survivor_for(removed);
-        let held_keyboard = self.keyboard_window_on(removed);
         if let Some(global) = self
             .dismantle(removed, survivor)
             .and_then(|mut monitor| monitor.take_global())
@@ -554,7 +560,6 @@ impl Shell {
         self.refresh_identities();
         self.preferred_stale = true;
         self.hand_focus_over(removed, survivor);
-        self.return_keyboard(held_keyboard, survivor);
 
         self.arrange_outputs();
         self.normalize_all();

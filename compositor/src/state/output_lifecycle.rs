@@ -2,7 +2,8 @@
 //! the output with `Shell::add_output` and records it, then calls
 //! `output_added`; each removal, whatever its cause, goes through
 //! `output_removed`. Both bring the settings, the head list and the lock
-//! screen up to date with the outputs there are now.
+//! screen up to date with the outputs there are now, and give the keyboard
+//! back to the window that held it before the change.
 
 use smithay::output::Output;
 
@@ -20,6 +21,7 @@ impl State {
         self.refresh_output_heads();
         self.lock_outputs_changed();
         self.check_clamshell();
+        self.shell.hand_keyboard_back();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output added");
     }
@@ -44,6 +46,7 @@ impl State {
         self.lock_outputs_changed();
         self.confirm_session_lock();
         self.check_clamshell();
+        self.shell.hand_keyboard_back();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output removed");
     }

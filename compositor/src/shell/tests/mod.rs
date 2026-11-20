@@ -2,9 +2,12 @@
 //!
 //! A `Tile` needs a live client surface, so these tests carry no windows:
 //! they check what the shell does with outputs and their empty workspaces.
+//! `plug` and `unplug` end the way the State doors do, by giving the keyboard
+//! back.
 
 mod chosen_placement;
 mod cross_monitor;
+mod keyboard_handover;
 mod output_info;
 mod overview_scope;
 mod workspace_scope;
@@ -124,11 +127,13 @@ impl Fixture {
             },
         );
         self.shell.apply_output_settings(&self.config, None);
+        self.shell.hand_keyboard_back();
         output
     }
 
     fn unplug(&mut self, output: &Output) {
         self.shell.remove_output(&self.display.handle(), output);
+        self.shell.hand_keyboard_back();
     }
 
     fn monitor(&self, output: &Output) -> anyhow::Result<&Monitor> {
