@@ -4,7 +4,7 @@
 use config::{OutputLayout, OutputSetting};
 
 use crate::{
-    shell::output_kind::NestedPersistence,
+    shell::{Shell, output_kind::NestedPersistence},
     state::{BackendState, State},
 };
 
@@ -21,6 +21,20 @@ impl OutputNames<'_> {
             .iter()
             .any(|name| name == self.identity || name == self.connector)
     }
+}
+
+/// The identities of the monitors whose arrangement is saved: the persisted
+/// monitors, then the persisted heads that are switched off.
+pub fn output_set(shell: &Shell, nested: NestedPersistence) -> Vec<String> {
+    let lit = shell
+        .persisted_monitors(nested)
+        .map(|monitor| monitor.config().connector.as_str().to_owned());
+    let switched_off = shell
+        .offline_heads()
+        .iter()
+        .filter(|head| head.kind.is_persisted(nested))
+        .map(|head| head.identity.clone());
+    lit.chain(switched_off).collect()
 }
 
 /// The first saved arrangement made for exactly this set of monitors.
@@ -75,18 +89,7 @@ impl State {
     /// The identities of the monitors whose arrangement is saved, lit or
     /// switched off.
     pub fn output_set(&self) -> Vec<String> {
-        let nested = NestedPersistence::from_environment();
-        let lit = self
-            .shell
-            .persisted_monitors(nested)
-            .map(|monitor| monitor.config().connector.as_str().to_owned());
-        let switched_off = self
-            .shell
-            .offline_heads()
-            .iter()
-            .filter(|head| head.kind.is_persisted(nested))
-            .map(|head| head.identity.clone());
-        lit.chain(switched_off).collect()
+        output_set(&self.shell, NestedPersistence::from_environment())
     }
 
     pub fn matched_output_layout(&self) -> Option<OutputLayout> {

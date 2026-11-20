@@ -473,6 +473,9 @@ fn device_changed(state: &mut State, node: DrmNode) {
         }
     };
 
+    if events.is_empty() {
+        return;
+    }
     let mut appeared = Vec::new();
     for event in events {
         match event {
@@ -535,10 +538,10 @@ fn device_changed(state: &mut State, node: DrmNode) {
     if state.backend.kms().is_some_and(|kms| kms.cold_plug) {
         return;
     }
-    state.reconcile_output_layout();
     for connector in appeared {
         bring_up_head(state, node, connector);
     }
+    state.reconcile_output_layout();
 }
 
 /// Lights every head registered during the cold plug that the config and

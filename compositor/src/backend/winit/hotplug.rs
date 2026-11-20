@@ -82,7 +82,7 @@ pub fn toggle_connection(state: &mut State, number: u8) {
             state.reconcile_output_layout();
         }
         Connection::Disconnected => {
-            connect_viewport(state, index);
+            plug_viewport(state, index);
             state.reconcile_output_layout();
         }
         Connection::Disabled => {
@@ -113,6 +113,28 @@ fn remove_viewport(state: &mut State, index: usize, connection: Connection) {
     };
     state.output_removed(&output);
     tracing::info!(output = output.name(), ?connection, "nested output removed");
+}
+
+/// Plugs a viewport back in: lit, or listed as switched off when the config
+/// or the saved arrangement has it off, as a monitor plugged in does.
+fn plug_viewport(state: &mut State, index: usize) {
+    let Some(name) = state.backend.winit().and_then(|winit| {
+        let viewport = winit.viewports.get_mut(index)?;
+        viewport.connection = Connection::Disabled;
+        Some(viewport.name.clone())
+    }) else {
+        return;
+    };
+    state.sync_offline_heads();
+    if state.should_enable_head(&name) {
+        connect_viewport(state, index);
+    } else {
+        state.refresh_output_heads();
+        tracing::info!(
+            output = name,
+            "nested output plugged in, off as the config asks"
+        );
+    }
 }
 
 /// Adds the viewport's output again, from the same descriptor, so the shell

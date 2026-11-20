@@ -24,7 +24,7 @@ use crate::{
         stash::STASH,
         workspace::Workspace,
     },
-    state::State,
+    state::{State, output_layouts::output_set},
     utils::id::{OutputId, WorkspaceId},
 };
 
@@ -265,6 +265,28 @@ fn only_physical_monitors_are_persisted_unless_nested_is_asked_for() -> anyhow::
     };
     assert_eq!(names(NestedPersistence::Skip), ["DP-1"]);
     assert_eq!(names(NestedPersistence::Save), ["DP-1", "winit-1"]);
+    Ok(())
+}
+
+#[test]
+fn the_output_set_holds_persisted_monitors_lit_or_switched_off() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    fixture.plug_head(Head::physical("DP-1", (1920, 1080)).with_serial("A1"));
+    fixture.plug_head(Head::physical("winit-1", (1280, 720)).of_kind(OutputKind::Nested));
+    fixture.plug_head(Head::physical("VIRTUAL-1", (1280, 720)).of_kind(OutputKind::Virtual));
+    fixture.shell.set_offline_heads(vec![
+        OfflineHead::new("HDMI-A-1", "Test Monitor B2", OutputKind::Physical),
+        OfflineHead::new("winit-2", "winit-2", OutputKind::Nested),
+    ]);
+
+    assert_eq!(
+        output_set(&fixture.shell, NestedPersistence::Skip),
+        ["Test Monitor A1", "Test Monitor B2"]
+    );
+    assert_eq!(
+        output_set(&fixture.shell, NestedPersistence::Save),
+        ["Test Monitor A1", "winit-1", "Test Monitor B2", "winit-2"]
+    );
     Ok(())
 }
 
