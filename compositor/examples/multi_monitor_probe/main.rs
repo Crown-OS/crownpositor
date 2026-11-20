@@ -10,6 +10,7 @@
 //! cargo run -p compositor --example multi_monitor_probe -- workspaces
 //! cargo run -p compositor --example multi_monitor_probe -- mode [OUTPUT [tiling|floating]]
 //! cargo run -p compositor --example multi_monitor_probe -- info [SECONDS]
+//! cargo run -p compositor --example multi_monitor_probe -- brightness [OUTPUT [LEVEL[,LEVEL...]|refresh]]
 //! ```
 //!
 //! `--fullscreen-on` asks for fullscreen on OUTPUT before the window maps,
@@ -17,10 +18,12 @@
 //! server` asks the compositor to draw the title bar, which a drag can hold.
 //!
 //! `placements` and `move` bind `crownos_window_control_manager_v1`, `mode` binds
-//! `crownos_workspace_mode_manager_v1` and `info` binds
-//! `crownos_output_info_manager_v1`, which the compositor offers only to
-//! executables that `agents.ron` trusts.
+//! `crownos_workspace_mode_manager_v1`, `info` binds
+//! `crownos_output_info_manager_v1` and `brightness` binds
+//! `crownos_output_brightness_manager_v1`, which the compositor offers only
+//! to executables that `agents.ron` trusts.
 
+mod brightness;
 mod info;
 mod mode;
 mod move_to_output;
@@ -55,12 +58,17 @@ enum Command {
     Info {
         seconds: u64,
     },
+    Brightness {
+        output: Option<String>,
+        change: Option<brightness::Change>,
+    },
 }
 
 fn parse(mut arguments: impl Iterator<Item = String>) -> anyhow::Result<Command> {
     let usage = "usage: multi_monitor_probe spawn N --app-id X [--workspace K] \
         [--fullscreen-on OUTPUT | --fullscreen-later-on OUTPUT] [--decoration server] | placements \
-        | move APP_ID_OR_WINDOW OUTPUT | workspaces | mode [OUTPUT [tiling|floating]] | info [SECONDS]";
+        | move APP_ID_OR_WINDOW OUTPUT | workspaces | mode [OUTPUT [tiling|floating]] | info [SECONDS] \
+        | brightness [OUTPUT [LEVEL[,LEVEL...]|refresh]]";
     match arguments.next().as_deref() {
         Some("spawn") => {
             let count = arguments
@@ -119,6 +127,14 @@ fn parse(mut arguments: impl Iterator<Item = String>) -> anyhow::Result<Command>
                 .context("the listening time must be a number of seconds")?
                 .unwrap_or(DEFAULT_LISTEN_SECONDS),
         }),
+        Some("brightness") => Ok(Command::Brightness {
+            output: arguments.next(),
+            change: arguments
+                .next()
+                .as_deref()
+                .map(brightness::Change::parse)
+                .transpose()?,
+        }),
         _ => bail!(usage),
     }
 }
@@ -137,5 +153,6 @@ fn main() -> anyhow::Result<()> {
         Command::Workspaces => workspaces::run(),
         Command::Mode { output, mode } => mode::run(output.as_deref(), mode.as_deref()),
         Command::Info { seconds } => info::run(seconds),
+        Command::Brightness { output, change } => brightness::run(output.as_deref(), change),
     }
 }
