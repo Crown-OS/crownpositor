@@ -252,6 +252,12 @@ impl BackendState {
         Ok(true)
     }
 
+    /// Rebuilds each lit monitor whose `deep_color` setting changed. A
+    /// nested output always scans out at 8 bits, so only KMS has any.
+    pub fn rebuild_deep_color_heads(state: &mut crate::state::State) {
+        crate::backend::kms::deep_color::rebuild_changed_heads(state);
+    }
+
     /// How many entries one gamma ramp has for this output.
     pub fn gamma_size(&self, output: &Output) -> Option<u32> {
         match self {

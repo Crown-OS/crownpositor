@@ -21,7 +21,7 @@ use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
     shell::{morph::Choreography, tile::WindowState},
-    state::{Exit, State, launch_target, lock_screen::LockReason},
+    state::{BackendState, Exit, State, launch_target, lock_screen::LockReason},
 };
 
 impl State {
@@ -364,6 +364,7 @@ impl State {
                 config.compositor.outputs = outputs;
                 self.apply_output_settings();
                 self.refresh_output_heads();
+                BackendState::rebuild_deep_color_heads(self);
             }
             Update::OutputLayouts(layouts) => {
                 config.compositor.output_layouts = layouts;

@@ -58,6 +58,7 @@ use crate::{
         frame_clock::FrameClock,
         kms::{
             KmsState,
+            deep_color::{color_formats, wants_deep_color},
             feedback::SurfaceFeedback,
             head::HeadState,
             present_watch::{PATIENCE, PresentWatch},
@@ -82,13 +83,6 @@ use crate::{
 };
 
 const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
-
-/// 8-bit first: 10-bit formats are the first thing broken driver/panel
-/// combinations trip over, and a working desktop beats deeper blacks.
-const COLOR_FORMATS: &[smithay::backend::allocator::Fourcc] = &[
-    smithay::backend::allocator::Fourcc::Abgr8888,
-    smithay::backend::allocator::Fourcc::Argb8888,
-];
 
 /// The per-CRTC compositor: our unified allocator in, dmabuf-backed
 /// framebuffers out, presentation feedback carried through as frame user data.
@@ -167,6 +161,8 @@ pub struct Surface {
     /// What the connector can do about adaptive sync, probed once.
     pub vrr_support: VrrSupport,
     pub vrr_gate: VrrGate,
+    /// Whether the formats it was built with put 10-bit ones first.
+    pub deep_color: bool,
     /// Whether the panel is powered.
     ///
     /// A blanked output keeps its `Output`, its workspaces and its windows —
@@ -300,6 +296,11 @@ pub fn enable_head(
         },
     );
 
+    let deep_color = wants_deep_color(
+        config
+            .current
+            .output_setting(&head.name, head.identity.as_str()),
+    );
     let allocator = device.create_allocator(api, vulkan);
     let compositor = SurfaceCompositor::new(
         smithay::output::OutputModeSource::Auto(output.downgrade()),
@@ -309,7 +310,7 @@ pub fn enable_head(
         None,
         allocator,
         DmabufExporter::new(device.gbm.clone(), Some(device.render_node)),
-        COLOR_FORMATS.iter().copied(),
+        color_formats(deep_color).iter().copied(),
         renderer_formats,
         device.drm.cursor_size(),
         Some(device.gbm.clone()),
@@ -362,6 +363,7 @@ pub fn enable_head(
             tearing,
             vrr_support,
             vrr_gate: VrrGate::default(),
+            deep_color,
             powered: true,
         },
     );

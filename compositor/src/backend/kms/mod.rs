@@ -12,6 +12,7 @@
 //! shape of that seam.
 
 pub mod crtc_pool;
+pub mod deep_color;
 pub mod device;
 pub mod feedback;
 pub mod head;
