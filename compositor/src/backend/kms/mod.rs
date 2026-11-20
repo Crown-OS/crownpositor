@@ -317,6 +317,16 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                 Err(err) => tracing::warn!(%err, device_id, "hotplugged a non-DRM device"),
             },
             UdevEvent::Changed { device_id } => {
+                // A scan now would take the change from the scanner while no
+                // head can be lit; the rescan on return finds it instead.
+                if state
+                    .backend
+                    .kms()
+                    .is_some_and(|kms| !kms.session.is_active())
+                {
+                    tracing::info!("connector change while another VT has the seat");
+                    return;
+                }
                 if let Ok(node) = DrmNode::from_dev_id(device_id) {
                     tracing::info!(%node, "GPU reported a connector change");
                     device_changed(state, node);
