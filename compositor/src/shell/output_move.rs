@@ -16,8 +16,18 @@ use crate::{
 impl Shell {
     /// Moves a window to `target`: its active workspace in `PerMonitor`
     /// scope, the workspace at the window's own index in `Shared` scope.
+    /// A window that held the keyboard keeps it, on its new monitor.
     /// Refused for a hidden or unknown monitor.
     pub fn move_window_to_output(&mut self, id: WindowId, target: OutputId) -> bool {
+        let held_keyboard = self.focused_window_id() == Some(id);
+        let moved = self.place_on_output(id, target);
+        if moved && held_keyboard {
+            self.focus_window(id);
+        }
+        moved
+    }
+
+    fn place_on_output(&mut self, id: WindowId, target: OutputId) -> bool {
         let Some(location) = self.location(id).filter(|at| at.output != target) else {
             return false;
         };
@@ -54,7 +64,6 @@ impl Shell {
         if !self.move_window_to_output(id, target) {
             return None;
         }
-        self.focus_window(id);
         self.normalize_all();
         Some(target)
     }
@@ -75,12 +84,9 @@ impl Shell {
     }
 
     fn hand_workspace_over(&mut self, source: OutputId, target: OutputId) -> bool {
-        let Some(target_output) = self
-            .monitor_by_id(target)
-            .map(|monitor| monitor.output().clone())
-        else {
+        if self.monitor_by_id(target).is_none() {
             return false;
-        };
+        }
         let Some(source_monitor) = self.monitor_by_id_mut(source) else {
             return false;
         };
@@ -91,10 +97,7 @@ impl Shell {
         };
         source_monitor.normalize();
 
-        for tile in workspace.tiles() {
-            self.transfer_window(tile.window(), &source_output, &target_output);
-        }
-        self.adopt(workspace, target);
+        self.adopt(workspace, target, Some(source_output));
         let Some(index) = self
             .monitor_by_id(target)
             .and_then(|monitor| monitor.index_of(moving))

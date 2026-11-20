@@ -5,6 +5,7 @@ pub mod arrangement;
 pub mod closing;
 pub mod decoration;
 pub mod dust;
+mod floating_drag;
 pub mod focus;
 pub mod gaming;
 pub mod grab;
@@ -18,6 +19,7 @@ pub mod output_move;
 pub mod overview;
 pub mod popup;
 pub mod primary;
+mod rehome;
 pub mod resize_blur;
 pub mod rule_placement;
 pub mod scale;
@@ -318,6 +320,8 @@ pub struct Shell {
     pub surface_animations: SurfaceAnimations,
     /// The `xdg-toplevel-drag-v1` drag in progress, and the window it carries.
     toplevel_drag: Option<ToplevelDragSession>,
+    /// A window changed monitor, so its preferred colour description changed.
+    preferred_stale: bool,
     /// Surfaces that set an image description, which the renderer converts
     /// into the output's encoding where it differs.
     pub described_surfaces: DescribedSurfaces,
@@ -354,6 +358,7 @@ impl Shell {
             cascade: 0,
             snap_previews: SnapPreviews::default(),
             toplevel_drag: None,
+            preferred_stale: false,
             described_surfaces: DescribedSurfaces::default(),
             session_lock: SessionLock::default(),
             lock_screen: LockScreen::default(),
@@ -861,21 +866,18 @@ impl Shell {
     /// Take-then-insert, so a failed destination cannot leave a half-updated
     /// index behind.
     pub fn move_tile(&mut self, id: WindowId, to: Location) -> bool {
-        let from = self.location(id).map(|at| at.output);
+        let origin = self
+            .location(id)
+            .filter(|from| from.output != to.output)
+            .and_then(|from| self.origin_of(from));
         let Some(tile) = self.remove_tile(id) else {
             return false;
         };
         if !self.insert_tile(tile, to) {
             return false;
         }
-        if let Some(from) = from.filter(|from| *from != to.output)
-            && let (Some(source), Some(target), Some(tile)) = (
-                self.monitor_by_id(from),
-                self.monitor_by_id(to.output),
-                self.tile(id),
-            )
-        {
-            self.transfer_window(tile.window(), source.output(), target.output());
+        if let Some(origin) = origin {
+            self.rehome_window(id, &origin);
         }
         true
     }

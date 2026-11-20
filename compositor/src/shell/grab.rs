@@ -55,22 +55,21 @@ pub fn resize_cursor(edges: ResizeEdge) -> CursorIcon {
 pub struct MoveGrab {
     start_data: GrabStartData<State>,
     window: WindowId,
-    /// Offset from the pointer to the window's origin, so the window keeps its
-    /// grip point under the cursor instead of jumping.
-    offset: Point<f64, Logical>,
+    /// Where the pointer holds the window, relative to its floating rect, so
+    /// the window keeps that point under the cursor on every monitor.
+    grip: Point<f64, Logical>,
 }
 
 impl MoveGrab {
     pub fn new(
         start_data: GrabStartData<State>,
         window: WindowId,
-        origin: Point<i32, Logical>,
+        grip: Point<f64, Logical>,
     ) -> Self {
-        let offset = start_data.location - origin.to_f64();
         Self {
             start_data,
             window,
-            offset,
+            grip,
         }
     }
 }
@@ -91,8 +90,9 @@ impl PointerGrab<State> for MoveGrab {
         // the dragged client and the ones it crosses.
         handle.motion(state, None, event);
 
-        let location = (event.location - self.offset).to_i32_round();
-        state.shell.move_floating(self.window, location);
+        self.grip = state
+            .shell
+            .drag_floating(self.window, event.location, self.grip);
 
         // The preview follows the pointer, not the window, so
         // brushing an edge with the cursor is what arms a snap.
@@ -428,14 +428,14 @@ impl State {
             return;
         };
 
-        let Some(origin) = self.begin_move(id, start_data.location) else {
+        let Some(grip) = self.begin_move(id, start_data.location) else {
             return;
         };
 
         if let Some(pointer) = self.wayland.seat.get_pointer() {
             pointer.set_grab(
                 self,
-                MoveGrab::new(start_data, id, origin),
+                MoveGrab::new(start_data, id, grip),
                 serial,
                 Focus::Clear,
             );
@@ -477,13 +477,13 @@ impl State {
         };
         let start_data = frame_grab_start(pointer.current_location());
 
-        let Some(origin) = self.begin_move(id, start_data.location) else {
+        let Some(grip) = self.begin_move(id, start_data.location) else {
             return;
         };
 
         pointer.set_grab(
             self,
-            MoveGrab::new(start_data, id, origin),
+            MoveGrab::new(start_data, id, grip),
             serial,
             Focus::Clear,
         );
@@ -513,14 +513,16 @@ impl State {
 
     /// Floats a window for a drag and hands its geometry to the pointer.
     ///
-    /// Returns where the window starts, which is what keeps the grab point
-    /// under the cursor.
+    /// Returns where the pointer holds the window, relative to its floating
+    /// rect, which is what keeps the grab point under the cursor.
     fn begin_move(
         &mut self,
         id: WindowId,
-        grip: Point<f64, Logical>,
-    ) -> Option<Point<i32, Logical>> {
-        Some(self.begin_drag(id, grip)?.loc)
+        pointer: Point<f64, Logical>,
+    ) -> Option<Point<f64, Logical>> {
+        let rect = self.begin_drag(id, pointer)?;
+        let origin = self.shell.output_origin_of(id)?;
+        Some(pointer - origin.to_f64() - rect.loc.to_f64())
     }
 
     /// The same, for a resize: the whole rect is what the deltas apply to.
@@ -540,12 +542,7 @@ impl State {
         // The grab arrives in global coordinates and a window's rect is local
         // to its workspace, so the two are brought into one space before
         // anything is measured between them.
-        let origin = self
-            .shell
-            .location(id)
-            .and_then(|at| self.shell.monitor_by_id(at.output))
-            .map(|monitor| monitor.geometry().loc)
-            .unwrap_or_default();
+        let origin = self.shell.output_origin_of(id).unwrap_or_default();
 
         self.float_for_grab(id, grip - origin.to_f64());
         let tile = self.shell.tile_mut(id)?;

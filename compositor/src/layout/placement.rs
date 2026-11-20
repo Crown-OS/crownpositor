@@ -135,6 +135,61 @@ pub fn keep_grip(
     )
 }
 
+/// Carries a floating rect from one usable area to another.
+///
+/// The size is clamped to the new area and the centre keeps its relative
+/// position across the area. A window that was wholly inside the old area
+/// stays wholly inside the new one; one that hung off an edge keeps only the
+/// strip it is caught by reachable.
+pub fn rehome(
+    rect: Rectangle<i32, Logical>,
+    from: Rectangle<i32, Logical>,
+    to: Rectangle<i32, Logical>,
+    decoration: i32,
+) -> Rectangle<i32, Logical> {
+    let size = Size::from((rect.size.w.min(to.size.w), rect.size.h.min(to.size.h)));
+    let carry = |centre: i32, from_start: i32, from_extent: i32, to_start: i32, to_extent: i32| {
+        let fraction = if from_extent > 0 {
+            f64::from(centre - from_start) / f64::from(from_extent)
+        } else {
+            0.5
+        };
+        to_start + (fraction * f64::from(to_extent)).round() as i32
+    };
+    let centre_x = carry(
+        rect.loc.x + rect.size.w / 2,
+        from.loc.x,
+        from.size.w,
+        to.loc.x,
+        to.size.w,
+    );
+    let centre_y = carry(
+        rect.loc.y + rect.size.h / 2,
+        from.loc.y,
+        from.size.h,
+        to.loc.y,
+        to.size.h,
+    );
+    let moved = Rectangle::new(
+        Point::from((centre_x - size.w / 2, centre_y - size.h / 2)),
+        size,
+    );
+    if from.contains_rect(rect) {
+        clamp_into(moved, to)
+    } else {
+        keep_reachable(moved, to, decoration)
+    }
+}
+
+/// Keeps the point a drag holds a window by inside the window, for when the
+/// window shrank under the pointer.
+pub fn hold_grip(grip: Point<f64, Logical>, size: Size<i32, Logical>) -> Point<f64, Logical> {
+    Point::from((
+        grip.x.clamp(0.0, f64::from(size.w.max(0))),
+        grip.y.clamp(0.0, f64::from(size.h.max(0))),
+    ))
+}
+
 /// Fits a resize's rect to the size the window will actually take, holding
 /// still the edges that are not being dragged.
 ///
@@ -493,5 +548,54 @@ mod tests {
     fn a_window_larger_than_the_area_pins_to_the_origin() {
         let rect = Rectangle::new((50, 50).into(), (1000, 800).into());
         assert_eq!(clamp_into(rect, area(800, 600)).loc, (0, 0).into());
+    }
+
+    #[test]
+    fn a_rehomed_window_keeps_its_relative_centre() {
+        let rehomed = rehome(
+            rect(450, 300, 100, 200),
+            area(1000, 800),
+            Rectangle::new((0, 40).into(), (2000, 1000).into()),
+            36,
+        );
+        assert_eq!(rehomed.size, (100, 200).into());
+        assert_eq!(rehomed.loc, (950, 440).into());
+    }
+
+    #[test]
+    fn a_rehomed_window_larger_than_the_new_area_is_clamped_to_it() {
+        let rehomed = rehome(
+            rect(0, 0, 1800, 1000),
+            area(1920, 1080),
+            area(1280, 720),
+            36,
+        );
+        assert_eq!(rehomed, area(1280, 720));
+    }
+
+    #[test]
+    fn a_rehomed_window_hanging_off_an_edge_stays_reachable() {
+        let rehomed = rehome(
+            rect(950, 760, 400, 300),
+            area(1000, 800),
+            area(500, 400),
+            36,
+        );
+        assert!(rehomed.loc.x <= 500 - REACHABLE);
+        assert!(rehomed.loc.y <= 400 - 36);
+    }
+
+    #[test]
+    fn rehoming_between_equal_areas_moves_nothing() {
+        let inside = rect(120, 80, 400, 300);
+        assert_eq!(rehome(inside, area(1000, 800), area(1000, 800), 36), inside);
+    }
+
+    #[test]
+    fn a_held_grip_stays_inside_a_shrunk_window() {
+        let held = hold_grip((700.0, 20.0).into(), (500, 300).into());
+        assert_eq!(held, (500.0, 20.0).into());
+        let inside = hold_grip((120.0, 18.0).into(), (500, 300).into());
+        assert_eq!(inside, (120.0, 18.0).into());
     }
 }

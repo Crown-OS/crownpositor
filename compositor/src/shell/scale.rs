@@ -118,10 +118,12 @@ impl Shell {
         });
     }
 
-    /// Takes a window off one output and puts it on another, surfaces, popups
-    /// and all.
-    pub fn transfer_window(&self, window: &Window, from: &Output, to: &Output) {
-        window.output_leave(from);
+    /// Takes a window off one output, when it is still on one, and puts it on
+    /// another, surfaces, popups and all.
+    pub fn transfer_window(&self, window: &Window, from: Option<&Output>, to: &Output) {
+        if let Some(from) = from {
+            window.output_leave(from);
+        }
         let preference = Preference::from(to);
         window.with_surfaces(|surface, states| {
             to.enter(surface);
