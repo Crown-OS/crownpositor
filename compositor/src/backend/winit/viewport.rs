@@ -2,7 +2,8 @@
 //!
 //! `CROWN_NESTED_OUTPUTS=N` (1 to 4) splits the window into N side-by-side
 //! viewports, named `winit-1` to `winit-N`, or `winit` when there is one.
-//! `CROWN_NESTED_NAMES=eDP-1,HDMI-A-1` gives them connector names instead.
+//! `CROWN_NESTED_NAMES=eDP-1,HDMI-A-1` gives them connector names instead,
+//! and `CROWN_NESTED_EDID` an identity (see [`super::edid`]).
 
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use smithay::{
 };
 
 use crate::{
+    backend::winit::edid::NestedEdid,
     rendering::{blur::BlurCache, corners::CornerMemory, warp::WarpCanvases},
     shell::{
         monitor::{OutputDescriptor, Presence},
@@ -28,8 +30,6 @@ const MAX_VIEWPORTS: usize = 4;
 const COUNT_VARIABLE: &str = "CROWN_NESTED_OUTPUTS";
 const NAMES_VARIABLE: &str = "CROWN_NESTED_NAMES";
 const SINGLE_NAME: &str = "winit";
-const MAKE: &str = "Crownpositor";
-const MODEL: &str = "Winit";
 
 /// Whether the shell has the viewport's output, and if not, why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,7 @@ pub enum Connection {
 
 pub struct Viewport {
     pub name: String,
+    pub edid: NestedEdid,
     /// The last output the shell had for this viewport. Stale unless connected.
     pub output: Output,
     pub damage_tracker: OutputDamageTracker,
@@ -62,12 +63,14 @@ pub struct Viewport {
 impl Viewport {
     pub fn new(
         name: String,
+        edid: NestedEdid,
         output: Output,
         rect: Rectangle<i32, Physical>,
         connection: Connection,
     ) -> Self {
         Self {
             name,
+            edid,
             damage_tracker: OutputDamageTracker::from_output(&output),
             output,
             blur: BlurCache::default(),
@@ -86,6 +89,7 @@ impl Viewport {
         let last_position = self.last_position;
         *self = Self::new(
             std::mem::take(&mut self.name),
+            std::mem::take(&mut self.edid),
             output,
             self.rect,
             Connection::Connected,
@@ -102,16 +106,16 @@ impl Viewport {
     }
 
     pub fn descriptor(&self, transform: Transform) -> OutputDescriptor {
-        descriptor(&self.name, self.mode(), transform)
+        descriptor(&self.name, &self.edid, self.mode(), transform)
     }
 
     pub fn disabled_head(&self) -> DisabledHead {
         DisabledHead {
             name: self.name.clone(),
-            identity: self.name.clone(),
-            make: Some(MAKE.to_owned()),
-            model: Some(MODEL.to_owned()),
-            serial: None,
+            identity: self.edid.identity(&self.name),
+            make: Some(self.edid.make.clone()),
+            model: Some(self.edid.model.clone()),
+            serial: self.edid.serial.clone(),
             physical_mm: (0, 0),
             modes: vec![self.mode()],
             preferred: Some(0),
@@ -139,15 +143,20 @@ pub fn mode_of(size: Size<i32, Physical>) -> Mode {
     }
 }
 
-pub fn descriptor(name: &str, mode: Mode, transform: Transform) -> OutputDescriptor {
+pub fn descriptor(
+    name: &str,
+    edid: &NestedEdid,
+    mode: Mode,
+    transform: Transform,
+) -> OutputDescriptor {
     OutputDescriptor {
         name: name.to_owned(),
         physical: PhysicalProperties {
             size: (0, 0).into(),
             subpixel: Subpixel::Unknown,
-            make: MAKE.into(),
-            model: MODEL.into(),
-            serial_number: "Unknown".into(),
+            make: edid.make.clone(),
+            model: edid.model.clone(),
+            serial_number: edid.serial.clone().unwrap_or_else(|| "Unknown".into()),
         },
         modes: vec![mode],
         preferred: Some(mode),
@@ -156,7 +165,7 @@ pub fn descriptor(name: &str, mode: Mode, transform: Transform) -> OutputDescrip
         refresh_interval: Some(Duration::from_nanos(
             1_000_000_000_000 / REFRESH_RATE as u64,
         )),
-        serial: None,
+        serial: edid.serial.clone(),
         edid: None,
         presence: Presence::Shown,
         kind: OutputKind::Nested,

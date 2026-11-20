@@ -1,11 +1,13 @@
 //! The nested backend: one host window, split into one or more viewports.
 
+mod edid;
 mod hotplug;
 mod render;
 mod viewport;
 
 pub use hotplug::{set_head_enabled, toggle_connection};
 
+use edid::nested_edid;
 use hotplug::bring_up_all;
 
 use anyhow::anyhow;
@@ -117,8 +119,10 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         .into_iter()
         .zip(rects)
         .map(|(name, rect)| {
-            let output = output_from_descriptor(&descriptor(&name, mode_of(rect.size), transform));
-            Viewport::new(name, output, rect, Connection::Disabled)
+            let edid = nested_edid(&name);
+            let output =
+                output_from_descriptor(&descriptor(&name, &edid, mode_of(rect.size), transform));
+            Viewport::new(name, edid, output, rect, Connection::Disabled)
         })
         .collect();
 

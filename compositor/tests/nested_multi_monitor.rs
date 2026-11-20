@@ -96,6 +96,7 @@ fn windows_map_on_the_first_nested_output() -> anyhow::Result<()> {
             .env("XDG_RUNTIME_DIR", &runtime)
             .env("WAYLAND_DISPLAY", &host_socket)
             .env_remove("CROWN_NESTED_NAMES")
+            .env_remove("CROWN_NESTED_EDID")
             .env_remove("WORKSPACE")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
