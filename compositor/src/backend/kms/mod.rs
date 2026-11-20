@@ -299,6 +299,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
                     // The other VT may have left its own ramps on the CRTCs.
                     state.display_gamma.forget_all();
                     state.apply_output_color();
+                    rescan_after_vt_return(state);
                 }
             }
         })
@@ -329,6 +330,21 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         .map_err(|err| anyhow::anyhow!("failed to insert the udev source: {err}"))?;
 
     Ok(())
+}
+
+/// Picks up the monitors plugged in or out while another VT had the seat.
+/// It runs once the session is active again, so a new head can be lit.
+fn rescan_after_vt_return(state: &mut State) {
+    let nodes: Vec<DrmNode> = state
+        .backend
+        .kms()
+        .map(|kms| kms.devices.keys().copied().collect())
+        .unwrap_or_default();
+    state.common.event_loop_handle.insert_idle(move |state| {
+        for node in nodes {
+            device_changed(state, node);
+        }
+    });
 }
 
 /// The render node for a card node, falling back to the card node itself
