@@ -15,6 +15,7 @@ use smithay::{
     backend::drm::DrmDevice,
     output::Subpixel,
     reexports::drm::control::{Device as ControlDevice, Mode as DrmMode, ModeTypeFlags, connector},
+    utils::{Logical, Point},
 };
 
 use crate::{
@@ -64,6 +65,8 @@ pub struct Head {
     /// Current value and the range the driver accepts.
     pub max_bpc: Option<(u64, RangeInclusive<u64>)>,
     pub state: HeadState,
+    /// Where the monitor was when it was last switched off.
+    pub last_position: Option<Point<i32, Logical>>,
 }
 
 impl Head {
@@ -122,6 +125,7 @@ impl Head {
             vrr_capable,
             max_bpc,
             state: HeadState::Disabled,
+            last_position: None,
         })
     }
 

@@ -130,6 +130,16 @@ impl OutputConfig {
     }
 }
 
+/// What applying the config changed on a monitor.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Applied {
+    /// Whether the monitor moved or changed size.
+    pub changed: bool,
+    /// The mode it switched to, which the hardware still has to follow.
+    pub mode: Option<Mode>,
+}
+
 pub struct Monitor {
     id: OutputId,
     output: Output,
@@ -596,12 +606,16 @@ impl Monitor {
         self.fixed_position
     }
 
-    /// Applies the per-output half of the config.
+    /// Applies the per-output half of the config, pinned at `position` or
+    /// left for `arrange_outputs` to pack when it is `None`.
     ///
     /// An output with no scale of its own gets one guessed from its physical
-    /// size, so a docked laptop and its monitor can differ. Returns whether
-    /// anything moved, so the caller can skip an arrange.
-    pub fn apply_settings(&mut self, setting: Option<&OutputSetting>) -> bool {
+    /// size, so a docked laptop and its monitor can differ.
+    pub fn apply_settings(
+        &mut self,
+        setting: Option<&OutputSetting>,
+        position: Option<smithay::utils::Point<i32, Logical>>,
+    ) -> Applied {
         let mut changed = false;
 
         let scale = setting
@@ -613,12 +627,14 @@ impl Monitor {
             changed |= self.set_transform(transform_from_config(transform));
         }
 
+        let mut new_mode = None;
         if let Some(text) = setting.and_then(|s| s.mode.as_deref()) {
             match mode::parse(text) {
                 Some(request) => match mode::resolve(request, &self.config.modes)
                     .and_then(|index| self.config.modes.get(index).copied())
                 {
-                    Some(mode) => changed |= self.set_mode(mode),
+                    Some(mode) if self.set_mode(mode) => new_mode = Some(mode),
+                    Some(_) => {}
                     None => {
                         tracing::warn!(output = %self.config.name, ?request, "output has no such mode");
                     }
@@ -629,9 +645,8 @@ impl Monitor {
             }
         }
 
-        let fixed = setting.and_then(|s| s.position).map(Into::into);
-        if self.fixed_position != fixed {
-            self.fixed_position = fixed;
+        if self.fixed_position != position {
+            self.fixed_position = position;
             changed = true;
         }
 
@@ -640,7 +655,10 @@ impl Monitor {
         if let Some(mode) = self.config.default_mode {
             self.default_mode = mode;
         }
-        changed
+        Applied {
+            changed: changed || new_mode.is_some(),
+            mode: new_mode,
+        }
     }
 
     /// Places the output and remembers that it was placed deliberately.

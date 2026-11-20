@@ -10,6 +10,8 @@ use crate::{shell::identity::OfflineHead, state::State};
 impl State {
     /// Everything that follows an output the backend has just recorded.
     pub fn output_added(&mut self, output: &Output) {
+        self.sync_offline_heads();
+        self.apply_output_settings();
         self.refresh_output_heads();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output added");
@@ -22,6 +24,8 @@ impl State {
         self.wayland.workspace_mode_state.output_removed(output);
         self.shell
             .remove_output(&self.common.display_handle, output);
+        self.sync_offline_heads();
+        self.apply_output_settings();
         self.refresh_output_heads();
         self.queue_redraw();
         tracing::debug!(output = output.name(), "output removed");

@@ -30,6 +30,39 @@ pub fn set_head_enabled(state: &mut State, name: &str, enabled: bool) -> anyhow:
     Ok(true)
 }
 
+/// Lights the viewports the config and the saved arrangement want on, as a
+/// cold plug does on hardware.
+pub fn bring_up_all(state: &mut State) {
+    state.sync_offline_heads();
+    let names: Vec<String> = state
+        .backend
+        .winit()
+        .map(|winit| {
+            winit
+                .viewports
+                .iter()
+                .map(|viewport| viewport.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let connectors: Vec<&str> = names.iter().map(String::as_str).collect();
+    let lit: Vec<String> = state
+        .connectors_to_light(&connectors)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    for (index, name) in names.iter().enumerate() {
+        if lit.contains(name) {
+            connect_viewport(state, index);
+        } else {
+            tracing::info!(
+                output = name,
+                "nested output stays off; the config disables it"
+            );
+        }
+    }
+}
+
 /// Unplugs the nested output `number` (counted from 1), or plugs it back in.
 pub fn toggle_connection(state: &mut State, number: u8) {
     let Some(winit) = state.backend.winit() else {
@@ -44,8 +77,14 @@ pub fn toggle_connection(state: &mut State, number: u8) {
         return;
     };
     match connection {
-        Connection::Connected => remove_viewport(state, index, Connection::Disconnected),
-        Connection::Disconnected => connect_viewport(state, index),
+        Connection::Connected => {
+            remove_viewport(state, index, Connection::Disconnected);
+            state.reconcile_output_layout();
+        }
+        Connection::Disconnected => {
+            connect_viewport(state, index);
+            state.reconcile_output_layout();
+        }
         Connection::Disabled => {
             if let Some(viewport) = winit.viewports.get_mut(index) {
                 viewport.connection = Connection::Disconnected;
@@ -57,13 +96,16 @@ pub fn toggle_connection(state: &mut State, number: u8) {
 }
 
 fn remove_viewport(state: &mut State, index: usize, connection: Connection) {
-    let Some(output) = state
-        .backend
+    let State { backend, shell, .. } = &mut *state;
+    let Some(output) = backend
         .winit()
         .and_then(|winit| winit.viewports.get_mut(index))
         .map(|viewport| {
             viewport.connection = connection;
             viewport.target = None;
+            viewport.last_position = shell
+                .monitor(&viewport.output)
+                .map(|monitor| monitor.config().position);
             viewport.output.clone()
         })
     else {

@@ -6,6 +6,7 @@ use smithay::{
         session::Session as _,
     },
     output::{Mode, Output},
+    utils::{Logical, Point},
 };
 
 use protocols::gamma_control::GammaRamps;
@@ -34,6 +35,8 @@ pub struct DisabledHead {
     pub preferred: Option<usize>,
     pub vrr_capable: bool,
     pub kind: OutputKind,
+    /// Where it was when it was last lit, if it has been since the start.
+    pub position: Option<Point<i32, Logical>>,
 }
 
 impl DisabledHead {
@@ -49,6 +52,7 @@ impl DisabledHead {
             preferred: head.preferred,
             vrr_capable: head.vrr_capable,
             kind: OutputKind::Physical,
+            position: head.last_position,
         }
     }
 }

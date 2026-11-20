@@ -43,7 +43,7 @@ use smithay::{
         LayerSurface, PopupManager, Window, WindowSurfaceType, layer_map_for_output,
         space::SpaceElement, utils::under_from_surface_tree,
     },
-    output::Output,
+    output::{Mode, Output},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
@@ -55,7 +55,7 @@ use smithay::{
     },
 };
 
-use config::{Config, ResolvedRule};
+use config::{Config, OutputLayout, ResolvedRule};
 use crownos_config::schema::{WorkspaceScope, output_identity};
 
 use protocols::{crownos_app_icons::IconRef, crownos_surface_animation::SurfaceAnimations};
@@ -87,7 +87,10 @@ use crate::{
         transaction::Transaction,
         workspace::{Workspace, WorkspaceRef},
     },
-    state::State,
+    state::{
+        State,
+        output_layouts::{OutputNames, configured_position},
+    },
     utils::id::{OutputId, WindowId, WorkspaceId},
 };
 
@@ -495,7 +498,6 @@ impl Shell {
         self.follow_linked_modes(id);
         self.reclaim_migrated(&returning, id);
         self.seed_focus(id);
-        self.apply_output_settings(config);
         self.arrange_outputs();
         self.refresh_usable(&output);
         self.readvertise_output(&output);
@@ -546,20 +548,33 @@ impl Shell {
             .is_some_and(|monitor| monitor.set_usable(zone))
     }
 
-    /// Pushes the per-output half of the config onto every monitor.
-    pub fn apply_output_settings(&mut self, config: &Config) {
+    /// Pushes the per-output half of the config onto every monitor, placed
+    /// by `layout` when one matches the monitors plugged in. Returns the
+    /// outputs whose mode changed, which the hardware still has to follow.
+    pub fn apply_output_settings(
+        &mut self,
+        config: &Config,
+        layout: Option<&OutputLayout>,
+    ) -> Vec<(Output, Mode)> {
         let mut changed = false;
+        let mut changed_modes = Vec::new();
 
-        for index in 0..self.monitors.len() {
-            let (connector, name) = {
-                let monitor = &self.monitors[index];
-                (
-                    monitor.config().connector.as_str().to_owned(),
-                    monitor.config().name.clone(),
-                )
+        for monitor in &mut self.monitors {
+            let (identity, connector) = (
+                monitor.config().connector.as_str().to_owned(),
+                monitor.config().name.clone(),
+            );
+            let setting = config.output_setting(&connector, &identity);
+            let names = OutputNames {
+                identity: &identity,
+                connector: &connector,
             };
-            let setting = config.output_setting(&name, &connector).cloned();
-            changed |= self.monitors[index].apply_settings(setting.as_ref());
+            let position = configured_position(layout, names, setting).map(Point::from);
+            let applied = monitor.apply_settings(setting, position);
+            changed |= applied.changed;
+            if let Some(mode) = applied.mode {
+                changed_modes.push((monitor.output().clone(), mode));
+            }
         }
 
         if changed {
@@ -574,6 +589,7 @@ impl Shell {
                 self.readvertise_output(&output);
             }
         }
+        changed_modes
     }
 
     pub fn normalize_all(&mut self) {

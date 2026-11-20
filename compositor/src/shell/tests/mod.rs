@@ -96,7 +96,7 @@ impl Fixture {
             size: head.size.into(),
             refresh: 60_000,
         };
-        self.shell.add_output(
+        let output = self.shell.add_output(
             &self.display.handle(),
             &self.config,
             OutputDescriptor {
@@ -118,7 +118,9 @@ impl Fixture {
                 presence: head.presence,
                 kind: head.kind,
             },
-        )
+        );
+        self.shell.apply_output_settings(&self.config, None);
+        output
     }
 
     fn unplug(&mut self, output: &Output) {

@@ -17,6 +17,7 @@ mod input;
 pub mod launch_target;
 pub mod lock_screen;
 mod output_focus;
+pub mod output_layouts;
 mod output_lifecycle;
 pub mod outputs;
 mod overview;

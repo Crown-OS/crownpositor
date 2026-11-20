@@ -55,10 +55,17 @@ pub struct Viewport {
     pub rect: Rectangle<i32, Physical>,
     pub dirty: bool,
     pub connection: Connection,
+    /// Where the output was when it was last switched off or unplugged.
+    pub last_position: Option<Point<i32, Logical>>,
 }
 
 impl Viewport {
-    pub fn new(name: String, output: Output, rect: Rectangle<i32, Physical>) -> Self {
+    pub fn new(
+        name: String,
+        output: Output,
+        rect: Rectangle<i32, Physical>,
+        connection: Connection,
+    ) -> Self {
         Self {
             name,
             damage_tracker: OutputDamageTracker::from_output(&output),
@@ -69,13 +76,21 @@ impl Viewport {
             target: None,
             rect,
             dirty: true,
-            connection: Connection::Connected,
+            connection,
+            last_position: None,
         }
     }
 
     /// Starts over with the output the shell made for the same descriptor.
     pub fn reconnect(&mut self, output: Output) {
-        *self = Self::new(std::mem::take(&mut self.name), output, self.rect);
+        let last_position = self.last_position;
+        *self = Self::new(
+            std::mem::take(&mut self.name),
+            output,
+            self.rect,
+            Connection::Connected,
+        );
+        self.last_position = last_position;
     }
 
     pub fn is_connected(&self) -> bool {
@@ -102,6 +117,7 @@ impl Viewport {
             preferred: Some(0),
             vrr_capable: false,
             kind: OutputKind::Nested,
+            position: self.last_position,
         }
     }
 

@@ -107,6 +107,9 @@ pub struct KmsState {
     pub devices: HashMap<DrmNode, Device>,
     pub dmabuf_global: Option<DmabufGlobal>,
     pub dmabuf_feedback: Option<DmabufFeedback>,
+    /// While the GPUs present at startup are opened: heads are registered
+    /// but not lit, so the layout is resolved once across every GPU.
+    pub cold_plug: bool,
 }
 
 impl KmsState {
@@ -205,6 +208,7 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         devices: HashMap::new(),
         dmabuf_global: None,
         dmabuf_feedback: None,
+        cold_plug: true,
     }));
 
     // Cold-plug: the GPUs that were present before we started listening.
@@ -218,6 +222,10 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
             Err(err) => tracing::warn!(%err, device_id, "udev listed a non-DRM device"),
         }
     }
+    if let Some(kms) = state.backend.kms() {
+        kms.cold_plug = false;
+    }
+    bring_up_all(state);
     init_dmabuf(state)?;
     init_syncobj(state);
 
@@ -523,9 +531,51 @@ fn device_changed(state: &mut State, node: DrmNode) {
         }
     }
 
+    if state.backend.kms().is_some_and(|kms| kms.cold_plug) {
+        return;
+    }
+    state.reconcile_output_layout();
     for connector in appeared {
         bring_up_head(state, node, connector);
     }
+}
+
+/// Lights every head registered during the cold plug that the config and
+/// the arrangement saved for this set of monitors want on.
+fn bring_up_all(state: &mut State) {
+    state.sync_offline_heads();
+    let mut waiting: Vec<(String, DrmNode, connector::Handle)> = state
+        .backend
+        .kms()
+        .map(|kms| {
+            kms.devices
+                .iter()
+                .flat_map(|(node, device)| {
+                    device
+                        .heads
+                        .values()
+                        .filter(|head| !head.state.is_enabled())
+                        .map(|head| (head.name.clone(), *node, head.connector))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    waiting.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let names: Vec<&str> = waiting.iter().map(|(name, ..)| name.as_str()).collect();
+    let lit: Vec<String> = state
+        .connectors_to_light(&names)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    for (name, node, connector) in &waiting {
+        if lit.contains(name) {
+            light_head(state, *node, *connector);
+        } else {
+            tracing::info!(output = name, "monitor stays off; the config disables it");
+        }
+    }
+    state.refresh_output_heads();
 }
 
 /// Hands a non-desktop connector to `wp_drm_lease_v1` rather than lighting it.
@@ -559,15 +609,15 @@ fn offer_for_lease(
 
 /// Lights a head that is currently off, using the config's mode.
 ///
-/// The public door for "turn this monitor on"; hotplug reaches the same code
-/// through [`bring_up_head`], so a monitor appearing and a monitor being
-/// switched on take the same path and cannot drift apart.
+/// The public door for "turn this monitor on". Hotplug reaches the same
+/// [`light_head`] through [`bring_up_head`], which first asks whether the
+/// config wants the monitor on, so the two paths cannot drift apart.
 pub fn enable_configured_head(
     state: &mut State,
     node: DrmNode,
     connector: connector::Handle,
 ) -> anyhow::Result<()> {
-    bring_up_head(state, node, connector);
+    light_head(state, node, connector);
 
     let enabled = state
         .backend
@@ -580,8 +630,30 @@ pub fn enable_configured_head(
     Ok(())
 }
 
-/// Lights a newly appeared head up, unless the config says it is off.
+/// Lights a newly appeared head up, unless the config or the arrangement
+/// saved for this set of monitors has it off.
 fn bring_up_head(state: &mut State, node: DrmNode, connector: connector::Handle) {
+    let Some(name) = state
+        .backend
+        .kms()
+        .and_then(|kms| kms.devices.get(&node))
+        .and_then(|device| device.heads.get(&connector))
+        .map(|head| head.name.clone())
+    else {
+        return;
+    };
+    state.sync_offline_heads();
+    if !state.should_enable_head(&name) {
+        tracing::info!(output = name, "monitor stays off; the config disables it");
+        state.refresh_output_heads();
+        return;
+    }
+    light_head(state, node, connector);
+}
+
+/// Lights a head with the config's mode on a free CRTC, whatever the config
+/// says about whether it should be on.
+fn light_head(state: &mut State, node: DrmNode, connector: connector::Handle) {
     // Cloned out so the device borrow ends before `assign_crtc` needs its own.
     let head = state
         .backend
@@ -598,15 +670,6 @@ fn bring_up_head(state: &mut State, node: DrmNode, connector: connector::Handle)
         .current
         .output_setting(&head.name, head.identity.as_str())
         .cloned();
-
-    if setting.as_ref().and_then(|setting| setting.enabled) == Some(false) {
-        tracing::info!(
-            output = head.name,
-            "monitor stays off; the config disables it"
-        );
-        state.refresh_output_heads();
-        return;
-    }
 
     if let Some(bpc) = setting.as_ref().and_then(|setting| setting.max_bpc)
         && !head.accepts_max_bpc(bpc)

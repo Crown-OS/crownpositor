@@ -22,23 +22,44 @@ impl Shell {
     /// of the first one produces negative coordinates, and neither clients nor
     /// the pointer have any use for an origin that wanders.
     pub fn arrange_outputs(&mut self) {
-        for monitor in &mut self.monitors {
-            if let Some(fixed) = monitor.fixed_position() {
-                monitor.set_position(fixed);
+        let pins: Vec<Option<Rectangle<i32, Logical>>> = self
+            .monitors
+            .iter()
+            .map(|monitor| {
+                monitor
+                    .fixed_position()
+                    .filter(|_| !monitor.is_hidden())
+                    .map(|position| Rectangle::new(position, monitor.config().logical_size()))
+            })
+            .collect();
+        let honoured = honoured_pins(&pins);
+
+        for ((monitor, pin), honoured) in self.monitors.iter_mut().zip(&pins).zip(&honoured) {
+            match (pin, honoured) {
+                (Some(pin), true) => {
+                    monitor.set_position(pin.loc);
+                }
+                (Some(pin), false) => tracing::warn!(
+                    output = monitor.config().name,
+                    position = ?pin.loc,
+                    "the pinned position overlaps another monitor; packing it instead"
+                ),
+                (None, _) => {}
             }
         }
 
         // Start packing past the rightmost pinned output, so an auto-placed
         // output cannot land on top of one the user placed deliberately.
-        let mut x = self
-            .shown_monitors()
-            .filter(|monitor| monitor.fixed_position().is_some())
-            .map(|monitor| monitor.geometry().loc.x + monitor.geometry().size.w)
+        let mut x = pins
+            .iter()
+            .zip(&honoured)
+            .filter_map(|(pin, honoured)| pin.filter(|_| *honoured))
+            .map(|pin| pin.loc.x + pin.size.w)
             .max()
             .unwrap_or(0);
 
-        for monitor in &mut self.monitors {
-            if monitor.fixed_position().is_some() || monitor.is_hidden() {
+        for (monitor, honoured) in self.monitors.iter_mut().zip(&honoured) {
+            if *honoured || monitor.is_hidden() {
                 continue;
             }
             monitor.set_position((x, 0).into());
@@ -114,6 +135,24 @@ impl Shell {
         )?;
         candidates.get(nearest).map(|monitor| monitor.id())
     }
+}
+
+/// Which pins hold, in order: a pin that overlaps an earlier one that holds
+/// is packed like an unpinned monitor instead.
+pub fn honoured_pins(pins: &[Option<Rectangle<i32, Logical>>]) -> Vec<bool> {
+    let mut held: Vec<Rectangle<i32, Logical>> = Vec::new();
+    pins.iter()
+        .map(|pin| {
+            let Some(pin) = pin else {
+                return false;
+            };
+            let holds = held.iter().all(|other| pin.intersection(*other).is_none());
+            if holds {
+                held.push(*pin);
+            }
+            holds
+        })
+        .collect()
 }
 
 /// The candidate whose centre is nearest to `from`'s.
@@ -251,6 +290,17 @@ mod tests {
             .enumerate()
             .filter(|(index, _)| *index != from);
         nearest_in_direction(layout[from], candidates, dir)
+    }
+
+    #[test]
+    fn a_pin_overlapping_an_earlier_one_is_dropped_and_the_rest_hold() {
+        let pins = [
+            Some(rect(0, 0, 1920, 1080)),
+            None,
+            Some(rect(1000, 0, 1920, 1080)),
+            Some(rect(1920, 0, 1280, 720)),
+        ];
+        assert_eq!(honoured_pins(&pins), [true, false, false, true]);
     }
 
     #[test]

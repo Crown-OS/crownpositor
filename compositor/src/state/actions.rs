@@ -303,7 +303,7 @@ impl State {
         }
         self.config.current = new;
         self.reapply_window_rules();
-        self.shell.apply_output_settings(&self.config.current);
+        self.apply_output_settings();
         self.refresh_output_heads();
         self.sync_background_effect_capabilities();
         self.lock_scene_changed();
@@ -374,12 +374,12 @@ impl State {
 
             Update::Outputs(outputs) => {
                 config.compositor.outputs = outputs;
-                self.shell.apply_output_settings(&self.config.current);
+                self.apply_output_settings();
                 self.refresh_output_heads();
             }
             Update::OutputLayouts(layouts) => {
                 config.compositor.output_layouts = layouts;
-                self.shell.apply_output_settings(&self.config.current);
+                self.apply_output_settings();
                 self.refresh_output_heads();
             }
 

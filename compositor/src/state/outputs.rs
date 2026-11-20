@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use calloop::timer::{TimeoutAction, Timer};
-use config::{Compositor, OutputLayout, OutputSetting, Vrr};
+use config::{Compositor, OutputLayout, Vrr};
 use protocols::output_management::{
     AdaptiveSync, HeadConfig, HeadId, HeadSnapshot, ModeRequest, ModeSnapshot, OutputConfigRequest,
     VrrSupport,
@@ -25,7 +25,11 @@ use crate::{
         monitor::{Monitor, OutputConfig, logical_size},
         output_kind::NestedPersistence,
     },
-    state::{State, backend::DisabledHead},
+    state::{
+        State,
+        backend::DisabledHead,
+        output_layouts::{OutputNames, configured_position},
+    },
     utils::mode::{self, RequestedMode},
 };
 
@@ -93,7 +97,7 @@ impl Current {
         }
     }
 
-    fn from_disabled(head: &DisabledHead) -> Self {
+    fn from_disabled(head: &DisabledHead, position: Point<i32, Logical>) -> Self {
         let mode = head
             .preferred
             .and_then(|index| head.modes.get(index))
@@ -107,7 +111,7 @@ impl Current {
         Self {
             mode,
             modes: head.modes.clone(),
-            position: (0, 0).into(),
+            position,
             transform: Transform::Normal,
             scale: 1.0,
             adaptive_sync: false,
@@ -263,7 +267,7 @@ impl State {
     /// writing from memory would silently discard hand-edited sections.
     fn persist_output_config(&mut self) {
         let mut on_disk: Compositor = crownos_config::load(Compositor::SECTION);
-        on_disk.outputs = self.derive_output_settings(&on_disk.outputs);
+        self.derive_output_settings(&mut on_disk);
         on_disk.output_layouts = self.derive_output_layouts(on_disk.output_layouts);
 
         match crownos_config::save(Compositor::SECTION, &on_disk) {
@@ -281,30 +285,27 @@ impl State {
 
     /// Per-monitor settings, merged onto whatever the file already had.
     ///
-    /// An entry keyed on an identity the user wrote by hand is matched and
-    /// updated in place rather than being replaced by a connector-named one,
-    /// so hand-written config keeps its shape.
-    fn derive_output_settings(&self, existing: &[OutputSetting]) -> Vec<OutputSetting> {
-        let mut settings = existing.to_vec();
+    /// Each monitor edits the entry `Compositor::output` reads for it, the one
+    /// named by its connector first, so hand-written config keeps its shape.
+    fn derive_output_settings(&self, on_disk: &mut Compositor) {
         let nested = NestedPersistence::from_environment();
 
         // A monitor switched off has to be recorded, or it comes back on at
         // the next start and the user has to switch it off again every boot.
         for head in self
-            .backend
-            .disabled_heads()
+            .shell
+            .offline_heads()
             .iter()
             .filter(|head| head.kind.is_persisted(nested))
         {
-            let entry = upsert(&mut settings, &head.name, &head.identity);
-            entry.enabled = Some(false);
+            on_disk
+                .output_entry(&head.connector, &head.identity)
+                .enabled = Some(false);
         }
 
         for monitor in self.shell.persisted_monitors(nested) {
             let config = monitor.config();
-            let identity = config.connector.as_str();
-
-            let entry = upsert(&mut settings, &config.name, identity);
+            let entry = on_disk.output_entry(&config.name, config.connector.as_str());
 
             // Explicitly on, so a monitor switched back on stops being
             // suppressed by a stale `enabled: false`.
@@ -318,18 +319,13 @@ impl State {
                 .position
                 .get_or_insert((config.position.x, config.position.y));
         }
-
-        settings
     }
 
-    /// The arrangement for exactly the monitors that are plugged in now.
+    /// The arrangement for exactly the monitors that are plugged in now, lit
+    /// or switched off.
     fn derive_output_layouts(&self, existing: Vec<OutputLayout>) -> Vec<OutputLayout> {
         let nested = NestedPersistence::from_environment();
-        let present: Vec<String> = self
-            .shell
-            .persisted_monitors(nested)
-            .map(|monitor| monitor.config().connector.as_str().to_owned())
-            .collect();
+        let present = self.output_set();
         if present.is_empty() {
             return existing;
         }
@@ -347,15 +343,21 @@ impl State {
                     )
                 })
                 .collect(),
-            heads: present.clone(),
-            disabled: Vec::new(),
+            disabled: self
+                .shell
+                .offline_heads()
+                .iter()
+                .filter(|head| head.kind.is_persisted(nested))
+                .map(|head| head.identity.clone())
+                .collect(),
+            heads: present,
         };
 
         // Replace the arrangement for this exact set and leave every other
         // profile alone — that is the whole point of keying on the set.
         let mut layouts: Vec<OutputLayout> = existing
             .into_iter()
-            .filter(|existing| !existing.matches(&present))
+            .filter(|existing| !existing.matches(&layout.heads))
             .collect();
         layouts.push(layout);
         layouts
@@ -423,12 +425,14 @@ impl State {
         }
 
         let disabled = self.backend.disabled_heads();
+        let mut placed_by_us = Vec::with_capacity(request.heads.len());
 
-        request
+        let mut heads = request
             .heads
             .iter()
             .map(|(id, config)| {
                 if let Some(monitor) = self.shell.monitor_by_name(id.as_str()) {
+                    placed_by_us.push(false);
                     let vrr = self.backend.vrr_enabled(monitor.output());
                     let current = Current::from_monitor(monitor.config(), vrr);
                     return resolve_head(id, config, &current);
@@ -437,9 +441,49 @@ impl State {
                     .iter()
                     .find(|head| head.name == id.as_str())
                     .ok_or_else(|| Rejection::UnknownHead(id.to_string()))?;
-                resolve_head(id, config, &Current::from_disabled(head))
+                placed_by_us.push(matches!(config, HeadConfig::Enabled { position: None, .. }));
+                let position = head
+                    .position
+                    .unwrap_or_else(|| self.switched_off_position(head));
+                resolve_head(id, config, &Current::from_disabled(head, position))
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        clear_of_others(&mut heads, &placed_by_us);
+        Ok(heads)
+    }
+
+    /// Where a head that has not been lit since the start goes when it is
+    /// switched on without a position: where the config pins it, else right
+    /// of every lit monitor.
+    fn switched_off_position(&self, head: &DisabledHead) -> Point<i32, Logical> {
+        let identity = self
+            .shell
+            .offline_heads()
+            .iter()
+            .find(|offline| offline.connector == head.name)
+            .map_or(head.identity.as_str(), |offline| offline.identity.as_str());
+        let names = OutputNames {
+            identity,
+            connector: &head.name,
+        };
+        configured_position(
+            self.matched_output_layout().as_ref(),
+            names,
+            self.config.current.output_setting(&head.name, identity),
+        )
+        .map_or_else(
+            || {
+                let right = self
+                    .shell
+                    .shown_monitors()
+                    .map(|monitor| monitor.geometry())
+                    .map(|geometry| geometry.loc.x + geometry.size.w)
+                    .max()
+                    .unwrap_or(0);
+                Point::from((right, 0))
+            },
+            Point::from,
+        )
     }
 
     /// Pushes an accepted configuration onto the shell.
@@ -600,6 +644,33 @@ fn validate(heads: &[ResolvedHead]) -> Result<(), Rejection> {
     Ok(())
 }
 
+/// Moves each head the compositor placed itself (one switched on without a
+/// position) right of the other enabled heads when it would overlap one.
+fn clear_of_others(heads: &mut [ResolvedHead], placed_by_us: &[bool]) {
+    for index in 0..heads.len() {
+        if !placed_by_us.get(index).copied().unwrap_or(false) || !heads[index].enabled {
+            continue;
+        }
+        let geometry = heads[index].geometry();
+        let others = heads
+            .iter()
+            .enumerate()
+            .filter(|(other, head)| *other != index && head.enabled)
+            .map(|(_, head)| head.geometry());
+        if others
+            .clone()
+            .all(|other| other.intersection(geometry).is_none())
+        {
+            continue;
+        }
+        let right = others
+            .map(|other| other.loc.x + other.size.w)
+            .max()
+            .unwrap_or(0);
+        heads[index].position = (right, 0).into();
+    }
+}
+
 fn head_snapshot(
     monitor: &Monitor,
     adaptive_sync: AdaptiveSync,
@@ -671,7 +742,7 @@ fn disabled_snapshot(head: &DisabledHead) -> HeadSnapshot {
             .collect(),
         current_mode: None,
         enabled: false,
-        position: (0, 0).into(),
+        position: head.position.unwrap_or_default(),
         transform: Transform::Normal,
         scale: 1.0,
         adaptive_sync: AdaptiveSync::Disabled,
@@ -689,32 +760,6 @@ fn vrr_support(support: DrmVrrSupport) -> VrrSupport {
         DrmVrrSupport::NotSupported => VrrSupport::Unsupported,
         DrmVrrSupport::RequiresModeset => VrrSupport::RequiresModeset,
         DrmVrrSupport::Supported => VrrSupport::Supported,
-    }
-}
-
-/// The entry for a head, matched on either spelling of its name, created if
-/// it is not there yet.
-///
-/// New entries are keyed on the identity rather than the connector: identity
-/// survives a replug into a different port, which is exactly when a user is
-/// most annoyed to find their arrangement forgotten.
-fn upsert<'a>(
-    settings: &'a mut Vec<OutputSetting>,
-    name: &str,
-    identity: &str,
-) -> &'a mut OutputSetting {
-    match settings
-        .iter()
-        .position(|setting| setting.name == name || setting.name == identity)
-    {
-        Some(index) => &mut settings[index],
-        None => {
-            settings.push(OutputSetting {
-                name: identity.to_owned(),
-                ..OutputSetting::default()
-            });
-            settings.last_mut().expect("just pushed")
-        }
     }
 }
 
@@ -746,6 +791,8 @@ fn description(config: &OutputConfig) -> String {
 
 #[cfg(test)]
 mod tests {
+    use config::OutputSetting;
+
     use super::*;
     use crate::shell::output_kind::OutputKind;
 
@@ -930,9 +977,10 @@ mod tests {
             preferred: Some(1),
             vrr_capable: false,
             kind: OutputKind::Physical,
+            position: None,
         };
 
-        let current = Current::from_disabled(&disabled);
+        let current = Current::from_disabled(&disabled, (1920, 0).into());
         assert_eq!(current.mode, mode(2560, 1440, 144_000));
         assert_eq!(current.scale, 1.0);
     }
@@ -950,21 +998,31 @@ mod tests {
             preferred: None,
             vrr_capable: false,
             kind: OutputKind::Physical,
+            position: None,
         };
-        assert_eq!(Current::from_disabled(&disabled).mode.refresh, 0);
+        assert_eq!(
+            Current::from_disabled(&disabled, Point::default())
+                .mode
+                .refresh,
+            0
+        );
     }
 
     #[test]
     fn an_existing_entry_is_updated_rather_than_duplicated() {
         // The user wrote this by hand, keyed on the connector name.
-        let mut settings = vec![OutputSetting {
-            name: "eDP-1".into(),
-            scale: Some(2.0),
-            ..OutputSetting::default()
-        }];
+        let mut compositor = Compositor {
+            outputs: vec![OutputSetting {
+                name: "eDP-1".into(),
+                scale: Some(2.0),
+                ..OutputSetting::default()
+            }],
+            ..Compositor::default()
+        };
 
-        upsert(&mut settings, "eDP-1", "Some Panel XYZ").enabled = Some(false);
+        compositor.output_entry("eDP-1", "Some Panel XYZ").enabled = Some(false);
 
+        let settings = &compositor.outputs;
         assert_eq!(settings.len(), 1, "the hand-written entry must be reused");
         assert_eq!(settings[0].name, "eDP-1", "its spelling must be kept");
         assert_eq!(settings[0].scale, Some(2.0), "unrelated fields survive");
@@ -973,21 +1031,54 @@ mod tests {
 
     #[test]
     fn a_new_entry_is_keyed_on_the_identity() {
-        let mut settings = Vec::new();
-        upsert(&mut settings, "DP-1", "Dell U2720Q ABC").scale = Some(1.5);
+        let mut compositor = Compositor::default();
+        compositor.output_entry("DP-1", "Dell U2720Q ABC").scale = Some(1.5);
 
         // Identity, not connector: a replug into another port keeps working.
-        assert_eq!(settings[0].name, "Dell U2720Q ABC");
+        assert_eq!(compositor.outputs[0].name, "Dell U2720Q ABC");
     }
 
     #[test]
-    fn an_entry_is_matched_on_either_spelling_of_its_name() {
-        let mut settings = vec![OutputSetting {
-            name: "Dell U2720Q ABC".into(),
+    fn the_connector_entry_is_edited_before_an_identity_entry_listed_first() {
+        let named = |name: &str| OutputSetting {
+            name: name.into(),
             ..OutputSetting::default()
-        }];
-        upsert(&mut settings, "DP-1", "Dell U2720Q ABC").enabled = Some(true);
-        assert_eq!(settings.len(), 1);
+        };
+        let mut compositor = Compositor {
+            outputs: vec![named("Dell U2720Q ABC"), named("DP-1")],
+            ..Compositor::default()
+        };
+        compositor.output_entry("DP-1", "Dell U2720Q ABC").enabled = Some(true);
+
+        assert_eq!(compositor.outputs.len(), 2);
+        assert_eq!(compositor.outputs[0].enabled, None);
+        assert_eq!(compositor.outputs[1].enabled, Some(true));
+        assert_eq!(
+            compositor.output("DP-1", "Dell U2720Q ABC"),
+            Some(&compositor.outputs[1])
+        );
+    }
+
+    #[test]
+    fn a_head_switched_on_without_a_position_is_moved_clear_of_the_others() {
+        let mut heads = [
+            head("DP-1", (0, 0), (1920, 1080)),
+            head("DP-2", (1920, 0), (1280, 720)),
+            head("DP-3", (1920, 0), (1920, 1080)),
+        ];
+        clear_of_others(&mut heads, &[false, false, true]);
+        assert_eq!(heads[2].position, (3200, 0).into());
+        assert_eq!(validate(&heads), Ok(()));
+    }
+
+    #[test]
+    fn a_head_the_client_placed_is_left_to_validation() {
+        let mut heads = [
+            head("DP-1", (0, 0), (1920, 1080)),
+            head("DP-2", (0, 0), (1920, 1080)),
+        ];
+        clear_of_others(&mut heads, &[false, false]);
+        assert!(validate(&heads).is_err());
     }
 
     #[test]

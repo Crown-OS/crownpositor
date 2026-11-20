@@ -388,15 +388,18 @@ pub fn disable_head(state: &mut State, node: DrmNode, connector: connector::Hand
         return;
     };
 
+    let State { backend, shell, .. } = &mut *state;
     // Disabled first, so the head list sent while the output goes already
     // has this head as switched off rather than missing.
-    if let Some(head) = state
-        .backend
+    if let Some(head) = backend
         .kms()
         .and_then(|kms| kms.devices.get_mut(&node))
         .and_then(|device| device.heads.get_mut(&connector))
     {
         head.state = HeadState::Disabled;
+        head.last_position = shell
+            .monitor_by_name(&head.name)
+            .map(|monitor| monitor.config().position);
         tracing::info!(output = head.name, %node, "monitor disabled");
     }
 

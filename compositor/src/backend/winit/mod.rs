@@ -6,6 +6,8 @@ mod viewport;
 
 pub use hotplug::{set_head_enabled, toggle_connection};
 
+use hotplug::bring_up_all;
+
 use anyhow::anyhow;
 use smithay::{
     backend::{
@@ -24,6 +26,7 @@ use crate::{
         present::{self, ReleasedClients},
         render::CrownRenderer as _,
     },
+    shell::monitor::output_from_descriptor,
     state::{BackendState, DisabledHead, State},
 };
 
@@ -108,27 +111,16 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
     let names = viewport_names();
     let transform = output_transform(names.len());
     let rects = split_window(window_size, names.len());
+    // Every viewport starts switched off; `bring_up_all` then lights the
+    // ones the config wants, as a cold plug on hardware does.
     let viewports: Vec<Viewport> = names
         .into_iter()
         .zip(rects)
         .map(|(name, rect)| {
-            // The backend describes the output; the shell builds it. That is
-            // what makes registration impossible to forget.
-            let output = state.shell.add_output(
-                &state.common.display_handle,
-                &state.config.current,
-                descriptor(&name, mode_of(rect.size), transform),
-            );
-            Viewport::new(name, output, rect)
+            let output = output_from_descriptor(&descriptor(&name, mode_of(rect.size), transform));
+            Viewport::new(name, output, rect, Connection::Disabled)
         })
         .collect();
-
-    for viewport in &viewports {
-        state.output_added(&viewport.output);
-    }
-    if let Some(first) = viewports.first() {
-        crate::backend::debug_frames::init(&first.output);
-    }
 
     if let Err(err) = backend.renderer().compile_shaders() {
         // Cosmetic, so a compile failure degrades to square corners / no blur.
@@ -146,6 +138,14 @@ pub fn init(state: &mut State) -> anyhow::Result<()> {
         dmabuf_global,
         dmabuf_feedback,
     }));
+    bring_up_all(state);
+    if let Some(first) = state
+        .backend
+        .winit()
+        .and_then(|winit| winit.viewports.first())
+    {
+        crate::backend::debug_frames::init(&first.output);
+    }
 
     state
         .common
