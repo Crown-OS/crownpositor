@@ -19,7 +19,7 @@ use smithay::{
 use smithay_drm_extras::drm_scanner::DrmScanner;
 
 use crate::backend::{
-    kms::{head::Head, surface::Surface, vulkan::VulkanContext},
+    kms::{head::Head, renderer::RendererState, surface::Surface, vulkan::VulkanContext},
     render::{CrownAllocator, GraphicsApi},
 };
 
@@ -34,7 +34,10 @@ pub struct Device {
     /// carries when another GPU has a connector of the same name.
     pub address: String,
     pub drm: DrmDevice,
-    pub gbm: GbmDevice<DrmDeviceFd>,
+    /// Present while the GPU has a renderer: always on the primary GPU,
+    /// else while one of its heads is lit and a short while after.
+    pub gbm: Option<GbmDevice<DrmDeviceFd>>,
+    pub renderer: RendererState<RegistrationToken>,
     /// Tracks which connectors appeared/disappeared between udev `Changed`
     /// events and assigns CRTCs to them.
     pub scanner: DrmScanner,
@@ -65,6 +68,7 @@ impl Device {
     /// up on the fallback path beats a black screen on the preferred one.
     pub fn create_allocator(
         &self,
+        gbm: &GbmDevice<DrmDeviceFd>,
         api: GraphicsApi,
         vulkan: Option<&VulkanContext>,
     ) -> CrownAllocator {
@@ -83,7 +87,7 @@ impl Device {
         }
 
         CrownAllocator::Gbm(DmabufAllocator(GbmAllocator::new(
-            self.gbm.clone(),
+            gbm.clone(),
             // Scanned out by the CRTC *and* rendered into by GLES.
             GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
         )))

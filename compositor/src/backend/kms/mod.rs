@@ -21,6 +21,7 @@ pub mod lighting;
 pub mod present_watch;
 pub mod props;
 pub mod reconfigure;
+pub mod renderer;
 pub mod surface;
 pub mod tearing;
 pub mod vrr;
@@ -35,7 +36,6 @@ use std::{
 use anyhow::Context as _;
 use smithay::{
     backend::{
-        allocator::gbm::GbmDevice,
         drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType},
         egl::context::ContextPriority,
         input::InputEvent,
@@ -54,6 +54,7 @@ use smithay::{
     },
 };
 
+use crate::backend::kms::renderer::RendererState;
 pub use crate::backend::kms::surface::redraw_queued_outputs;
 pub use crate::backend::kms::{device::Device, vulkan::VulkanContext};
 use crate::utils::output_setting::output_setting;
@@ -393,30 +394,17 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
         .unwrap_or_default();
     tracing::info!(%node, driver, "DRM device opened, its outputs switched off");
 
-    let gbm = GbmDevice::new(fd).map_err(|source| KmsError::Gbm {
-        path: path.display().to_string(),
-        source,
-    })?;
-
+    // Only the primary GPU gets its renderer now: it composites every
+    // output. Another GPU gets one when a head on it lights up.
     let render_node = render_node_for(node);
-    kms.gpu_manager
-        .as_mut()
-        .add_node(render_node, gbm.clone())
-        .map_err(|err| KmsError::AddNode(err, render_node))?;
-
-    // Effects compile once per GPU; failure degrades (square corners), never
-    // blocks the GPU from lighting up.
-    tracing::info!(%node, driver, "compiling effect shaders");
-    match kms.gpu_manager.single_renderer(&render_node) {
-        Ok(mut renderer) => {
-            if let Err(err) = renderer.compile_shaders() {
-                tracing::warn!(%err, %render_node, "failed to compile effect shaders");
-            }
-        }
-        Err(err) => {
-            tracing::warn!(%err, %render_node, "no renderer to compile shaders with");
-        }
-    }
+    let is_primary = node == kms.primary_node;
+    let (gbm, renderer_state) = if is_primary {
+        let gbm = renderer::create_renderer(&mut kms.gpu_manager, fd, node, render_node)?;
+        compile_effect_shaders(kms, render_node, &driver);
+        (Some(gbm), RendererState::Attached)
+    } else {
+        (None, RendererState::Detached)
+    };
 
     let drm_token = handle
         .insert_source(drm_notifier, move |event, metadata, state| match event {
@@ -444,6 +432,7 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
             address: head_names::device_address(node),
             drm,
             gbm,
+            renderer: renderer_state,
             scanner: smithay_drm_extras::drm_scanner::DrmScanner::new(),
             heads: HashMap::new(),
             surfaces: HashMap::new(),
@@ -471,6 +460,22 @@ fn device_added(state: &mut State, node: DrmNode, path: &Path) -> Result<(), Kms
         state.refresh_output_heads();
     }
     Ok(())
+}
+
+/// Effects compile once, on the GPU that composites; a failure degrades
+/// (square corners), never blocks the GPU from lighting up.
+fn compile_effect_shaders(kms: &mut KmsState, render_node: DrmNode, driver: &str) {
+    tracing::info!(%render_node, driver, "compiling effect shaders");
+    match kms.gpu_manager.single_renderer(&render_node) {
+        Ok(mut renderer) => {
+            if let Err(err) = renderer.compile_shaders() {
+                tracing::warn!(%err, %render_node, "failed to compile effect shaders");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(%err, %render_node, "no renderer to compile shaders with");
+        }
+    }
 }
 
 /// Reconciles the device's head registry with what is physically plugged in,
@@ -731,8 +736,14 @@ fn light_head(state: &mut State, node: DrmNode, connector: connector::Handle) {
         return;
     };
 
+    if let Err(err) = renderer::attach_renderer(state, node) {
+        tracing::error!(%err, output = head.name, "no renderer for this GPU; the monitor stays dark");
+        state.refresh_output_heads();
+        return;
+    }
     if let Err(err) = surface::enable_head(state, node, connector, crtc, drm_mode) {
         tracing::error!(%err, "failed to bring up connector");
+        renderer::release_when_idle(state, node);
     }
 }
 
@@ -784,11 +795,17 @@ fn device_removed(state: &mut State, node: DrmNode) {
     let Some(kms) = state.backend.kms() else {
         return;
     };
-    let Some(device) = kms.devices.remove(&node) else {
+    let Some(mut device) = kms.devices.remove(&node) else {
         return;
     };
 
-    kms.gpu_manager.as_mut().remove_node(&device.render_node);
+    let (pending_release, attached) = device.renderer.detach_for_removal();
+    if let Some(token) = pending_release {
+        handle.remove(token);
+    }
+    if attached {
+        kms.gpu_manager.as_mut().remove_node(&device.render_node);
+    }
     handle.remove(device.drm_token);
     kms.rename_heads_that_are_off();
     tracing::info!(%node, "GPU removed");

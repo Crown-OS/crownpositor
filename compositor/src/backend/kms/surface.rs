@@ -63,6 +63,7 @@ use crate::{
             feedback::SurfaceFeedback,
             head::HeadState,
             present_watch::{PATIENCE, PresentWatch},
+            renderer,
             tearing::{BufferLayout, FlipOutcome, FrameShape, Tearing},
             vrr::VrrGate,
         },
@@ -245,6 +246,9 @@ pub fn enable_head(
     let Some(device) = kms.devices.get_mut(&node) else {
         return Ok(());
     };
+    let Some(gbm) = device.gbm.clone() else {
+        anyhow::bail!("{} has no renderer on {node}", head.name);
+    };
 
     let drm_surface = device
         .drm
@@ -302,7 +306,7 @@ pub fn enable_head(
         &head.name,
         head.identity.as_str(),
     ));
-    let allocator = device.create_allocator(api, vulkan);
+    let allocator = device.create_allocator(&gbm, api, vulkan);
     let compositor = SurfaceCompositor::new(
         smithay::output::OutputModeSource::Auto(output.downgrade()),
         drm_surface,
@@ -310,11 +314,11 @@ pub fn enable_head(
         // frame through `FrameFlags` instead.
         None,
         allocator,
-        DmabufExporter::new(device.gbm.clone(), Some(device.render_node)),
+        DmabufExporter::new(gbm.clone(), Some(device.render_node)),
         color_formats(deep_color).iter().copied(),
         renderer_formats,
         device.drm.cursor_size(),
-        Some(device.gbm.clone()),
+        Some(gbm.clone()),
     )
     .with_context(|| format!("failed to create the DRM compositor for {}", head.name))?;
     if let Some(monitor) = shell.monitor_mut(&output) {
@@ -324,7 +328,7 @@ pub fn enable_head(
     let vrr_support = compositor
         .vrr_supported(connector)
         .unwrap_or(VrrSupport::NotSupported);
-    let tearing = Tearing::new(compositor.surface(), device.gbm.clone());
+    let tearing = Tearing::new(compositor.surface(), gbm);
     if tearing.is_none() {
         tracing::info!(
             output = head.name,
@@ -439,6 +443,7 @@ fn remove_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
     }
 
     state.output_removed(&surface.output);
+    renderer::release_when_idle(state, node);
 }
 
 /// Forgets a connector that has been unplugged.
