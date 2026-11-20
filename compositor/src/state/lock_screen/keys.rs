@@ -92,17 +92,25 @@ impl State {
                 }),
             _ => None,
         };
+        self.lock_screen_pointer(location);
+        true
+    }
+
+    /// Moves the cursor to `location`, if any, and brings the prompt up.
+    pub(crate) fn lock_screen_pointer(
+        &mut self,
+        location: Option<(Point<f64, Logical>, InputTime)>,
+    ) {
         if let Some((location, time)) = location {
             self.move_locked_pointer(location, time);
         }
         let Some(lock) = self.shell.lock_screen.active_mut() else {
-            return true;
+            return;
         };
         if !matches!(lock.flow.pointer(Instant::now()), Response::Ignored) {
             self.mark_lock_dirty();
             self.schedule_lock_wake();
         }
-        true
     }
 
     fn move_locked_pointer(&mut self, location: Point<f64, Logical>, time: InputTime) {

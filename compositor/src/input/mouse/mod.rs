@@ -65,6 +65,25 @@ impl State {
         self.motion(&(SERIAL_COUNTER.next_serial(), time), location, None);
     }
 
+    /// Absolute motion that a nested backend has already placed in the
+    /// layout. It skips `process_input_event`, so it keeps that path's
+    /// activity, input-capture and lock-screen rules itself.
+    pub(crate) fn on_placed_pointer_motion(
+        &mut self,
+        location: Point<f64, Logical>,
+        time: InputTime,
+    ) {
+        self.note_user_activity();
+        if self.input.capture.is_active() {
+            return;
+        }
+        if self.shell.lock_screen.is_active() {
+            self.lock_screen_pointer(Some((location, time)));
+            return;
+        }
+        self.warp_pointer(location, time);
+    }
+
     /// A locked pointer does not move and draws nothing, so there is no
     /// redraw: the client alone hears about it.
     fn locked_motion(&mut self, relative: &RelativeMotionEvent) {

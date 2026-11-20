@@ -80,11 +80,7 @@ impl BackendState {
     pub fn queue_redraw(&mut self, output: Option<&Output>) {
         match self {
             Self::Unset => {}
-            Self::Winit(winit) => {
-                if output.is_none_or(|output| *output == winit.output) {
-                    winit.backend.window().request_redraw();
-                }
-            }
+            Self::Winit(winit) => winit.queue_redraw(output),
             Self::Kms(kms) => kms.queue_redraw(output),
         }
     }
@@ -264,7 +260,7 @@ impl BackendState {
         }
     }
 
-    /// Only `backend/winit.rs` should call this. Everything else goes through the
+    /// Only `backend/winit/` should call this. Everything else goes through the
     /// methods above, so a new backend does not ripple into unrelated code.
     pub(crate) fn winit(&mut self) -> Option<&mut WinitState> {
         match self {
