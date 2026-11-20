@@ -8,6 +8,8 @@
 
 use crownos_config::schema::output_identity;
 
+use crate::utils::edid::EdidInfo;
+
 const EDID_VARIABLE: &str = "CROWN_NESTED_EDID";
 const MAKE: &str = "Crownpositor";
 const MODEL: &str = "Winit";
@@ -42,6 +44,17 @@ impl NestedEdid {
             model: model.to_owned(),
             serial: (!serial.is_empty()).then(|| serial.to_owned()),
         })
+    }
+
+    /// What a parsed EDID with this make, model and serial would say, so the
+    /// output-management heads list them as they would for a real monitor.
+    pub fn info(&self) -> EdidInfo {
+        EdidInfo {
+            make: self.make.clone(),
+            model: self.model.clone(),
+            serial: self.serial.clone(),
+            ..EdidInfo::default()
+        }
     }
 
     /// The identity a real monitor with this EDID would get on `connector`.
@@ -79,6 +92,20 @@ mod tests {
     use super::*;
 
     const VALUE: &str = "winit-1=BOE 0B45 2;winit-2=Dell Inc. U2720Q 7XK2;winit-3=Acme Pro ";
+
+    #[test]
+    fn the_heads_list_the_make_model_and_serial_the_environment_gives() {
+        let info = edid("Dell Inc.", "U2720Q", Some("7XK2")).info();
+        assert_eq!(
+            (
+                info.make.as_str(),
+                info.model.as_str(),
+                info.serial.as_deref()
+            ),
+            ("Dell Inc.", "U2720Q", Some("7XK2"))
+        );
+        assert!(!info.supports_hdr());
+    }
 
     fn edid(make: &str, model: &str, serial: Option<&str>) -> NestedEdid {
         NestedEdid {

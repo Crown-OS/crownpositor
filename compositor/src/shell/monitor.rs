@@ -574,6 +574,18 @@ impl Monitor {
         true
     }
 
+    /// Makes `mode` the only mode the output has, and its preferred one: a
+    /// nested viewport has exactly the size the host window gives it.
+    pub fn set_only_mode(&mut self, mode: Mode) -> bool {
+        for old in std::mem::replace(&mut self.config.modes, vec![mode]) {
+            self.output.delete_mode(old);
+        }
+        self.output.add_mode(mode);
+        self.output.set_preferred(mode);
+        self.config.preferred_mode = Some(mode);
+        self.set_mode(mode)
+    }
+
     /// Snapped to the nearest 120th: `wp_fractional_scale_v1` can name no
     /// other, and a client told 157/120 for an output drawn at 1.31 renders
     /// every buffer a hair off the size it is drawn at.
@@ -830,6 +842,21 @@ pub fn output_id(output: &Output) -> OutputId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_nested_resize_leaves_the_new_size_as_the_only_and_preferred_mode() {
+        let mut monitor = monitor(1);
+        let resized = Mode {
+            size: (640, 480).into(),
+            refresh: 60_000,
+        };
+        assert!(monitor.set_only_mode(resized));
+        assert_eq!(monitor.config().modes, vec![resized]);
+        assert_eq!(monitor.config().preferred_mode, Some(resized));
+        assert_eq!(monitor.config().mode, resized);
+        assert_eq!(monitor.output().modes(), vec![resized]);
+        assert_eq!(monitor.output().preferred_mode(), Some(resized));
+    }
 
     /// A monitor with `workspaces` empty workspaces; building real `Tile`s
     /// would need live Wayland objects.

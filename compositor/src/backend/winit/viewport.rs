@@ -166,7 +166,7 @@ pub fn descriptor(
             1_000_000_000_000 / REFRESH_RATE as u64,
         )),
         serial: edid.serial.clone(),
-        edid: None,
+        edid: Some(edid.info()),
         presence: Presence::Shown,
         kind: OutputKind::Nested,
     }

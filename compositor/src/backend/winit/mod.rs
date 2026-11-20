@@ -208,7 +208,7 @@ fn resize(state: &mut State, size: Size<i32, Physical>) {
             state
                 .shell
                 .monitor_mut(output)
-                .is_some_and(|monitor| monitor.set_mode(*mode))
+                .is_some_and(|monitor| monitor.set_only_mode(*mode))
         })
         .map(|(output, _)| output)
         .collect();
@@ -219,6 +219,7 @@ fn resize(state: &mut State, size: Size<i32, Physical>) {
     for output in &changed {
         state.shell.refresh_usable(output);
     }
+    state.refresh_output_heads();
 }
 
 /// Places the pointer through the viewport under it. Motion over no
