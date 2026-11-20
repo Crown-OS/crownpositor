@@ -112,7 +112,8 @@ impl Shell {
     /// The workspace at `index` on `output`, appending empty ones to it and
     /// to the monitors linked to it until it exists.
     pub fn ensure_workspace(&mut self, output: OutputId, index: usize) -> Option<WorkspaceId> {
-        self.each_linked_monitor(output, |monitor| monitor.ensure_workspace(index))
+        let modes = self.linked_modes();
+        self.each_linked_monitor(output, |monitor| monitor.ensure_workspace(index, &modes))
             .first()
             .copied()
     }

@@ -10,7 +10,7 @@ use config::Config;
 use super::{Fixture, Head};
 use crate::{
     handlers::ext_workspace::workspace_model,
-    layout::Direction,
+    layout::{Direction, WorkspaceMode},
     shell::{output_kind::OutputKind, workspace::WorkspaceRef},
     utils::id::OutputId,
 };
@@ -268,6 +268,66 @@ fn a_monitor_plugged_into_a_shared_desk_joins_the_workspace_on_screen() -> anyho
     let monitor = desk.fixture.monitor(&late)?;
     assert_eq!((monitor.workspaces().len(), monitor.active_index()), (3, 2));
     assert_eq!(desk.shape()?, [(3, 2), (3, 2), (3, 2), (1, 0)]);
+    Ok(())
+}
+
+fn modes_of(desk: &Desk, output: &Output) -> anyhow::Result<Vec<WorkspaceMode>> {
+    Ok(desk.fixture.monitor(output)?.workspace_modes())
+}
+
+#[test]
+fn a_monitor_joining_a_shared_desk_takes_the_modes_of_the_focused_one() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::Shared)?;
+    let focused = desk.focused()?;
+    let changed = desk.fixture.shell.default_mode().toggled();
+    desk.fixture.shell.ensure_workspace(focused, 2);
+    for index in [0, 2] {
+        desk.fixture.shell.activate_index(focused, index);
+        desk.fixture.shell.set_workspace_mode_on(focused, changed);
+    }
+
+    let late = desk.fixture.plug("DP-4", (1920, 1080));
+    desk.refresh();
+
+    let expected = modes_of(&desk, &desk.shown[0])?;
+    assert_eq!(expected[0], changed);
+    assert_eq!(modes_of(&desk, &late)?, expected);
+    assert_eq!(modes_of(&desk, &desk.shown[2])?, expected);
+    Ok(())
+}
+
+#[test]
+fn a_workspace_ensured_on_a_shared_desk_takes_the_focused_monitors_mode() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::Shared)?;
+    let focused = desk.focused()?;
+    let last = desk.id(&desk.shown[2])?;
+    let changed = desk.fixture.shell.default_mode().toggled();
+    desk.fixture.shell.set_workspace_mode_on(focused, changed);
+    let late = desk.fixture.plug("DP-4", (1920, 1080));
+    desk.refresh();
+
+    desk.fixture.shell.ensure_workspace(last, 1);
+    desk.refresh();
+
+    for output in [&desk.shown[0], &desk.shown[2], &late] {
+        assert_eq!(modes_of(&desk, output)?[0], changed);
+    }
+    Ok(())
+}
+
+#[test]
+fn a_monitor_joining_a_per_monitor_desk_keeps_its_own_modes() -> anyhow::Result<()> {
+    let mut desk = desk(WorkspaceScope::PerMonitor)?;
+    let focused = desk.focused()?;
+    let default = desk.fixture.shell.default_mode();
+    desk.fixture
+        .shell
+        .set_workspace_mode_on(focused, default.toggled());
+
+    let late = desk.fixture.plug("DP-4", (1920, 1080));
+    desk.refresh();
+
+    assert_eq!(modes_of(&desk, &late)?, [default]);
     Ok(())
 }
 

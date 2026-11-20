@@ -492,6 +492,7 @@ impl Shell {
         if descriptor.presence == Presence::Shown {
             self.adopt_stash(id);
         }
+        self.follow_linked_modes(id);
         self.reclaim_migrated(&returning, id);
         self.seed_focus(id);
         self.apply_output_settings(config);

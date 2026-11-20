@@ -286,19 +286,45 @@ impl Monitor {
         std::mem::take(&mut self.workspaces)
     }
 
-    /// The workspace at `index`, appending fresh ones until it exists.
-    pub(super) fn ensure_workspace(&mut self, index: usize) -> WorkspaceId {
+    /// The workspace at `index`, appending fresh ones until it exists. A
+    /// workspace appended at index `k` takes `linked_modes[k]` when there is
+    /// one, so it matches the monitor it is linked to.
+    pub(super) fn ensure_workspace(
+        &mut self,
+        index: usize,
+        linked_modes: &[WorkspaceMode],
+    ) -> WorkspaceId {
         while self.workspaces.len() <= index {
-            self.add_workspace();
+            let mode = linked_modes
+                .get(self.workspaces.len())
+                .copied()
+                .unwrap_or(self.default_mode);
+            let workspace = self.fresh_workspace_in(mode);
+            self.workspaces.push(workspace);
         }
         self.workspaces[index].id()
     }
 
     /// Appends empty workspaces until there are `count`. Never removes one.
-    pub(super) fn pad_to(&mut self, count: usize) {
+    pub(super) fn pad_to(&mut self, count: usize, linked_modes: &[WorkspaceMode]) {
         if let Some(last) = count.checked_sub(1) {
-            self.ensure_workspace(last);
+            self.ensure_workspace(last, linked_modes);
         }
+    }
+
+    /// Gives each empty workspace the mode at its index in `linked_modes`.
+    /// A workspace with windows keeps its own.
+    pub(super) fn follow_modes(&mut self, linked_modes: &[WorkspaceMode]) {
+        for (workspace, mode) in self.workspaces.iter_mut().zip(linked_modes) {
+            if workspace.is_empty() {
+                workspace.set_mode(*mode);
+            }
+        }
+    }
+
+    /// The tiling or floating mode of each workspace, in list order.
+    pub fn workspace_modes(&self) -> Vec<WorkspaceMode> {
+        self.workspaces.iter().map(Workspace::mode).collect()
     }
 
     /// Appends a fresh workspace and returns its index.
@@ -318,7 +344,11 @@ impl Monitor {
     }
 
     fn fresh_workspace(&self) -> Workspace {
-        let mut workspace = Workspace::new(self.id, self.default_mode, self.gaps);
+        self.fresh_workspace_in(self.default_mode)
+    }
+
+    fn fresh_workspace_in(&self, mode: WorkspaceMode) -> Workspace {
+        let mut workspace = Workspace::new(self.id, mode, self.gaps);
         workspace.set_area(
             shrink(self.usable, self.gaps.outer),
             Rectangle::from_size(self.config.logical_size()),
@@ -860,6 +890,18 @@ mod tests {
     }
 
     #[test]
+    fn a_padded_workspace_takes_the_mode_linked_to_its_index() {
+        let mut monitor = monitor(1);
+        let own = monitor.default_mode();
+        let linked = own.toggled();
+        monitor.pad_to(3, &[linked, linked]);
+        assert_eq!(monitor.workspace_modes(), [own, linked, own]);
+
+        monitor.follow_modes(&[linked]);
+        assert_eq!(monitor.workspace_modes(), [linked, linked, own]);
+    }
+
+    #[test]
     fn empty_workspaces_survive_normalize() {
         let mut monitor = monitor(4);
         monitor.normalize();
@@ -879,10 +921,10 @@ mod tests {
     fn ensuring_a_workspace_grows_only_when_missing() {
         let mut monitor = monitor(2);
         let second = monitor.workspaces()[1].id();
-        assert_eq!(monitor.ensure_workspace(1), second);
+        assert_eq!(monitor.ensure_workspace(1, &[]), second);
         assert_eq!(monitor.workspaces().len(), 2);
 
-        let fifth = monitor.ensure_workspace(4);
+        let fifth = monitor.ensure_workspace(4, &[]);
         assert_eq!(monitor.workspaces().len(), 5);
         assert_eq!(monitor.workspaces()[4].id(), fifth);
         assert_eq!(monitor.active_index(), 0);

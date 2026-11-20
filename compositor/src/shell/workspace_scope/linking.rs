@@ -2,7 +2,11 @@
 
 use crownos_config::schema::WorkspaceScope;
 
-use crate::shell::Shell;
+use crate::{
+    layout::WorkspaceMode,
+    shell::{Shell, monitor::Monitor},
+    utils::id::OutputId,
+};
 
 /// How many workspaces each linked monitor needs: as many as the longest
 /// list, so padding only ever adds.
@@ -30,13 +34,42 @@ impl Shell {
             self.shown_monitors()
                 .map(|monitor| monitor.workspaces().len()),
         );
+        let modes = self.linked_modes();
         for monitor in self
             .monitors
             .iter_mut()
             .filter(|monitor| !monitor.is_hidden())
         {
-            monitor.pad_to(length);
+            monitor.pad_to(length, &modes);
             monitor.align_to(active, previous);
+        }
+    }
+
+    /// The modes a workspace created at each index takes so it matches the
+    /// focused monitor: in `Shared` scope that monitor's modes, else none.
+    pub(in crate::shell) fn linked_modes(&self) -> Vec<WorkspaceMode> {
+        match self.scope {
+            WorkspaceScope::Shared => self
+                .focused_monitor()
+                .filter(|monitor| !monitor.is_hidden())
+                .map(Monitor::workspace_modes)
+                .unwrap_or_default(),
+            WorkspaceScope::PerMonitor => Vec::new(),
+        }
+    }
+
+    /// Gives the empty workspaces of a monitor that has just arrived the
+    /// modes of the monitor it links to.
+    pub(in crate::shell) fn follow_linked_modes(&mut self, output: OutputId) {
+        if self.focused == Some(output) {
+            return;
+        }
+        let modes = self.linked_modes();
+        if let Some(monitor) = self
+            .monitor_by_id_mut(output)
+            .filter(|monitor| !monitor.is_hidden())
+        {
+            monitor.follow_modes(&modes);
         }
     }
 

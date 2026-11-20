@@ -273,8 +273,9 @@ impl Shell {
     }
 
     fn merge_windows(&mut self, windows: &[(usize, WindowId)], target: OutputId) {
+        let modes = self.linked_modes();
         if let Some(monitor) = self.monitor_by_id_mut(target) {
-            monitor.pad_to(merged_length(windows));
+            monitor.pad_to(merged_length(windows), &modes);
         }
         for &(index, id) in windows {
             let Some(workspace) = self
@@ -344,16 +345,25 @@ impl Shell {
                 .index_of(location.workspace)
         });
         for (index, id) in returning {
+            let survivor_mode = self
+                .location(id)
+                .and_then(|at| self.workspace(at))
+                .map(Workspace::mode);
             let Some(workspace) = self.ensure_workspace(target, index) else {
                 continue;
             };
-            self.move_tile(
-                id,
-                Location {
-                    output: target,
-                    workspace,
-                },
-            );
+            let destination = Location {
+                output: target,
+                workspace,
+            };
+            if let (Some(mode), Some(empty)) = (
+                survivor_mode,
+                self.workspace_mut(destination)
+                    .filter(|workspace| workspace.is_empty()),
+            ) {
+                empty.set_mode(mode);
+            }
+            self.move_tile(id, destination);
         }
     }
 

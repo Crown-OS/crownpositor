@@ -95,9 +95,14 @@ impl Shell {
             self.transfer_window(tile.window(), &source_output, &target_output);
         }
         self.adopt(workspace, target);
-        self.monitor_by_id_mut(target)
-            .and_then(|monitor| Some(monitor.activate(monitor.index_of(moving)?)))
-            .is_some()
+        let Some(index) = self
+            .monitor_by_id(target)
+            .and_then(|monitor| monitor.index_of(moving))
+        else {
+            return false;
+        };
+        self.activate_index(target, index);
+        true
     }
 
     fn merge_active_workspace(&mut self, source: OutputId, target: OutputId) -> bool {
