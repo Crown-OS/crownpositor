@@ -326,10 +326,13 @@ impl State {
 
     /// The arrangement for exactly the monitors that are plugged in now, lit
     /// or switched off.
+    ///
+    /// Left alone while the closed lid keeps the panel off: the monitors
+    /// are placed for the lid, not the way the user arranged them.
     fn derive_output_layouts(&self, existing: Vec<OutputLayout>) -> Vec<OutputLayout> {
         let nested = NestedPersistence::from_environment();
         let present = self.output_set();
-        if present.is_empty() {
+        if present.is_empty() || !self.clamshell.suppressed().is_empty() {
             return existing;
         }
 
