@@ -60,7 +60,7 @@ pub use crate::backend::kms::{device::Device, vulkan::VulkanContext};
 use crate::utils::output_setting::output_setting;
 use crate::{
     backend::render::{CrownRenderer, GraphicsApi, KmsGpuManager, KmsRenderer},
-    state::{BackendState, State},
+    state::{BackendState, Exit, State},
 };
 use smithay::reexports::drm::control::{connector, crtc};
 
@@ -778,6 +778,18 @@ fn assign_crtc(
 }
 
 fn device_removed(state: &mut State, node: DrmNode) {
+    if state
+        .backend
+        .kms()
+        .is_some_and(|kms| kms.primary_node == node)
+    {
+        tracing::error!(
+            %node,
+            "the primary GPU was removed; nothing is left to composite on, so the session ends"
+        );
+        state.common.end_session(Exit::Quit);
+        return;
+    }
     let handle = state.common.event_loop_handle.clone();
 
     // Tear down every monitor on this GPU first — that path also detaches
