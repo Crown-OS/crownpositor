@@ -34,6 +34,7 @@ pub mod stash;
 pub mod tile;
 pub mod toplevel_drag;
 pub mod transaction;
+pub mod unplug_focus;
 pub mod visibility;
 pub mod windowcontrol;
 pub mod workspace;
@@ -541,6 +542,7 @@ impl Shell {
         self.layer_to_output.retain(|_, owner| *owner != removed);
 
         let survivor = self.survivor_for(removed);
+        let held_keyboard = self.keyboard_window_on(removed);
         if let Some(global) = self
             .dismantle(removed, survivor)
             .and_then(|mut monitor| monitor.take_global())
@@ -550,6 +552,7 @@ impl Shell {
         self.refresh_identities();
         self.preferred_stale = true;
         self.hand_focus_over(removed, survivor);
+        self.return_keyboard(held_keyboard, survivor);
 
         self.arrange_outputs();
         self.normalize_all();
