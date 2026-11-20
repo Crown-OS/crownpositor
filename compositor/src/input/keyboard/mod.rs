@@ -1,3 +1,4 @@
+mod overview_keys;
 mod repeat;
 
 pub use repeat::HeldControl;
@@ -7,6 +8,8 @@ use smithay::{
     input::keyboard::{FilterResult, Keysym, KeysymHandle, keysyms},
     utils::SERIAL_COUNTER,
 };
+
+use overview_keys::overview_key;
 
 use crate::{
     input::shortcuts::{Action, ModMask},
@@ -118,20 +121,16 @@ impl State {
                             return FilterResult::Intercept(Action::None);
                         }
 
-                        // An open overview owns the keyboard: the windows
-                        // behind it are pictures of windows, not somewhere to
-                        // type. Escape closes it, everything else is swallowed
-                        // — but only after the VT chord above, which nothing
-                        // may take away.
+                        // An open overview owns the keyboard, but only after
+                        // the VT chord above, which nothing may take away.
                         if state.overview_is_open() {
                             state.input.intercepted.insert(handle.raw_code());
-                            return FilterResult::Intercept(
-                                if handle.modified_syms().contains(&Keysym::Escape) {
-                                    Action::CloseWorkspaceView
-                                } else {
-                                    Action::None
-                                },
-                            );
+                            return FilterResult::Intercept(overview_key(
+                                handle.modified_syms().contains(&Keysym::Escape),
+                                (!bypass)
+                                    .then(|| state.input.bindings.lookup(modifiers, &handle))
+                                    .flatten(),
+                            ));
                         }
 
                         // The Alt+Tab strip owns the keyboard the same way, and
