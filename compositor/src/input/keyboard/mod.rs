@@ -141,6 +141,9 @@ impl State {
                         // The Alt+Tab strip owns the keyboard the same way, and
                         // reads the keys that steer it.
                         if state.window_control_is_open() {
+                            if is_lock_key(&handle.modified_syms()) {
+                                return FilterResult::Forward;
+                            }
                             state.input.intercepted.insert(handle.raw_code());
                             return FilterResult::Intercept(window_control_key(
                                 &handle,

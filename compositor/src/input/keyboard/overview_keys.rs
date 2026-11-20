@@ -1,4 +1,4 @@
-//! What a key does while the overview owns the keyboard.
+//! What a key does while the overview or the Alt+Tab strip owns the keyboard.
 
 use smithay::input::keyboard::Keysym;
 
@@ -10,9 +10,10 @@ pub(super) fn closes_overview(keysyms: &[Keysym]) -> bool {
     keysyms.contains(&Keysym::Escape)
 }
 
-/// Lock keys reach the client even while the overview owns the keyboard. The
-/// keyboard state toggles the lock before the filter runs, so a swallowed lock
-/// key would leave the client with a lock state that is not true.
+/// Lock keys reach the client even while the overview or the Alt+Tab strip owns
+/// the keyboard. The keyboard state toggles the lock before the filter runs, so
+/// a swallowed lock key would leave the client with a lock state that is not
+/// true.
 pub(super) fn is_lock_key(keysyms: &[Keysym]) -> bool {
     keysyms
         .iter()
