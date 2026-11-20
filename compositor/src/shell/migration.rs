@@ -14,6 +14,7 @@ use crate::{
     shell::{
         Location, Shell,
         arrangement::nearest_by_centre,
+        home_rect::{HomeRect, home_rects},
         monitor::{Monitor, OutputConfig},
         rehome::Departure,
         stash::kept_for_stash,
@@ -35,6 +36,13 @@ pub enum Migration {
     /// Each window, by the index of the workspace it was on, merged into the
     /// survivor's workspace at that index.
     Merged(Vec<(usize, WindowId)>),
+}
+
+/// A migration and the home rects of the floating windows it takes back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rescued {
+    pub migration: Migration,
+    pub home_rects: Vec<HomeRect>,
 }
 
 impl Migration {
@@ -241,7 +249,14 @@ impl Shell {
             })
             .collect();
         let key = MigrationKey::of(monitor.config());
-        let record = plan_unplug(rescue, &summary, &Owned::by(self.migrated.values()));
+        let record = plan_unplug(
+            rescue,
+            &summary,
+            &Owned::by(self.migrated.values().map(|rescued| &rescued.migration)),
+        );
+        let homes = home_rects(&record, &summary, |id| {
+            self.tile(id).map(Tile::floating_rect)
+        });
 
         if let (Rescue::MergeByIndex, Some(target)) = (rescue, survivor) {
             self.merge_windows(&indexed_windows(&summary), target);
@@ -276,7 +291,13 @@ impl Shell {
             None => self.stash(kept_for_stash(orphans, Workspace::is_empty)),
         }
         if !record.is_empty() {
-            self.migrated.insert(key, record);
+            self.migrated.insert(
+                key,
+                Rescued {
+                    migration: record,
+                    home_rects: homes,
+                },
+            );
         }
         Some(monitor)
     }
@@ -310,8 +331,15 @@ impl Shell {
         let Some(key) = claimed_key(self.migrated.keys(), returning).cloned() else {
             return;
         };
-        match self.migrated.remove(&key) {
-            Some(Migration::Workspaces { workspaces, active }) => {
+        let Some(Rescued {
+            migration,
+            home_rects,
+        }) = self.migrated.remove(&key)
+        else {
+            return;
+        };
+        match migration {
+            Migration::Workspaces { workspaces, active } => {
                 self.reclaim_workspaces(&workspaces, target);
                 if let Some(index) = active.and_then(|active| {
                     self.monitor_by_id(target)
@@ -321,9 +349,9 @@ impl Shell {
                     self.activate_index(target, index);
                 }
             }
-            Some(Migration::Merged(windows)) => self.reclaim_merged(&windows, target),
-            None => {}
+            Migration::Merged(windows) => self.reclaim_merged(&windows, target),
         }
+        self.restore_home_rects(&home_rects);
     }
 
     fn reclaim_workspaces(&mut self, ids: &[WorkspaceId], target: OutputId) {

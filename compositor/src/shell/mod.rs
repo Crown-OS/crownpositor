@@ -11,6 +11,7 @@ pub mod focus;
 pub mod focus_history;
 pub mod gaming;
 pub mod grab;
+pub mod home_rect;
 pub mod identity;
 pub mod keyboard_handover;
 pub mod lock_screen;
@@ -85,7 +86,7 @@ use crate::{
         identity::OfflineHead,
         keyboard_handover::HeldKeyboard,
         lock_screen::LockScreen,
-        migration::{Migration, MigrationKey},
+        migration::{MigrationKey, Rescued},
         monitor::{
             Monitor, OutputConfig, OutputDescriptor, Presence, output_from_descriptor, output_id,
         },
@@ -285,7 +286,7 @@ pub struct Shell {
     /// Workspaces rescued from the last output to be unplugged. Without this, a
     /// lid close on a single-output session would destroy every window.
     stashed: Vec<Workspace>,
-    migrated: HashMap<MigrationKey, Migration>,
+    migrated: HashMap<MigrationKey, Rescued>,
     /// Connected heads that are switched off, which twin detection counts.
     offline_heads: Vec<OfflineHead>,
 
