@@ -8,14 +8,14 @@
 use std::collections::HashSet;
 
 use crownos_config::schema::WorkspaceScope;
-use smithay::{desktop::space::SpaceElement, output::Output};
+use smithay::desktop::space::SpaceElement;
 
 use crate::{
     shell::{
         Location, Shell,
         arrangement::nearest_by_centre,
         monitor::{Monitor, OutputConfig},
-        rehome::Origin,
+        rehome::Departure,
         stash::kept_for_stash,
         tile::Tile,
         workspace::Workspace,
@@ -228,6 +228,7 @@ impl Shell {
         survivor: Option<OutputId>,
     ) -> Option<Monitor> {
         let monitor = self.monitor_by_id(departing)?;
+        let presence = monitor.config().presence;
         let rescue = Rescue::choose(self.scope, !monitor.is_hidden());
         let active = monitor.active().id();
         let summary: Vec<Departing> = monitor
@@ -262,7 +263,14 @@ impl Shell {
                     .into_iter()
                     .filter(|workspace| !workspace.is_empty())
                 {
-                    self.adopt(workspace, target, None);
+                    self.adopt(
+                        workspace,
+                        target,
+                        Departure {
+                            output: None,
+                            presence,
+                        },
+                    );
                 }
             }
             None => self.stash(kept_for_stash(orphans, Workspace::is_empty)),
@@ -380,27 +388,18 @@ impl Shell {
             monitor.take_workspace(fresh);
         }
         for workspace in workspaces {
-            self.adopt(workspace, target, None);
+            self.adopt(workspace, target, Departure::DETACHED);
         }
         if let Some(monitor) = self.monitor_by_id_mut(target) {
             monitor.normalize();
         }
     }
 
-    /// Moves a workspace onto the end of a monitor's list. `leaving` is the
-    /// output its windows still have to leave, if any.
-    pub(super) fn adopt(
-        &mut self,
-        workspace: Workspace,
-        target: OutputId,
-        leaving: Option<Output>,
-    ) {
+    /// Moves a workspace onto the end of a monitor's list.
+    pub(super) fn adopt(&mut self, workspace: Workspace, target: OutputId, from: Departure) {
         let ids: Vec<WindowId> = workspace.tiles().iter().map(Tile::id).collect();
         let workspace_id = workspace.id();
-        let origin = Origin {
-            output: leaving,
-            area: workspace.area(),
-        };
+        let origin = from.with_area(workspace.area());
 
         let Some(monitor) = self.monitor_by_id_mut(target) else {
             self.stash(vec![workspace]);

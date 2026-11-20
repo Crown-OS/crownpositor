@@ -9,7 +9,7 @@ use crownos_config::schema::WorkspaceScope;
 
 use crate::{
     layout::Direction,
-    shell::{Location, Shell, tile::Tile},
+    shell::{Location, Shell, rehome::Departure, tile::Tile},
     utils::id::{OutputId, WindowId},
 };
 
@@ -90,14 +90,17 @@ impl Shell {
         let Some(source_monitor) = self.monitor_by_id_mut(source) else {
             return false;
         };
-        let source_output = source_monitor.output().clone();
+        let departure = Departure {
+            output: Some(source_monitor.output().clone()),
+            presence: source_monitor.config().presence,
+        };
         let moving = source_monitor.active().id();
         let Some(workspace) = source_monitor.take_workspace(moving) else {
             return false;
         };
         source_monitor.normalize();
 
-        self.adopt(workspace, target, Some(source_output));
+        self.adopt(workspace, target, departure);
         let Some(index) = self
             .monitor_by_id(target)
             .and_then(|monitor| monitor.index_of(moving))
