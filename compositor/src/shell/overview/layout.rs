@@ -33,7 +33,7 @@ pub(super) struct Fingerprint {
 
 impl Fingerprint {
     fn of(monitor: &Monitor) -> Self {
-        let geometry = monitor.geometry();
+        let geometry = Rectangle::from_size(monitor.geometry().size);
         let usable = monitor.usable();
 
         let windows = monitor
@@ -94,7 +94,10 @@ impl SpaceControl {
             false => None,
         };
         self.fingerprint = Fingerprint::of(monitor);
-        self.canvas = Canvas::new(monitor.geometry(), monitor.usable());
+        self.canvas = Canvas::new(
+            Rectangle::from_size(monitor.geometry().size),
+            monitor.usable(),
+        );
         self.active = monitor.active_index();
 
         self.pages

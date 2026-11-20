@@ -307,15 +307,13 @@ fn stop_lost_sources(state: &mut State) {
 }
 
 fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
-    let Some(scale) = state.capture.session_mut(id).and_then(|session| {
-        session
-            .shown_on
-            .as_ref()
-            .map(|output| output.current_scale().fractional_scale())
-    }) else {
+    if state
+        .capture
+        .session_mut(id)
+        .is_none_or(|session| session.shown_on.is_none())
+    {
         return;
-    };
-    state.layout_menus(scale);
+    }
 
     let outcome = {
         let State {
@@ -420,14 +418,9 @@ fn render_copies(state: &mut State) {
         if !copy.dirty || copy.pending.is_empty() {
             continue;
         }
-        let Some(scale) = copy
-            .shown_on
-            .as_ref()
-            .map(|output| output.current_scale().fractional_scale())
-        else {
+        if copy.shown_on.is_none() {
             continue;
-        };
-        state.layout_menus(scale);
+        }
         let dma = state.capture.dmabuf_constraints(&mut state.backend);
 
         let State {
@@ -500,7 +493,6 @@ fn render_screencopies(state: &mut State) {
     state.capture.screencopies.pending = waiting;
 
     for pending in due {
-        state.layout_menus(pending.output.current_scale().fractional_scale());
         let State {
             backend,
             shell,

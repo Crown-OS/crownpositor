@@ -63,18 +63,6 @@ struct Scene<'frame> {
 pub fn render(state: &mut State) -> anyhow::Result<ReleasedClients> {
     let mut released = ReleasedClients::default();
 
-    // The menu geometry is what both the renderer and the hit test read, so it
-    // is settled before either of them runs, and before the borrows below,
-    // because laying it out needs the whole state.
-    if let Some(scale) = state.backend.winit().and_then(|winit| {
-        winit
-            .viewports
-            .iter()
-            .find(|viewport| viewport.is_connected())
-            .map(|viewport| viewport.output.current_scale().fractional_scale())
-    }) {
-        state.layout_menus(scale);
-    }
     debug_frames::script(state);
 
     let State {

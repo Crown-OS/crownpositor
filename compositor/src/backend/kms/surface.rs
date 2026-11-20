@@ -517,19 +517,6 @@ fn render_surface(state: &mut State, node: DrmNode, crtc: crtc::Handle) -> Relea
     let mut released = ReleasedClients::default();
     let handle = state.common.event_loop_handle.clone();
 
-    // The menu geometry is what both the renderer and the hit test read, so it
-    // is settled before either of them runs — and before the borrows below,
-    // because laying it out needs the whole state.
-    let scale = state
-        .backend
-        .kms()
-        .and_then(|kms| kms.devices.get(&node))
-        .and_then(|device| device.surfaces.get(&crtc))
-        .map(|surface| surface.output.current_scale().fractional_scale());
-    if let Some(scale) = scale {
-        state.layout_menus(scale);
-    }
-
     let State {
         backend,
         shell,

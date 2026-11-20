@@ -54,6 +54,9 @@ pub fn run() -> anyhow::Result<Exit> {
         .run(None, &mut state, |state| {
             state.shell.refresh();
             state.refresh_pointer_bounds();
+            // Both the renderer and the hit test read the menu geometry, so it
+            // is settled before either of them runs.
+            state.layout_menus();
             // A layer surface that maps, changes its keyboard interactivity or
             // goes away moves focus with no input event to hang the decision
             // off, so the reconcile belongs here rather than at every mutation.

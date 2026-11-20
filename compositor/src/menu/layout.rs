@@ -23,15 +23,17 @@ use crate::{
 const MEASURE_COLOR: [f32; 4] = [1.0; 4];
 
 impl State {
-    /// Lays out the focused window's menu row, and the popup if one is open.
+    /// Lays out the focused window's menu row, and the popup if one is open,
+    /// at the scale of the monitor that window is on. Run once per dispatch.
     ///
     /// Cheap when nothing has a menu, which is the overwhelmingly common case:
     /// two map lookups and a return.
-    pub fn layout_menus(&mut self, scale: f64) {
+    pub fn layout_menus(&mut self) {
         let Some(anchor) = self.menu_anchor() else {
             self.shell.menus.clear_layout();
             return;
         };
+        let scale = anchor.scale;
 
         let State { shell, text, .. } = self;
 
@@ -123,6 +125,7 @@ impl State {
             layout: TitleBarLayout::new(tile.target(), tile.insets()),
             origin: monitor.geometry().loc,
             bounds: monitor.geometry(),
+            scale: monitor.output().current_scale().fractional_scale(),
         })
     }
 }
@@ -134,6 +137,8 @@ struct MenuAnchor {
     origin: Point<i32, Logical>,
     /// The output, so a popup can be kept on screen.
     bounds: Rectangle<i32, Logical>,
+    /// The output's, which the labels are measured at.
+    scale: f64,
 }
 
 /// A popup hangs below the label that opened it, or below the row's start when

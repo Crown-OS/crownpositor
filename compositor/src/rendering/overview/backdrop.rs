@@ -12,7 +12,7 @@ use smithay::{
         },
     },
     desktop::layer_map_for_output,
-    utils::{Physical, Point},
+    utils::{Physical, Point, Rectangle},
     wayland::shell::wlr_layer::Layer,
 };
 
@@ -30,7 +30,7 @@ where
     pub(super) fn backdrop(&mut self, monitor: &Monitor) {
         let space = monitor.spacecontrol();
         let overview = space.overview();
-        let output = self.physical(monitor.geometry().to_f64());
+        let output = self.physical(Rectangle::from_size(monitor.geometry().size).to_f64());
 
         self.frost(
             space.ids().backdrop.clone(),

@@ -14,7 +14,7 @@ mod stage;
 
 use smithay::{
     backend::renderer::{ImportAll, ImportMem, Renderer},
-    utils::Scale,
+    utils::{Rectangle, Scale},
 };
 
 use crate::{
@@ -44,7 +44,7 @@ pub fn window_control_elements<R, D>(
 
     let control = monitor.window_control();
     let shown = control.switcher().eased();
-    let output = painter.physical(monitor.geometry().to_f64());
+    let output = painter.physical(Rectangle::from_size(monitor.geometry().size).to_f64());
     painter.frost(
         control.frost_id().clone(),
         output,

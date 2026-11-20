@@ -66,26 +66,28 @@ impl State {
         true
     }
 
-    /// The output whose overview should take this pointer position, if any.
-    fn overview_under(&self, at: Point<f64, Logical>) -> Option<OutputId> {
-        self.shell
+    /// The output whose overview should take this pointer position, if any,
+    /// and the position in that output's own space, which the overview is
+    /// laid out in.
+    fn overview_under(&self, at: Point<f64, Logical>) -> Option<(OutputId, Point<f64, Logical>)> {
+        let monitor = self
+            .shell
             .monitor_at(at)
-            .filter(|monitor| monitor.spacecontrol().is_open())
-            .map(|monitor| monitor.id())
+            .filter(|monitor| monitor.spacecontrol().is_open())?;
+        Some((monitor.id(), at - monitor.geometry().loc.to_f64()))
     }
 
     /// Moves the pointer over an open overview. Returns whether the overview
     /// took the motion, in which case it must not also reach a client.
     pub fn overview_motion(&mut self, at: Point<f64, Logical>) -> bool {
-        let Some(id) = self.overview_under(at) else {
+        let Some((id, local)) = self.overview_under(at) else {
             return false;
         };
         let Some(monitor) = self.shell.monitor_by_id_mut(id) else {
             return false;
         };
 
-        // Output-local, which is the space the overview laid itself out in.
-        if monitor.spacecontrol_mut().motion(at) {
+        if monitor.spacecontrol_mut().motion(local) {
             self.queue_redraw();
         }
         true
@@ -93,11 +95,11 @@ impl State {
 
     /// Presses a button over an open overview.
     pub fn overview_press(&mut self, at: Point<f64, Logical>) -> bool {
-        let Some(id) = self.overview_under(at) else {
+        let Some((id, local)) = self.overview_under(at) else {
             return false;
         };
         if let Some(monitor) = self.shell.monitor_by_id_mut(id) {
-            monitor.spacecontrol_mut().press(at);
+            monitor.spacecontrol_mut().press(local);
             self.queue_redraw();
         }
         true
@@ -106,14 +108,14 @@ impl State {
     /// Releases a button over an open overview, and does whatever that turned
     /// out to mean.
     pub fn overview_release(&mut self, at: Point<f64, Logical>) -> bool {
-        let Some(id) = self.overview_under(at) else {
+        let Some((id, local)) = self.overview_under(at) else {
             return false;
         };
         let Some(monitor) = self.shell.monitor_by_id_mut(id) else {
             return false;
         };
 
-        let release = monitor.spacecontrol_mut().release(at);
+        let release = monitor.spacecontrol_mut().release(local);
         match release {
             Release::Click(Target::Window(index)) => {
                 let window = monitor.spacecontrol().window(index);
