@@ -531,7 +531,7 @@ fn device_changed(state: &mut State, node: DrmNode) {
                     continue;
                 };
                 if let Some(kms) = state.backend.kms() {
-                    probed.name = kms.head_name(node, probed.interface, probed.interface_id);
+                    probed.rename(kms.head_name(node, probed.interface, probed.interface_id));
                 }
 
                 // A VR headset and friends: the kernel says this is not part

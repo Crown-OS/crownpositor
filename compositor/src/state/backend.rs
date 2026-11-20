@@ -231,13 +231,17 @@ impl BackendState {
             anyhow::bail!("this backend cannot enable or disable outputs");
         };
 
-        let found = kms.devices.iter().find_map(|(node, device)| {
-            device
-                .heads
-                .values()
-                .find(|head| head.name == name || head.identity.as_str() == name)
-                .map(|head| (*node, head.connector, head.state.is_enabled()))
-        });
+        let find = |matches: &dyn Fn(&Head) -> bool| {
+            kms.devices.iter().find_map(|(node, device)| {
+                device
+                    .heads
+                    .values()
+                    .find(|head| matches(head))
+                    .map(|head| (*node, head.connector, head.state.is_enabled()))
+            })
+        };
+        let found = find(&|head| head.name == name)
+            .or_else(|| find(&|head| head.identity.as_str() == name));
         let Some((node, connector, already)) = found else {
             return Ok(false);
         };

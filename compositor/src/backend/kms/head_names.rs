@@ -94,7 +94,7 @@ impl KmsState {
                 .and_then(|device| device.heads.get_mut(&connector))
             {
                 tracing::info!(from = head.name, to = name, "head renamed");
-                head.name = name;
+                head.rename(name);
             }
         }
     }

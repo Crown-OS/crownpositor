@@ -96,12 +96,7 @@ impl Head {
             .or_else(|| info.size())
             .unwrap_or((0, 0));
 
-        let identity = ConnectorId::new(
-            &name,
-            edid.as_ref().map_or("Unknown", |edid| edid.make.as_str()),
-            edid.as_ref().map_or("Unknown", |edid| edid.model.as_str()),
-            edid.as_ref().and_then(|edid| edid.serial.as_deref()),
-        );
+        let identity = identity_of(&name, edid.as_ref());
 
         let modes: Vec<DrmMode> = info.modes().to_vec();
         let preferred = modes
@@ -135,6 +130,13 @@ impl Head {
             state: HeadState::Disabled,
             last_position: None,
         })
+    }
+
+    /// Gives the head the name it goes by now. A monitor with no serial is
+    /// filed under its name, so its identity follows.
+    pub fn rename(&mut self, name: String) {
+        self.identity = identity_of(&name, self.edid.as_ref());
+        self.name = name;
     }
 
     /// Whether the driver would accept a `max bpc` of `bpc`.
@@ -178,5 +180,49 @@ impl Head {
             self.modes.iter().copied().map(Into::into).collect();
         let index = mode::resolve(mode::parse(text)?, &advertised)?;
         self.modes.get(index).copied()
+    }
+}
+
+/// The identity of a head named `name`: from its EDID when that has a
+/// serial, else the name.
+fn identity_of(name: &str, edid: Option<&EdidInfo>) -> ConnectorId {
+    ConnectorId::new(
+        name,
+        edid.map_or("Unknown", |edid| edid.make.as_str()),
+        edid.map_or("Unknown", |edid| edid.model.as_str()),
+        edid.and_then(|edid| edid.serial.as_deref()),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const QUALIFIED: &str = "HDMI-A-1@0000:01:00.0";
+
+    fn edid(serial: Option<&str>) -> EdidInfo {
+        EdidInfo {
+            make: "Acme".to_owned(),
+            model: "X".to_owned(),
+            serial: serial.map(str::to_owned),
+            ..EdidInfo::default()
+        }
+    }
+
+    #[test]
+    fn a_head_without_a_serial_is_filed_under_its_qualified_name() {
+        assert_eq!(
+            identity_of(QUALIFIED, Some(&edid(None))).as_str(),
+            QUALIFIED
+        );
+        assert_eq!(identity_of(QUALIFIED, None).as_str(), QUALIFIED);
+    }
+
+    #[test]
+    fn a_head_with_a_serial_keeps_its_edid_identity_under_any_name() {
+        assert_eq!(
+            identity_of(QUALIFIED, Some(&edid(Some("7")))).as_str(),
+            "Acme X 7"
+        );
     }
 }
