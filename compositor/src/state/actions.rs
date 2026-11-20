@@ -17,6 +17,7 @@ use spacecontrol::animations::spring::SpringProfile;
 use windowcontrol::Direction as Cycle;
 
 use crate::backend::Preference;
+use crate::input::keyboard::xkb::xkb_config;
 use crate::utils::privilege::trusted_executables;
 use crate::{
     controls::Control,
@@ -185,6 +186,19 @@ impl State {
         self.shell.refresh();
         self.update_keyboard_focus();
         self.queue_redraw();
+    }
+
+    /// Compiles the keymap again from the input settings and sends it to the
+    /// focused client. The old keymap stays when the new one does not compile.
+    fn apply_keyboard_layout(&mut self) {
+        let Some(keyboard) = self.wayland.seat.get_keyboard() else {
+            return;
+        };
+        let xkb = xkb_config(self.config.current.input.swap_caps_and_esc);
+
+        if let Err(error) = keyboard.set_xkb_config(self, xkb) {
+            tracing::warn!(%error, "the keymap did not change");
+        }
     }
 
     /// Brings the seat's keyboard focus in line with the model. The only caller
@@ -369,6 +383,10 @@ impl State {
                 self.reapply_window_rules();
             }
             Update::Gaming(gaming) => config.compositor.gaming = gaming,
+            Update::SwapCapsAndEsc(swap) => {
+                config.input.swap_caps_and_esc = swap;
+                self.apply_keyboard_layout();
+            }
 
             Update::Outputs(outputs) => {
                 config.compositor.outputs = outputs;

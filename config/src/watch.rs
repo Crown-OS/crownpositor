@@ -10,7 +10,7 @@ use crownos_config::{
     Appearance, Display, Key, Subscription,
     schema::{
         Agents, Binding, GamingOptions, Glass, Lock, OutputLayout, OutputSetting, Theme,
-        VisualContext, WorkspaceMode, WorkspaceScope, compositor, keybinds,
+        VisualContext, WorkspaceMode, WorkspaceScope, compositor, input, keybinds,
     },
     subscribe_key, subscribe_typed,
 };
@@ -31,6 +31,7 @@ pub enum Update {
     OutputLayouts(Vec<OutputLayout>),
     WindowRules(WindowRules),
     Gaming(GamingOptions),
+    SwapCapsAndEsc(bool),
     CustomKeybinds(Vec<Binding>),
     Appearance(Appearance),
     Display(Display),
@@ -69,6 +70,7 @@ impl Watch {
                     Update::WindowRules(WindowRules::compile(&rules))
                 }),
                 key(&sink, compositor::Gaming, Update::Gaming),
+                key(&sink, input::SwapCapsAndEsc, Update::SwapCapsAndEsc),
                 key(&sink, keybinds::CustomKeybinds, Update::CustomKeybinds),
                 section(&sink, Appearance::SECTION, Update::Appearance),
                 section(&sink, Display::SECTION, Update::Display),

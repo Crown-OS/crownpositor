@@ -1,5 +1,6 @@
 mod overview_keys;
 mod repeat;
+pub mod xkb;
 
 pub use repeat::HeldControl;
 
@@ -9,7 +10,7 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use overview_keys::overview_key;
+use overview_keys::{closes_overview, overview_key};
 
 use crate::{
     input::shortcuts::{Action, ModMask},
@@ -126,7 +127,10 @@ impl State {
                         if state.overview_is_open() {
                             state.input.intercepted.insert(handle.raw_code());
                             return FilterResult::Intercept(overview_key(
-                                handle.modified_syms().contains(&Keysym::Escape),
+                                closes_overview(
+                                    &handle.modified_syms(),
+                                    state.config.current.input.swap_caps_and_esc,
+                                ),
                                 (!bypass)
                                     .then(|| state.input.bindings.lookup(modifiers, &handle))
                                     .flatten(),
