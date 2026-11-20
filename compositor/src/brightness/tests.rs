@@ -47,6 +47,13 @@ fn a_set_is_raised_to_the_floor_of_the_output_control() {
 }
 
 #[test]
+fn an_output_with_no_control_reads_full_whatever_level_it_was_given() {
+    let (mut brightness, _requests) = brightness();
+    brightness.adopt(TABLET, Device::None, 7000);
+    assert_eq!(brightness.reading(TABLET), Reading::UNCONTROLLED);
+}
+
+#[test]
 fn only_a_software_level_dims_the_gamma_ramp() {
     let (mut brightness, _requests) = brightness();
     brightness.adopt(PANEL, backlight(), 3000);

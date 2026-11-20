@@ -157,6 +157,15 @@ fn a_monitor_that_does_not_answer_is_dimmed_in_software() -> std::io::Result<()>
 }
 
 #[test]
+fn a_monitor_that_reports_no_scale_is_dimmed_in_software() -> std::io::Result<()> {
+    let fake = FakeSysfs::new()?;
+    fake.directory("class/drm/card1-DP-1/i2c-12")?;
+    let found = fake.sysfs().probe(&target("DP-1", true), |_| Some((0, 0)));
+    assert_eq!(found.device, Device::Software);
+    Ok(())
+}
+
+#[test]
 fn an_output_without_gamma_or_hardware_has_no_control() -> std::io::Result<()> {
     let fake = FakeSysfs::new()?;
     let found = fake.sysfs().probe(&target("DP-2", false), no_ddc);

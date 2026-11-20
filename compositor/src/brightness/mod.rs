@@ -41,9 +41,12 @@ struct OutputBrightness {
 
 impl OutputBrightness {
     fn reading(&self) -> Reading {
-        Reading {
-            control: self.device.control(),
-            level: self.level,
+        match self.device.control() {
+            Control::None => Reading::UNCONTROLLED,
+            control => Reading {
+                control,
+                level: self.level,
+            },
         }
     }
 }

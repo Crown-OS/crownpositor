@@ -116,7 +116,7 @@ impl Sysfs {
                 })
             } else {
                 self.ddc_buses(&directory).into_iter().find_map(|bus| {
-                    let (raw, max) = read_ddc(bus)?;
+                    let (raw, max) = read_ddc(bus).filter(|(_, max)| *max > 0)?;
                     Some(Found {
                         device: Device::Ddc { bus, max },
                         raw: Some(raw),
