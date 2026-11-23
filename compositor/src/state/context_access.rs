@@ -11,9 +11,12 @@ use crownos_config::schema::{
 use protocols::crownos_context::{BindDecision, RevokeReason, Scope};
 use wayland_server::{Client, backend::ClientId};
 
+use protocols::crownos_agent_cursor::RevokeReason as AgentRevokeReason;
+
 use crate::{
     state::{ClientState, State},
     utils::portal::{ContextAnswer, ContextPrompt, ask_context_access},
+    utils::privilege::may_drive_agents,
 };
 
 pub const AUDIT: &str = "crownpositor::audit::context";
@@ -267,6 +270,7 @@ impl State {
     /// time passed: a new scope is sent, a withdrawn grant revokes, and a
     /// client that waits for the user keeps waiting.
     pub fn rescope_context_clients(&mut self, reason: RevokeReason) {
+        self.revoke_lost_agent_scopes();
         let display = self.common.display_handle.clone();
         let clients = self.wayland.context_state.clients();
         self.context_answered
@@ -288,6 +292,46 @@ impl State {
                 let actor = key.map(|key| key.to_string()).unwrap_or_default();
                 tracing::info!(target: AUDIT, %actor, ?scope, "scope changed");
             }
+        }
+    }
+
+    /// Cuts the window control and agent cursor clients that lost their
+    /// scope since they bound.
+    fn revoke_lost_agent_scopes(&mut self) {
+        let grants = &self.wayland.context_grants;
+        let trusted = &self.wayland.trusted_executables;
+        let lost = |scope: GrantScope| {
+            move |client: &Client| !may_drive_agents(client, grants, trusted, scope)
+        };
+        let control_lost = lost(GrantScope::WaylandWindowControl);
+        let losing_control: Vec<Client> = self
+            .wayland
+            .window_control_state
+            .clients()
+            .into_iter()
+            .filter(|client| control_lost(client))
+            .collect();
+        let cursor_lost = lost(GrantScope::WaylandAgentCursor);
+        let losing_cursors: Vec<Client> = self
+            .wayland
+            .agent_cursor_state
+            .clients()
+            .into_iter()
+            .filter(|client| cursor_lost(client))
+            .collect();
+        if !losing_control.is_empty() {
+            let cut = self
+                .wayland
+                .window_control_state
+                .revoke_where(|client| losing_control.iter().any(|lost| lost.id() == client.id()));
+            tracing::info!(target: AUDIT, clients = cut, "window control withdrawn");
+        }
+        if !losing_cursors.is_empty() {
+            self.revoke_agents_of(
+                |client| losing_cursors.iter().any(|lost| lost.id() == client.id()),
+                AgentRevokeReason::User,
+            );
+            tracing::info!(target: AUDIT, clients = losing_cursors.len(), "agent cursors withdrawn");
         }
     }
 

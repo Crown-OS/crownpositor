@@ -176,7 +176,19 @@ impl State {
     /// Takes every agent's seat away, as the user's shortcut and a session
     /// lock do.
     pub fn revoke_agents(&mut self, reason: RevokeReason) {
-        let cursors = self.wayland.agent_cursor_state.revoke_all(reason);
+        self.revoke_agents_of(|_| true, reason);
+    }
+
+    /// Takes away the seats of the agents whose client `revoked` selects.
+    pub fn revoke_agents_of(
+        &mut self,
+        revoked: impl FnMut(&wayland_server::Client) -> bool,
+        reason: RevokeReason,
+    ) {
+        let cursors = self
+            .wayland
+            .agent_cursor_state
+            .revoke_where(revoked, reason);
         for cursor in &cursors {
             self.destroy_agent_seat(cursor);
         }

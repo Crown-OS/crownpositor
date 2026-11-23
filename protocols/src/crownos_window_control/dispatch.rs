@@ -81,14 +81,15 @@ impl<D: WindowControlDispatch> Dispatch<CrownosWindowControlManagerV1, (), D>
 impl<D: WindowControlDispatch> Dispatch<CrownosWindowV1, WindowKey, D> for WindowControlState {
     fn request(
         state: &mut D,
-        _client: &Client,
+        client: &Client,
         _resource: &CrownosWindowV1,
         request: crownos_window_v1::Request,
         key: &WindowKey,
         _dhandle: &DisplayHandle,
         _data_init: &mut DataInit<'_, D>,
     ) {
-        if !state.window_control_state().knows(*key) {
+        let control = state.window_control_state();
+        if !control.knows(*key) || control.is_revoked(&client.id()) {
             return;
         }
         match request {

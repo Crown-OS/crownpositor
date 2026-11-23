@@ -159,6 +159,34 @@ impl AgentCursorState {
         cursors
     }
 
+    /// Tells the cursors whose client `revoked` selects that they are gone,
+    /// and forgets them; the compositor tears down their seats itself.
+    pub fn revoke_where(
+        &mut self,
+        mut revoked: impl FnMut(&Client) -> bool,
+        reason: RevokeReason,
+    ) -> Vec<AgentCursor> {
+        let (gone, kept) = std::mem::take(&mut self.cursors)
+            .into_iter()
+            .partition(|cursor| cursor.0.client().is_some_and(|client| revoked(&client)));
+        self.cursors = kept;
+        for cursor in &gone {
+            cursor.revoked(reason);
+        }
+        gone
+    }
+
+    /// The clients that hold a cursor.
+    pub fn clients(&self) -> Vec<Client> {
+        let mut clients: Vec<Client> = Vec::new();
+        for client in self.cursors.iter().filter_map(|cursor| cursor.0.client()) {
+            if !clients.iter().any(|known| known.id() == client.id()) {
+                clients.push(client);
+            }
+        }
+        clients
+    }
+
     fn record(&mut self, cursor: AgentCursor) {
         self.cursors.push(cursor);
     }

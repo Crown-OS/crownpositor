@@ -24,23 +24,38 @@ pub const PORTAL_DIALOG_NAMESPACE: &str = "crownos-portal-dialog";
 /// Where xdg-desktop-portal-crownos installs the dialog.
 const PORTAL_DIALOG_EXECUTABLE: &str = "/usr/lib/crownos-portal-dialog";
 /// A development build of the dialog to trust as well, for nested tests.
-/// Read once from the compositor's own environment.
+/// Read once from the compositor's own environment, and honoured only in a
+/// debug build or a nested session.
 const DIALOG_OVERRIDE: &str = "CROWN_CONSENT_DIALOG";
+const BACKEND_VARIABLE: &str = "CROWN_BACKEND";
+const NESTED_BACKEND: &str = "winit";
 
-static DEVELOPMENT_DIALOG: LazyLock<Option<std::path::PathBuf>> =
-    LazyLock::new(|| std::env::var_os(DIALOG_OVERRIDE).map(std::path::PathBuf::from));
+static DEVELOPMENT_DIALOG: LazyLock<Option<std::path::PathBuf>> = LazyLock::new(|| {
+    let nested = std::env::var(BACKEND_VARIABLE).is_ok_and(|backend| backend == NESTED_BACKEND);
+    (cfg!(debug_assertions) || nested)
+        .then(|| std::env::var_os(DIALOG_OVERRIDE).map(std::path::PathBuf::from))
+        .flatten()
+});
+
+/// Warns when the installed dialog is missing: no window then counts as a
+/// consent dialog, so synthetic input is not kept from the question.
+pub fn warn_if_dialog_missing() {
+    if !Path::new(PORTAL_DIALOG_EXECUTABLE).is_file() {
+        tracing::warn!(
+            path = PORTAL_DIALOG_EXECUTABLE,
+            "the portal dialog is not installed; consent dialogs are not protected from synthetic input"
+        );
+    }
+}
 
 pub fn is_consent_layer(layer: &LayerSurface) -> bool {
     is_consent_namespace(layer.namespace())
-        && layer
-            .wl_surface()
-            .client()
-            .and_then(|client| {
-                client
-                    .get_data::<ClientState>()
-                    .and_then(|state| state.executable.clone())
-            })
-            .is_some_and(|executable| is_consent_executable(&executable))
+        && layer.wl_surface().client().is_some_and(|client| {
+            client
+                .get_data::<ClientState>()
+                .and_then(ClientState::verified_executable)
+                .is_some_and(is_consent_executable)
+        })
 }
 
 fn is_consent_namespace(namespace: &str) -> bool {

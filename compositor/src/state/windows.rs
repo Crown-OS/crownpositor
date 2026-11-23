@@ -21,7 +21,7 @@ use protocols::{
 };
 use regex::Regex;
 use smithay::{
-    backend::renderer::element::Id,
+    desktop::PopupManager,
     reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
     utils::{Clock, Monotonic},
     wayland::compositor::with_states,
@@ -63,7 +63,7 @@ impl WindowDirectory {
             private_titles: patterns(&rules.private_titles),
             flagged: HashMap::new(),
             sensitive: HashSet::new(),
-            blank_ids: BlankIds::new(),
+            blank_ids: BlankIds::default(),
             plugin_known: HashMap::new(),
             plugin_focus: None,
             activity: ActivityCounters::default(),
@@ -286,12 +286,23 @@ impl State {
             .flat_map(|workspace| workspace.closing())
             .map(|closing| closing.tile().id())
             .collect();
-        self.windows
-            .blank_ids
-            .retain(|id, _| sensitive.contains(id) || closing.contains(id));
-        for id in &sensitive {
-            self.windows.blank_ids.entry(*id).or_insert_with(Id::new);
-        }
+        let blanked: HashSet<WindowId> = sensitive.union(&closing).copied().collect();
+        let popups = self
+            .shell
+            .tiles()
+            .filter(|tile| blanked.contains(&tile.id()))
+            .filter_map(|tile| {
+                tile.window()
+                    .toplevel()
+                    .map(|toplevel| toplevel.wl_surface().clone())
+            })
+            .flat_map(|surface| {
+                PopupManager::popups_for_surface(&surface)
+                    .map(|(popup, _)| popup.wl_surface().id())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        self.windows.blank_ids.keep(&blanked, &sensitive, popups);
         self.windows.sensitive = sensitive;
         let display = self.common.display_handle.clone();
         let focus_key = focus.map(WindowId::raw);

@@ -8,7 +8,10 @@
 //! turned off `PR_SET_DUMPABLE` before it connected cannot be read and gets
 //! no key.
 
-use std::os::{fd::OwnedFd, unix::net::UnixStream};
+use std::{
+    os::{fd::OwnedFd, unix::net::UnixStream},
+    path::{Path, PathBuf},
+};
 
 use crownos_config::schema::AppKey;
 use crownos_ipc::{Credentials, pidfd_names_pid};
@@ -22,6 +25,8 @@ const PRELOAD_VARIABLES: [&[u8]; 2] = [b"LD_PRELOAD=", b"LD_LIBRARY_PATH="];
 pub struct PeerProcess {
     pid: i32,
     pidfd: OwnedFd,
+    /// The executable it ran when it connected, checked by device and inode.
+    executable: PathBuf,
     /// It started with `LD_PRELOAD` or `LD_LIBRARY_PATH`, so it may not run
     /// the code its executable holds.
     preloaded: bool,
@@ -36,6 +41,10 @@ impl PeerProcess {
 
     pub const fn is_preloaded(&self) -> bool {
         self.preloaded
+    }
+
+    pub fn executable(&self) -> &Path {
+        &self.executable
     }
 }
 
@@ -76,6 +85,7 @@ pub fn host_key(stream: &UnixStream) -> Option<(AppKey, PeerProcess)> {
         program.working_directory.as_deref(),
     )?;
     let process = PeerProcess {
+        executable: program.executable.clone(),
         pid: credentials.pid,
         preloaded: is_preloaded(credentials.pid),
         pidfd: credentials.pidfd?,

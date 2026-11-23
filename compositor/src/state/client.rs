@@ -48,6 +48,12 @@ impl ClientState {
         self.app_key.as_ref().filter(|_| unchanged)
     }
 
+    /// The executable the process ran when it connected, checked by device
+    /// and inode; `None` for a sandboxed client or one that could not be read.
+    pub fn verified_executable(&self) -> Option<&std::path::Path> {
+        self.peer_process.as_ref().map(PeerProcess::executable)
+    }
+
     /// Whether the process that connected loads other code through
     /// `LD_PRELOAD` or `LD_LIBRARY_PATH`; such a client never runs the engine.
     pub fn is_preloaded(&self) -> bool {

@@ -194,6 +194,7 @@ impl State {
     pub fn try_new(event_loop: &mut EventLoop<'static, State>) -> anyhow::Result<Self> {
         let common = CommonState::try_new(event_loop)?;
         context_access::prepare_on_startup();
+        crate::utils::consent_surface::warn_if_dialog_missing();
         let config = ConfigState::init(&common.event_loop_handle)?;
         let input = InputState::new(&config.current);
         let backend = BackendState::try_new()?;
