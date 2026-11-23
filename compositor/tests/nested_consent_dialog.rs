@@ -96,6 +96,8 @@ impl Session {
             .env("XDG_RUNTIME_DIR", &self.runtime)
             .env("WAYLAND_DISPLAY", &self.socket)
             .env_remove("WORKSPACE")
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
