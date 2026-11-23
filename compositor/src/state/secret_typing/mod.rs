@@ -16,9 +16,8 @@ use smithay::{
     wayland::{input_method::InputMethodSeat, text_input::TextInputSeat},
 };
 
-use self::checks::{
-    FieldCheck, check_app_key, check_field, display_text, is_terminal, outcome_after_wait,
-};
+pub use self::checks::display_text;
+use self::checks::{FieldCheck, check_app_key, check_field, is_terminal, outcome_after_wait};
 use crate::{
     state::{ClientState, State},
     utils::{
@@ -137,6 +136,7 @@ impl State {
         let app_key = tile.surface().client().and_then(|client| {
             client
                 .get_data::<ClientState>()
+                .filter(|state| !state.is_preloaded())
                 .and_then(ClientState::current_app_key)
                 .cloned()
         });

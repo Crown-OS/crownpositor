@@ -104,7 +104,7 @@ impl State {
             client
                 .get_data::<ClientState>()
                 .and_then(|state| state.peer_process.as_ref())
-                .filter(|process| process.is_alive())
+                .filter(|process| process.is_alive() && !process.is_preloaded())
                 .map(|process| process.pid())
         }) else {
             return;
@@ -134,7 +134,7 @@ impl State {
 /// The answer from what the dialog printed and whether it showed itself.
 fn decide(question: &ConsentQuestion, exit: DialogExit, shown: bool) -> ConsentAnswer {
     match exit {
-        DialogExit::Printed(line) => match question.choice(&line) {
+        DialogExit::Exited(status) => match question.choice(status) {
             Some(choice) if shown => ConsentAnswer::Chosen(choice),
             Some(_) => {
                 tracing::warn!(target: AUDIT, "a dialog answered without showing itself");
@@ -142,7 +142,7 @@ fn decide(question: &ConsentQuestion, exit: DialogExit, shown: bool) -> ConsentA
             }
             None => ConsentAnswer::Declined,
         },
-        DialogExit::Declined => ConsentAnswer::Declined,
+        DialogExit::Failed => ConsentAnswer::Unavailable,
         DialogExit::TimedOut => ConsentAnswer::TimedOut,
         DialogExit::Withdrawn => ConsentAnswer::Withdrawn,
     }
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn an_allow_counts_only_from_a_dialog_that_showed_itself() {
-        let printed = || DialogExit::Printed("grant".into());
+        let printed = || DialogExit::Exited(Some(16));
         assert_eq!(
             decide(&question(), printed(), true),
             ConsentAnswer::Chosen("grant")
@@ -174,7 +174,7 @@ mod tests {
             ConsentAnswer::Unavailable
         );
         assert_eq!(
-            decide(&question(), DialogExit::Printed("other".into()), true),
+            decide(&question(), DialogExit::Exited(Some(1)), true),
             ConsentAnswer::Declined
         );
         assert_eq!(

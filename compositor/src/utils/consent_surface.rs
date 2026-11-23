@@ -53,6 +53,7 @@ pub fn is_consent_layer(layer: &LayerSurface) -> bool {
         && layer.wl_surface().client().is_some_and(|client| {
             client
                 .get_data::<ClientState>()
+                .filter(|state| !state.is_preloaded())
                 .and_then(ClientState::verified_executable)
                 .is_some_and(is_consent_executable)
         })

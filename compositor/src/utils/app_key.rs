@@ -15,7 +15,9 @@ use std::{
 
 use crownos_config::schema::AppKey;
 use crownos_ipc::{Credentials, pidfd_names_pid};
-use smithay::wayland::security_context::SecurityContext;
+use smithay::{
+    reexports::rustix::net::sockopt::socket_peercred, wayland::security_context::SecurityContext,
+};
 
 /// Environment variables that load other code into a program.
 const PRELOAD_VARIABLES: [&[u8]; 2] = [b"LD_PRELOAD=", b"LD_LIBRARY_PATH="];
@@ -65,17 +67,22 @@ fn is_preloaded(pid: i32) -> bool {
 }
 
 /// The key of a sandboxed client, when the sandbox engine named both itself
-/// and the app.
-pub fn sandboxed_key(context: &SecurityContext) -> Option<AppKey> {
+/// and the app. A Flatpak app that the user installed gets a key of its own,
+/// read from the process behind the socket.
+pub fn sandboxed_key(context: &SecurityContext, stream: &UnixStream) -> Option<AppKey> {
     let engine = context
         .sandbox_engine
         .as_deref()
         .filter(|text| !text.is_empty())?;
     let app_id = context.app_id.as_deref().filter(|text| !text.is_empty())?;
-    Some(AppKey::Sandboxed {
-        engine: engine.to_owned(),
-        app_id: app_id.to_owned(),
-    })
+    let pid = socket_peercred(stream).ok()?.pid.as_raw_nonzero().get();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    Some(AppKey::of_sandboxed_process(
+        engine,
+        app_id,
+        pid,
+        home.as_deref(),
+    ))
 }
 
 /// The key and the process of an unsandboxed client, read before the client

@@ -8,12 +8,16 @@
 //!
 //! The app id finds the window; the expected app key goes to the compositor.
 //!
+//! `secret_input_probe consent <run|proxy> <detail>` asks a run or proxy
+//! consent instead and prints its answer.
+//!
 //! The values are test values only.
 
 use std::{io::Write as _, os::fd::OwnedFd};
 
 use anyhow::{Context, bail};
 use crownos_protocols::secret_input::v1::client::{
+    crownos_secret_consent_v1::{self as consent, Action, CrownosSecretConsentV1},
     crownos_secret_input_manager_v1::CrownosSecretInputManagerV1,
     crownos_secret_input_request_v1::{self as request, CrownosSecretInputRequestV1, Kind},
 };
@@ -32,6 +36,7 @@ use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
 struct Probe {
     toplevels: Vec<(ExtForeignToplevelHandleV1, String, String)>,
     outcome: Option<WEnum<request::Outcome>>,
+    consent: Option<u32>,
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for Probe {
@@ -99,6 +104,21 @@ impl Dispatch<CrownosSecretInputManagerV1, ()> for Probe {
     }
 }
 
+impl Dispatch<CrownosSecretConsentV1, ()> for Probe {
+    fn event(
+        state: &mut Self,
+        _: &CrownosSecretConsentV1,
+        event: consent::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let consent::Event::Consent { granted } = event {
+            state.consent = Some(granted);
+        }
+    }
+}
+
 impl Dispatch<CrownosSecretInputRequestV1, ()> for Probe {
     fn event(
         state: &mut Self,
@@ -131,6 +151,11 @@ fn sealed_value(text: &str) -> anyhow::Result<OwnedFd> {
 
 fn main() -> anyhow::Result<()> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let [mode, action, detail] = arguments.as_slice()
+        && mode == "consent"
+    {
+        return ask_consent(action, detail);
+    }
     let [app_id, expected_app_key, require, values @ ..] = arguments.as_slice() else {
         bail!(
             "usage: secret_input_probe <app_id> <expected_app_key> <0|1> <kind>:<value>[:tab] ..."
@@ -190,5 +215,33 @@ fn main() -> anyhow::Result<()> {
         queue.blocking_dispatch(&mut probe)?;
     }
     println!("outcome {:?}", probe.outcome);
+    Ok(())
+}
+
+fn ask_consent(action: &str, detail: &str) -> anyhow::Result<()> {
+    let connection = Connection::connect_to_env().context("no Wayland display")?;
+    let (globals, mut queue) = registry_queue_init::<Probe>(&connection)?;
+    let handle = queue.handle();
+    let manager: CrownosSecretInputManagerV1 = globals
+        .bind(&handle, 1..=1, ())
+        .context("the secret input global is not offered")?;
+    let action = if action == "proxy" {
+        Action::Proxy
+    } else {
+        Action::Run
+    };
+    let _question = manager.ask_consent(
+        "exe:/usr/bin/probe-agent".into(),
+        "probe secret".into(),
+        action,
+        detail.into(),
+        &handle,
+        (),
+    );
+    let mut probe = Probe::default();
+    while probe.consent.is_none() {
+        queue.blocking_dispatch(&mut probe)?;
+    }
+    println!("consent {:?}", probe.consent);
     Ok(())
 }

@@ -3,14 +3,16 @@
 //! `$CONSENT_PROBE_LOG`, then does what `$CONSENT_PROBE_SCRIPT` says:
 //!
 //! ```text
-//! <choice id or "decline"> <"layer" or "no-layer"> <milliseconds to wait>
+//! <"grant", a button index or "decline"> <"layer" or "no-layer"> <milliseconds to wait>
 //! ```
 //!
-//! With `layer` it maps an overlay layer in the dialog's namespace first.
+//! With `layer` it maps an overlay layer in the dialog's namespace first. It
+//! answers with the exit status, as `crownos_config::consent_exit` encodes it.
 
 use std::{io::Write as _, time::Duration};
 
 use anyhow::{Context, bail};
+use crownos_config::consent_exit::{DECLINED, FIRST_ANSWER};
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
@@ -95,9 +97,10 @@ fn main() -> anyhow::Result<()> {
     };
     let _shown = (layer == "layer").then(show_layer).transpose()?;
     std::thread::sleep(Duration::from_millis(wait.parse()?));
-    if answer == "decline" {
-        std::process::exit(1);
-    }
-    println!("{answer}");
-    Ok(())
+    let status = match answer {
+        "decline" => i32::from(DECLINED),
+        "grant" => i32::from(FIRST_ANSWER),
+        index => i32::from(FIRST_ANSWER) + index.parse::<i32>()?,
+    };
+    std::process::exit(status)
 }

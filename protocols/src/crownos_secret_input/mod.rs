@@ -5,14 +5,17 @@
 //! [`SecretInputHandler`]: the dialog, the focus and field checks and the
 //! typing. The values are zeroed when the request is dropped.
 
+mod consent;
 mod dispatch;
 mod request;
 mod sealed_value;
 
+use crownos_protocols::secret_input::v1::server::crownos_secret_consent_v1::CrownosSecretConsentV1;
 use crownos_protocols::secret_input::v1::server::crownos_secret_input_manager_v1::CrownosSecretInputManagerV1;
 use crownos_protocols::secret_input::v1::server::crownos_secret_input_request_v1::CrownosSecretInputRequestV1;
 use wayland_server::{Client, DisplayHandle, backend::GlobalId};
 
+pub use consent::{ConsentAction, SecretConsentQuestion};
 pub use crownos_protocols::secret_input::v1::server::crownos_secret_input_request_v1::Outcome;
 pub use dispatch::{RequestData, SecretInputDispatch};
 pub use request::{RequestBuilder, RequestDetails, SecretInputRequest, TypingValue, ValueKind};
@@ -30,6 +33,13 @@ pub trait SecretInputHandler {
 
     /// The client destroyed a committed request before its answer.
     fn secret_input_withdrawn(&mut self, resource: &CrownosSecretInputRequestV1);
+
+    /// The daemon asks whether an agent may use secrets for a run or a
+    /// proxy. Answer with [`SecretConsentQuestion::answer`], now or later.
+    fn secret_consent_asked(&mut self, question: SecretConsentQuestion);
+
+    /// The daemon destroyed a consent question, answered or not.
+    fn secret_consent_withdrawn(&mut self, resource: &CrownosSecretConsentV1);
 }
 
 /// Global data: which clients may see the manager.

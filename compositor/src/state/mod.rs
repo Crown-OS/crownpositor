@@ -26,6 +26,7 @@ pub mod output_layouts;
 mod output_lifecycle;
 pub mod outputs;
 mod overview;
+pub mod secret_consent;
 pub mod secret_typing;
 pub mod session_env;
 pub mod text_input_purposes;
@@ -114,6 +115,8 @@ pub struct State {
     pub secret_typing: secret_typing::SecretTyping,
     /// The consent dialogs the compositor started and has not heard back from.
     pub consent_dialogs: consent_dialogs::ConsentDialogs,
+    /// crownos-secretsd's run and proxy questions whose dialog is open.
+    pub secret_consents: secret_consent::SecretConsents,
 }
 
 impl State {
@@ -237,6 +240,7 @@ impl State {
             guest_seats: guest_seats::GuestSeats::default(),
             secret_typing: secret_typing::SecretTyping::default(),
             consent_dialogs: consent_dialogs::ConsentDialogs::default(),
+            secret_consents: secret_consent::SecretConsents::default(),
         };
         state.arm_activity_flush();
         state.arm_context_expiry();

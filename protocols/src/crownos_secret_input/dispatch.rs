@@ -3,6 +3,7 @@
 use std::sync::{Mutex, PoisonError};
 
 use crownos_protocols::secret_input::v1::server::{
+    crownos_secret_consent_v1::{self, Action, CrownosSecretConsentV1},
     crownos_secret_input_manager_v1::{self, CrownosSecretInputManagerV1},
     crownos_secret_input_request_v1::{self, CrownosSecretInputRequestV1, Error, Kind},
 };
@@ -13,6 +14,7 @@ use wayland_server::{
 
 use super::{
     SecretInputGlobalData, SecretInputHandler, SecretInputState,
+    consent::{ConsentAction, SecretConsentQuestion},
     request::{RequestBuilder, RequestDetails, SecretInputRequest, TypingValue, ValueKind},
     sealed_value::read_sealed_value,
 };
@@ -25,6 +27,7 @@ pub trait SecretInputDispatch:
     GlobalDispatch<CrownosSecretInputManagerV1, SecretInputGlobalData>
     + Dispatch<CrownosSecretInputManagerV1, ()>
     + Dispatch<CrownosSecretInputRequestV1, RequestData>
+    + Dispatch<CrownosSecretConsentV1, ()>
     + SecretInputHandler
     + 'static
 {
@@ -34,6 +37,7 @@ impl<D> SecretInputDispatch for D where
     D: GlobalDispatch<CrownosSecretInputManagerV1, SecretInputGlobalData>
         + Dispatch<CrownosSecretInputManagerV1, ()>
         + Dispatch<CrownosSecretInputRequestV1, RequestData>
+        + Dispatch<CrownosSecretConsentV1, ()>
         + SecretInputHandler
         + 'static
 {
@@ -60,7 +64,7 @@ impl<D: SecretInputDispatch> GlobalDispatch<CrownosSecretInputManagerV1, SecretI
 
 impl<D: SecretInputDispatch> Dispatch<CrownosSecretInputManagerV1, (), D> for SecretInputState {
     fn request(
-        _state: &mut D,
+        state: &mut D,
         _client: &Client,
         _manager: &CrownosSecretInputManagerV1,
         request: crownos_secret_input_manager_v1::Request,
@@ -68,6 +72,28 @@ impl<D: SecretInputDispatch> Dispatch<CrownosSecretInputManagerV1, (), D> for Se
         _dhandle: &DisplayHandle,
         data_init: &mut DataInit<'_, D>,
     ) {
+        if let crownos_secret_input_manager_v1::Request::AskConsent {
+            id,
+            agent_app_key,
+            secret_names,
+            action,
+            detail,
+        } = request
+        {
+            let resource = data_init.init(id, ());
+            let action = match action {
+                WEnum::Value(Action::Run) => ConsentAction::Run,
+                WEnum::Value(Action::Proxy) => ConsentAction::Proxy,
+                _ => return resource.consent(0),
+            };
+            return state.secret_consent_asked(SecretConsentQuestion::new(
+                resource,
+                agent_app_key,
+                secret_names,
+                action,
+                detail,
+            ));
+        }
         let crownos_secret_input_manager_v1::Request::CreateRequest {
             id,
             window_identifier,
@@ -166,5 +192,22 @@ impl<D: SecretInputDispatch> Dispatch<CrownosSecretInputRequestV1, RequestData, 
         if committed {
             state.secret_input_withdrawn(resource);
         }
+    }
+}
+
+impl<D: SecretInputDispatch> Dispatch<CrownosSecretConsentV1, (), D> for SecretInputState {
+    fn request(
+        _state: &mut D,
+        _client: &Client,
+        _resource: &CrownosSecretConsentV1,
+        _request: crownos_secret_consent_v1::Request,
+        _data: &(),
+        _dhandle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, D>,
+    ) {
+    }
+
+    fn destroyed(state: &mut D, _client: ClientId, resource: &CrownosSecretConsentV1, _data: &()) {
+        state.secret_consent_withdrawn(resource);
     }
 }

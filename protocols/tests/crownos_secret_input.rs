@@ -16,19 +16,21 @@ use std::{
 
 use crownos_protocols::secret_input::v1::{
     client::{
+        crownos_secret_consent_v1::{self as client_consent, Action, CrownosSecretConsentV1},
         crownos_secret_input_manager_v1::CrownosSecretInputManagerV1,
         crownos_secret_input_request_v1::{
             self as client_request, CrownosSecretInputRequestV1, Kind,
         },
     },
     server::{
+        crownos_secret_consent_v1::CrownosSecretConsentV1 as ServerConsent,
         crownos_secret_input_manager_v1::CrownosSecretInputManagerV1 as ServerManager,
         crownos_secret_input_request_v1::CrownosSecretInputRequestV1 as ServerRequest,
     },
 };
 use protocols::crownos_secret_input::{
-    Outcome, RequestData, SecretInputGlobalData, SecretInputHandler, SecretInputRequest,
-    SecretInputState, ValueKind,
+    ConsentAction, Outcome, RequestData, SecretConsentQuestion, SecretInputGlobalData,
+    SecretInputHandler, SecretInputRequest, SecretInputState, ValueKind,
 };
 use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use wayland_client::{
@@ -75,6 +77,12 @@ impl SecretInputHandler for Server {
         self.open.push(request);
     }
 
+    fn secret_consent_asked(&mut self, question: SecretConsentQuestion) {
+        question.answer(question.action == ConsentAction::Proxy);
+    }
+
+    fn secret_consent_withdrawn(&mut self, _resource: &ServerConsent) {}
+
     fn secret_input_withdrawn(&mut self, resource: &ServerRequest) {
         self.open.retain(|request| !request.is_for(resource));
         if let Ok(mut seen) = self.seen.lock() {
@@ -86,6 +94,7 @@ impl SecretInputHandler for Server {
 delegate_global_dispatch!(Server: [ServerManager: SecretInputGlobalData] => SecretInputState);
 delegate_dispatch!(Server: [ServerManager: ()] => SecretInputState);
 delegate_dispatch!(Server: [ServerRequest: RequestData] => SecretInputState);
+delegate_dispatch!(Server: [ServerConsent: ()] => SecretInputState);
 
 struct TestClient;
 impl ClientData for TestClient {}
@@ -93,6 +102,22 @@ impl ClientData for TestClient {}
 #[derive(Default)]
 struct ClientState {
     outcomes: Vec<client_request::Outcome>,
+    consents: Vec<u32>,
+}
+
+impl wayland_client::Dispatch<CrownosSecretConsentV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &CrownosSecretConsentV1,
+        event: client_consent::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let client_consent::Event::Consent { granted } = event {
+            state.consents.push(granted);
+        }
+    }
 }
 
 impl wayland_client::Dispatch<WlRegistry, GlobalListContents> for ClientState {
@@ -317,4 +342,29 @@ fn a_value_after_the_commit_is_a_protocol_error() {
     request.commit();
     request.add_value(sealed(b"more").as_fd(), Kind::Password, 0);
     expect_error(&mut harness, request.id().protocol_id(), ALREADY_COMMITTED);
+}
+
+#[test]
+fn a_consent_question_gets_one_answer() {
+    let mut harness = Harness::new(true);
+    let manager = harness.manager.clone().expect("manager");
+    let handle = harness.queue.handle();
+    let _run = manager.ask_consent(
+        "exe:/usr/bin/agent".into(),
+        "api".into(),
+        Action::Run,
+        "deploy".into(),
+        &handle,
+        (),
+    );
+    let _proxy = manager.ask_consent(
+        "exe:/usr/bin/agent".into(),
+        "api".into(),
+        Action::Proxy,
+        "api.example.com".into(),
+        &handle,
+        (),
+    );
+    harness.roundtrip().expect("roundtrip");
+    assert_eq!(harness.client.consents, [0, 1]);
 }

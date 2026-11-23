@@ -1,10 +1,11 @@
 //! A consent question in the root-owned `crownos-portal-dialog`, which the
-//! compositor starts itself. The dialog prints the id of the chosen button and
-//! exits 0, or exits 1 when the user declines. No D-Bus service is in the
+//! compositor starts itself. Only the dialog's exit status is read, as
+//! `crownos_config::consent_exit` encodes it. No D-Bus service is in the
 //! path, and synthetic input never reaches the dialog's surface.
 
 use std::{path::Path, process::Stdio, time::Duration};
 
+use crownos_config::consent_exit::QuestionShape;
 use tokio::{process::Child, sync::oneshot};
 
 /// How long the user has to answer.
@@ -48,50 +49,43 @@ impl ConsentQuestion {
         }
         command
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
         command
     }
 
-    /// The choice that the dialog printed, if it is one of this question's.
-    pub fn choice(&self, printed: &str) -> Option<&'static str> {
-        self.choices
-            .iter()
-            .map(|(id, _)| *id)
-            .find(|id| *id == printed)
+    /// The choice in the dialog's exit status, if it is one of this question's.
+    pub fn choice(&self, status: Option<i32>) -> Option<&'static str> {
+        let shape = QuestionShape {
+            choices: self.choices.len(),
+            options: Vec::new(),
+        };
+        let answer = shape.decode(status)?;
+        self.choices.get(answer.choice).map(|(id, _)| *id)
     }
 }
 
-/// What the dialog printed and how it ended, before the compositor checks
-/// that it showed itself. The dialog is killed on a timeout or a withdrawal.
+/// How the dialog ended, before the compositor checks that it showed itself.
+/// The dialog is killed on a timeout or a withdrawal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogExit {
-    Printed(String),
-    Declined,
+    /// Its exit status; `None` when a signal ended it.
+    Exited(Option<i32>),
+    Failed,
     TimedOut,
     Withdrawn,
 }
 
-pub async fn wait_for_dialog(child: Child, withdrawn: oneshot::Receiver<()>) -> DialogExit {
+pub async fn wait_for_dialog(mut child: Child, withdrawn: oneshot::Receiver<()>) -> DialogExit {
     tokio::select! {
-        finished = tokio::time::timeout(ANSWER_DEADLINE, child.wait_with_output()) => match finished {
-            Ok(Ok(output)) if output.status.success() => {
-                last_line(&output.stdout).map_or(DialogExit::Declined, |line| DialogExit::Printed(line.to_owned()))
-            }
-            Ok(_) => DialogExit::Declined,
+        finished = tokio::time::timeout(ANSWER_DEADLINE, child.wait()) => match finished {
+            Ok(Ok(status)) => DialogExit::Exited(status.code()),
+            Ok(Err(_)) => DialogExit::Failed,
             Err(_) => DialogExit::TimedOut,
         },
         _ = withdrawn => DialogExit::Withdrawn,
     }
-}
-
-fn last_line(output: &[u8]) -> Option<&str> {
-    std::str::from_utf8(output)
-        .ok()?
-        .lines()
-        .last()
-        .map(str::trim)
 }
 
 #[cfg(test)]
@@ -134,10 +128,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_known_choice_on_the_last_line_counts() {
-        assert_eq!(question().choice("grant"), Some("grant"));
-        assert_eq!(question().choice("granted"), None);
-        assert_eq!(last_line(b"noise\ngrant\n"), Some("grant"));
-        assert_eq!(last_line(&[0xff]), None);
+    fn only_a_status_of_this_question_is_a_choice() {
+        assert_eq!(question().choice(Some(16)), Some("grant"));
+        for status in [Some(17), Some(0), Some(1), Some(2), None] {
+            assert_eq!(question().choice(status), None, "{status:?}");
+        }
     }
 }

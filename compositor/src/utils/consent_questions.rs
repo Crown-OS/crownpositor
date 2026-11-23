@@ -142,7 +142,36 @@ pub fn secret_typing_question(prompt: &SecretTypingPrompt) -> ConsentQuestion {
     }
 }
 
-/// Whether the user allowed the typing.
+/// crownos-secretsd asking before an agent uses secrets for a run or a
+/// proxy. Each text is display text only, already cleaned.
+#[derive(Debug, Clone)]
+pub struct SecretUsePrompt {
+    pub agent_app_key: String,
+    pub secret_names: String,
+    pub proxy: bool,
+    pub detail: String,
+}
+
+pub fn secret_use_question(prompt: &SecretUsePrompt) -> ConsentQuestion {
+    let purpose = if prompt.proxy {
+        "add them to HTTPS requests to"
+    } else {
+        "run the command template"
+    };
+    ConsentQuestion {
+        dangerous: true,
+        title: format!("Allow an agent to use {}?", prompt.secret_names),
+        message: format!(
+            "{} asks via crownos-secretsd to {purpose} {}.\n\n\
+             The agent does not see the values.",
+            prompt.agent_app_key, prompt.detail
+        ),
+        decline: "Deny",
+        choices: vec![(TYPE_SECRET, "Allow")],
+    }
+}
+
+/// Whether the user allowed the typing or the use.
 pub fn typing_allowed(answer: &ConsentAnswer) -> bool {
     *answer == ConsentAnswer::Chosen(TYPE_SECRET)
 }

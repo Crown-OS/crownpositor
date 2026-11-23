@@ -34,7 +34,6 @@ pub struct ClientState {
 impl ClientState {
     pub fn sandboxed(security_context: SecurityContext) -> Self {
         Self {
-            app_key: sandboxed_key(&security_context),
             security_context: Some(security_context),
             ..Self::default()
         }
@@ -66,9 +65,9 @@ impl ClientState {
     /// keep and no reason to take the compositor down with it.
     pub fn insert(mut self, display_handle: &mut DisplayHandle, stream: UnixStream) {
         self.executable = peer_executable(&stream);
-        if self.security_context.is_none()
-            && let Some((key, process)) = host_key(&stream)
-        {
+        if let Some(context) = &self.security_context {
+            self.app_key = sandboxed_key(context, &stream);
+        } else if let Some((key, process)) = host_key(&stream) {
             self.app_key = Some(key);
             self.peer_process = Some(process);
         }
