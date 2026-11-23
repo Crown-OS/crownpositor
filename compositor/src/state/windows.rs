@@ -83,12 +83,12 @@ impl WindowDirectory {
         *entry = (*entry).max(until);
     }
 
-    /// Whether captures of `id` must fail right now.
     /// An element id per sensitive window, for the black boxes in captures.
     pub fn blank_ids(&self) -> &BlankIds {
         &self.blank_ids
     }
 
+    /// Whether captures of `id` must fail right now.
     pub fn is_sensitive(&self, id: WindowId) -> bool {
         self.sensitive.contains(&id)
     }
@@ -278,9 +278,17 @@ impl State {
                     .unwrap_or(0),
             });
         }
+        let closing: HashSet<WindowId> = self
+            .shell
+            .monitors()
+            .iter()
+            .flat_map(|monitor| monitor.workspaces())
+            .flat_map(|workspace| workspace.closing())
+            .map(|closing| closing.tile().id())
+            .collect();
         self.windows
             .blank_ids
-            .retain(|id, _| sensitive.contains(id));
+            .retain(|id, _| sensitive.contains(id) || closing.contains(id));
         for id in &sensitive {
             self.windows.blank_ids.entry(*id).or_insert_with(Id::new);
         }

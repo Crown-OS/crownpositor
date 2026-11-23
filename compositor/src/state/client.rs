@@ -48,6 +48,14 @@ impl ClientState {
         self.app_key.as_ref().filter(|_| unchanged)
     }
 
+    /// Whether the process that connected loads other code through
+    /// `LD_PRELOAD` or `LD_LIBRARY_PATH`; such a client never runs the engine.
+    pub fn is_preloaded(&self) -> bool {
+        self.peer_process
+            .as_ref()
+            .is_some_and(PeerProcess::is_preloaded)
+    }
+
     /// A client that fails to insert has already hung up; there is nothing to
     /// keep and no reason to take the compositor down with it.
     pub fn insert(mut self, display_handle: &mut DisplayHandle, stream: UnixStream) {

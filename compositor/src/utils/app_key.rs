@@ -8,33 +8,47 @@
 //! turned off `PR_SET_DUMPABLE` before it connected cannot be read and gets
 //! no key.
 
-use std::os::{fd::AsRawFd, fd::OwnedFd, unix::net::UnixStream};
+use std::os::{fd::OwnedFd, unix::net::UnixStream};
 
 use crownos_config::schema::AppKey;
-use crownos_ipc::Credentials;
+use crownos_ipc::{Credentials, pidfd_names_pid};
 use smithay::wayland::security_context::SecurityContext;
+
+/// Environment variables that load other code into a program.
+const PRELOAD_VARIABLES: [&[u8]; 2] = [b"LD_PRELOAD=", b"LD_LIBRARY_PATH="];
 
 /// The process that connected, kept to check at bind that it still runs.
 #[derive(Debug)]
 pub struct PeerProcess {
     pid: i32,
     pidfd: OwnedFd,
+    /// It started with `LD_PRELOAD` or `LD_LIBRARY_PATH`, so it may not run
+    /// the code its executable holds.
+    preloaded: bool,
 }
 
 impl PeerProcess {
     /// Whether the process that connected still runs. Its pidfd names that
     /// process only, so a live pidfd means the same process.
     pub fn is_alive(&self) -> bool {
-        std::fs::read_to_string(format!("/proc/self/fdinfo/{}", self.pidfd.as_raw_fd()))
-            .ok()
-            .and_then(|fdinfo| {
-                fdinfo
-                    .lines()
-                    .find_map(|line| line.strip_prefix("Pid:"))
-                    .and_then(|pid| pid.trim().parse::<i32>().ok())
-            })
-            .is_some_and(|pid| pid > 0 && pid == self.pid)
+        pidfd_names_pid(&self.pidfd, self.pid)
     }
+
+    pub const fn is_preloaded(&self) -> bool {
+        self.preloaded
+    }
+}
+
+/// Whether the environment of `pid` loads other code. An environment that
+/// cannot be read counts as loading other code.
+fn is_preloaded(pid: i32) -> bool {
+    std::fs::read(format!("/proc/{pid}/environ")).map_or(true, |environment| {
+        environment.split(|byte| *byte == 0).any(|variable| {
+            PRELOAD_VARIABLES
+                .iter()
+                .any(|preload| variable.starts_with(preload))
+        })
+    })
 }
 
 /// The key of a sandboxed client, when the sandbox engine named both itself
@@ -63,6 +77,7 @@ pub fn host_key(stream: &UnixStream) -> Option<(AppKey, PeerProcess)> {
     )?;
     let process = PeerProcess {
         pid: credentials.pid,
+        preloaded: is_preloaded(credentials.pid),
         pidfd: credentials.pidfd?,
     };
     Some((key, process))

@@ -61,6 +61,9 @@ pub struct InputState {
     pub capture: InputCaptureState,
     /// The injected touch point being emulated as the primary button.
     pub emulated_touch: Option<i32>,
+    /// Keys and buttons injection holds down, released when a consent
+    /// dialog opens.
+    pub injected_held: protocols::crownos_input::HeldInput,
     /// The scale of the pinch Alt + scroll is emulating, while one is going.
     pub scroll_pinch_scale: Option<f64>,
 }
@@ -86,6 +89,7 @@ impl InputState {
             last_frame_click: None,
             capture: InputCaptureState::default(),
             emulated_touch: None,
+            injected_held: protocols::crownos_input::HeldInput::default(),
             scroll_pinch_scale: None,
         }
     }

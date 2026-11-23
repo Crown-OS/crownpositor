@@ -212,12 +212,24 @@ impl ContextState {
         clients
     }
 
+    /// Whether `client` waits for the user: one of its managers is pending
+    /// and none has a scope. A revoked manager does not count.
+    pub fn is_waiting(&self, client: &ClientId) -> bool {
+        let of_client = || {
+            self.bound.iter().filter(move |bound| {
+                bound.client.as_ref() == Some(client) && bound.manager.is_alive()
+            })
+        };
+        of_client().any(|bound| bound.grant == Grant::Pending)
+            && !of_client().any(|bound| matches!(bound.grant, Grant::Scoped(_)))
+    }
+
     /// The scope of `client`, or `None` while it waits or after a revoke.
     pub fn scope_of(&self, client: &ClientId) -> Option<Scope> {
         self.bound
             .iter()
-            .find(|bound| bound.client.as_ref() == Some(client))
-            .and_then(|bound| match bound.grant {
+            .filter(|bound| bound.client.as_ref() == Some(client))
+            .find_map(|bound| match bound.grant {
                 Grant::Scoped(scope) => Some(scope),
                 Grant::Pending | Grant::Revoked => None,
             })
@@ -236,7 +248,6 @@ impl ContextState {
         if self.paused {
             return;
         }
-        let paused = self.paused;
         let gone: Vec<WindowKey> = self
             .known
             .keys()
@@ -257,10 +268,10 @@ impl ContextState {
                 continue;
             }
             for bound in &mut self.bound {
-                if !bound.sees_windows(paused) {
+                if !bound.sees_windows(false) {
                     continue;
                 }
-                let with_text = bound.sees_text(paused);
+                let with_text = bound.sees_text(false);
                 match (known, bound.windows.get(&record.key)) {
                     (Some(known), Some(window)) => {
                         send_changes(window, known, record, with_text);
@@ -273,7 +284,7 @@ impl ContextState {
         }
         if self.focus != focus {
             self.focus = focus;
-            for bound in self.bound.iter().filter(|bound| bound.sees_windows(paused)) {
+            for bound in self.bound.iter().filter(|bound| bound.sees_windows(false)) {
                 bound
                     .manager
                     .focus(focus.and_then(|key| bound.windows.get(&key)), time_ms);

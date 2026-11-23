@@ -149,6 +149,7 @@ impl wayland_client::Dispatch<CrownosContextWindowV1, ()> for Recorder {
 
 /// One client connection with its own queue.
 struct TestConnection {
+    globals: wayland_client::globals::GlobalList,
     queue: EventQueue<Recorder>,
     recorder: Recorder,
     manager: CrownosContextManagerV1,
@@ -162,6 +163,7 @@ impl TestConnection {
         let mut recorder = Recorder::default();
         queue.roundtrip(&mut recorder)?;
         Ok(Self {
+            globals,
             queue,
             recorder,
             manager,
@@ -457,5 +459,30 @@ fn a_version_1_client_needs_the_engine_scope() -> TestResult {
     let engine = clients[1].take_heard()?;
     assert!(engine.contains(&"window w1".to_owned()));
     assert!(!engine.iter().any(|line| line.starts_with("scope")));
+    Ok(())
+}
+
+#[test]
+fn a_revoked_manager_does_not_hide_a_waiting_one_of_the_same_client() -> TestResult {
+    let (server_socket, client_socket) = UnixStream::pair()?;
+    let harness = Harness::start(
+        vec![server_socket],
+        vec![BindDecision::Refused, BindDecision::Pending],
+    );
+    let mut client = TestConnection::bind(client_socket, 2)?;
+    assert_eq!(client.take_heard()?, ["revoked"]);
+    let second: CrownosContextManagerV1 = client.globals.bind(&client.queue.handle(), 2..=2, ())?;
+    client.roundtrip()?;
+    harness.run(|server, _| {
+        let id = server.clients[0].clone();
+        assert!(server.context.is_waiting(&id), "the pending manager waits");
+    })?;
+    harness.set_scope(0, Some(Scope::Metadata))?;
+    harness.run(|server, _| {
+        let id = server.clients[0].clone();
+        assert!(!server.context.is_waiting(&id));
+        assert_eq!(server.context.scope_of(&id), Some(Scope::Metadata));
+    })?;
+    drop(second);
     Ok(())
 }

@@ -21,6 +21,8 @@ const CONTEXT_SCOPE: &str = "scope";
 const METADATA: &str = "metadata";
 const TEXT: &str = "text";
 const GRANTED: u32 = 0;
+/// How long the user has to answer before the question counts as refused.
+const ANSWER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// One `a(ssa(ss)s)` entry of the `choices` option: id, label, items, initial.
 type Choice<'a> = (&'a str, &'a str, Vec<(&'a str, &'a str)>, &'a str);
@@ -137,7 +139,17 @@ pub async fn ask_context_access(prompt: ContextPrompt) -> Result<ContextAnswer, 
     })
 }
 
+/// Asks, and counts no answer within [`ANSWER_DEADLINE`] as a refusal.
 async fn ask(dialog: AccessDialog<'_>) -> Result<DialogAnswer, String> {
+    tokio::time::timeout(ANSWER_DEADLINE, ask_portal(dialog))
+        .await
+        .unwrap_or(Ok(DialogAnswer {
+            granted: false,
+            choices: Vec::new(),
+        }))
+}
+
+async fn ask_portal(dialog: AccessDialog<'_>) -> Result<DialogAnswer, String> {
     let connection = Connection::session()
         .await
         .map_err(|error| error.to_string())?;

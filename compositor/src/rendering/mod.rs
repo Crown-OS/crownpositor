@@ -56,6 +56,7 @@ use smithay::{
 
 use config::{Appearance, MinimizeAnimation};
 
+use crate::utils::consent_surface::hidden_by_consent;
 use crate::{
     rendering::{
         blur::{Glass, GlassKind},
@@ -1240,6 +1241,9 @@ pub(crate) fn layer_elements<R, D>(
 
     for layer in layers {
         for surface in map.layers_on(*layer).rev() {
+            if hidden_by_consent(&map, *layer, surface) {
+                continue;
+            }
             let Some(geometry) = map.layer_geometry(surface) else {
                 continue;
             };

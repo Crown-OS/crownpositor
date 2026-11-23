@@ -72,6 +72,7 @@ wayland-protocols-wlr = { version = "0.3", default-features = false, features = 
 wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "unstable", "client"] }
 crownos-protocols = { workspace = true, features = ["client"] }
 tempfile = "3.27.0"
+wayland-protocols-misc = { version = "0.3", default-features = false, features = ["client"] }
 
 [[example]]
 name = "wlr_outputs"
@@ -90,6 +91,9 @@ name = "capture_sources"
 
 [[example]]
 name = "context_probe"
+
+[[example]]
+name = "virtual_keyboard_probe"
 
 [[example]]
 name = "multi_monitor_probe"

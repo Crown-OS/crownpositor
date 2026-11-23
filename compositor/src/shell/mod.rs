@@ -71,6 +71,7 @@ use crownos_config::schema::{WorkspaceScope, output_identity};
 use protocols::{crownos_app_icons::IconRef, crownos_surface_animation::SurfaceAnimations};
 use spacecontrol::animations::spring::SpringProfile;
 
+use crate::utils::consent_surface::hidden_by_consent;
 use crate::utils::output_setting::output_setting;
 use crate::{
     color::surfaces::DescribedSurfaces,
@@ -204,6 +205,9 @@ fn layer_under(
 
     for kind in layers {
         for layer in map.layers_on(*kind).rev() {
+            if hidden_by_consent(&map, *kind, layer) {
+                continue;
+            }
             // The renderer draws the tree at `layer_geometry`, so that is the
             // origin the hit test has to measure from for the two to agree.
             let Some(geometry) = map.layer_geometry(layer) else {

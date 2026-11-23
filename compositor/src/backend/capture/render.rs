@@ -389,7 +389,7 @@ where
     if locked {
         return Elements::<R, R::Decorator<'frame>>::new();
     }
-    let covers = sensitive_blanks(shell, &placement, blanks, scale);
+    let covers = sensitive_blanks(&placement, blanks, scale);
     let mut elements = match placement.view {
         View::Window(tile) => window_elements(
             shell,

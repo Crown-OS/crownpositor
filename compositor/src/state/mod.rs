@@ -101,6 +101,9 @@ pub struct State {
     pub context_prompts: agent_access::PendingPrompts<crownos_config::schema::AppKey>,
     /// Clients the user allowed without remembering the answer.
     pub context_answered: std::collections::HashSet<wayland_server::backend::ClientId>,
+    /// Apps the user refused without remembering, and when they may ask again.
+    pub context_cooldown:
+        std::collections::HashMap<crownos_config::schema::AppKey, std::time::Instant>,
     /// The seats behind `crownos_agent_cursor_v1`, one per agent.
     pub agent_seats: agent_seats::AgentSeats,
     /// The seats behind `crownos_guest_seat_v1`, one per remote desktop guest.
@@ -222,6 +225,7 @@ impl State {
             agent_prompts: agent_access::PendingPrompts::default(),
             context_prompts: agent_access::PendingPrompts::default(),
             context_answered: std::collections::HashSet::new(),
+            context_cooldown: std::collections::HashMap::new(),
             agent_seats: agent_seats::AgentSeats::default(),
             guest_seats: guest_seats::GuestSeats::default(),
         };

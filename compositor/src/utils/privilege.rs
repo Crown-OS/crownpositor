@@ -4,6 +4,9 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use std::time::SystemTime;
+
+use crownos_config::schema::{ContextAccess, Scope};
 use smithay::reexports::wayland_server::Client;
 
 use crate::state::ClientState;
@@ -24,6 +27,30 @@ pub fn has_app_key(client: &Client) -> bool {
     client
         .get_data::<ClientState>()
         .is_some_and(|state| state.app_key.is_some())
+}
+
+/// The grants of `context_access.ron`, shared with the global filters.
+pub type ContextGrants = Arc<RwLock<ContextAccess>>;
+
+/// Whether the client may bind an agent protocol that needs `scope`: by its
+/// grant, or, until the grants of `agents.ron` were migrated, by
+/// `trusted_executables`.
+pub fn may_drive_agents(
+    client: &Client,
+    grants: &ContextGrants,
+    trusted: &TrustedExecutables,
+    scope: Scope,
+) -> bool {
+    let Ok(access) = grants.read() else {
+        return false;
+    };
+    if !access.migrated_agents {
+        return is_trusted_agent(client, trusted);
+    }
+    client
+        .get_data::<ClientState>()
+        .and_then(ClientState::current_app_key)
+        .is_some_and(|key| access.scopes_for(key, SystemTime::now()).contains(scope))
 }
 
 /// Whether the client is one of the programs `agents.ron` trusts to drive the

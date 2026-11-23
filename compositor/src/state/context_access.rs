@@ -2,7 +2,7 @@
 //! scope of each bound client, the first-use question, and the grants the
 //! compositor writes as their one owner.
 
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use calloop::timer::{TimeoutAction, Timer};
 use crownos_config::schema::{
@@ -19,6 +19,9 @@ use crate::{
 pub const AUDIT: &str = "crownpositor::audit::context";
 /// How often time-limited grants are checked while their clients stay bound.
 const EXPIRY_CHECK: Duration = Duration::from_secs(30);
+/// After the user refuses without remembering, the app is not asked again
+/// for this long, so it cannot ask over and over by binding again.
+const ASK_AGAIN_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Copies the trusted executables of `agents.ron` one time, and ends the
 /// session grants of an earlier login. Runs before the context global
@@ -57,6 +60,25 @@ pub fn protocol_scope(scopes: ScopeSet) -> Scope {
     .fold(Scope::empty(), |scope, (_, bit)| scope | bit)
 }
 
+/// What an answer leaves behind besides the scope it sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnswerEffects {
+    /// The grant lives only in the clients bound now: the user did not ask to
+    /// remember it, or it could not be written.
+    holds_for_bound_clients_only: bool,
+    /// The app is not asked again for a while.
+    cool_down: bool,
+}
+
+impl AnswerEffects {
+    const fn of(granted: bool, remembered: bool) -> Self {
+        Self {
+            holds_for_bound_clients_only: granted && !remembered,
+            cool_down: !granted && !remembered,
+        }
+    }
+}
+
 /// What a new decision does to a bound client, or `None` to leave it as it
 /// is. Only a client that waits for the user, or that the user allowed
 /// without remembering, keeps its state when the file says ask: any other
@@ -80,24 +102,43 @@ fn app_key_of(client: &Client) -> Option<AppKey> {
         .cloned()
 }
 
-/// The name the user knows an app by, for the question.
-fn display_name(key: &AppKey) -> String {
-    let file_name = |path: &std::path::Path| {
-        path.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| key.to_string())
-    };
-    match key {
-        AppKey::Sandboxed { app_id, .. } => app_id.clone(),
-        AppKey::Spawned { component } => component.clone(),
-        AppKey::HostExecutable { path } => file_name(path),
-        AppKey::Interpreted { script, .. } => file_name(script),
-    }
-}
-
 impl State {
     fn context_access(&self) -> &ContextAccess {
         &self.config.current.context_access
+    }
+
+    /// Replaces the grants everywhere the compositor keeps them.
+    pub fn set_context_access(&mut self, access: ContextAccess) {
+        if let Ok(mut shared) = self.wayland.context_grants.write() {
+            *shared = access.clone();
+        }
+        self.config.current.context_access = access;
+    }
+
+    /// The decision for `client` now. A client that loads other code is
+    /// refused when its grant would run the engine, and an app the user just
+    /// refused is not asked again yet.
+    fn decide_for_client(&mut self, client: &Client, key: &AppKey) -> ContextDecision {
+        let decision = self.context_access().decide(key, SystemTime::now());
+        let preloaded = client
+            .get_data::<ClientState>()
+            .is_some_and(ClientState::is_preloaded);
+        match decision {
+            ContextDecision::Granted(scopes)
+                if preloaded && scopes.contains(GrantScope::Engine) =>
+            {
+                tracing::warn!(target: AUDIT, actor = %key, "refused the engine to a preloaded process");
+                ContextDecision::Denied
+            }
+            ContextDecision::Ask if self.is_cooling_down(key) => ContextDecision::Denied,
+            other => other,
+        }
+    }
+
+    fn is_cooling_down(&mut self, key: &AppKey) -> bool {
+        let now = Instant::now();
+        self.context_cooldown.retain(|_, until| *until > now);
+        self.context_cooldown.contains_key(key)
     }
 
     /// The scope of a client that binds the context manager. An app without
@@ -107,7 +148,7 @@ impl State {
             tracing::info!(target: AUDIT, "refused a client that cannot be identified");
             return BindDecision::Refused;
         };
-        match self.context_access().decide(&key, SystemTime::now()) {
+        match self.decide_for_client(client, &key) {
             ContextDecision::Granted(scopes) => {
                 tracing::info!(target: AUDIT, actor = %key, scope = ?scopes, "bound");
                 BindDecision::Granted(protocol_scope(scopes))
@@ -129,7 +170,7 @@ impl State {
         }
         let prompt = ContextPrompt {
             ticket: 0,
-            app_name: display_name(&key),
+            app_name: key.display_name(),
             app_key: key.to_string(),
         };
         tracing::info!(target: AUDIT, actor = %key, "asking the user");
@@ -167,12 +208,16 @@ impl State {
             titles = answer.titles,
             "the user answered"
         );
-        if answer.remember {
-            self.store_context_answer(&key, answer.granted.then_some(scopes));
+        let remembered =
+            answer.remember && self.store_context_answer(&key, answer.granted.then_some(scopes));
+        let effects = AnswerEffects::of(answer.granted, remembered);
+        if effects.cool_down {
+            self.context_cooldown
+                .insert(key.clone(), Instant::now() + ASK_AGAIN_AFTER);
         }
         let scope = answer.granted.then(|| protocol_scope(scopes));
         for client in self.clients_with_key(&key) {
-            if answer.granted && !answer.remember {
+            if effects.holds_for_bound_clients_only {
                 self.context_answered.insert(client.clone());
             }
             let display = self.common.display_handle.clone();
@@ -185,14 +230,15 @@ impl State {
         }
     }
 
-    /// Writes a remembered answer. A file that does not parse is not
-    /// replaced; the answer then holds for the clients bound now only.
-    fn store_context_answer(&mut self, key: &AppKey, scopes: Option<ScopeSet>) {
+    /// Writes a remembered answer, and returns whether it was written. A
+    /// file that does not parse is not replaced; the answer then holds for
+    /// the clients bound now, as if it was not remembered.
+    fn store_context_answer(&mut self, key: &AppKey, scopes: Option<ScopeSet>) -> bool {
         let mut access: ContextAccess = match crownos_config::load_strict(ContextAccess::SECTION) {
             Ok(access) => access,
             Err(error) => {
                 tracing::warn!(target: AUDIT, %error, "cannot remember the answer");
-                return;
+                return false;
             }
         };
         match scopes {
@@ -201,9 +247,10 @@ impl State {
         }
         if let Err(error) = crownos_config::save(ContextAccess::SECTION, &access) {
             tracing::warn!(target: AUDIT, %error, "cannot remember the answer");
-            return;
+            return false;
         }
-        self.config.current.context_access = access;
+        self.set_context_access(access);
+        true
     }
 
     fn clients_with_key(&self, key: &AppKey) -> Vec<ClientId> {
@@ -221,17 +268,14 @@ impl State {
     /// client that waits for the user keeps waiting.
     pub fn rescope_context_clients(&mut self, reason: RevokeReason) {
         let display = self.common.display_handle.clone();
-        let now = SystemTime::now();
         let clients = self.wayland.context_state.clients();
         self.context_answered
             .retain(|answered| clients.iter().any(|client| client.id() == *answered));
         for client in clients {
             let id = client.id();
             let key = app_key_of(&client);
-            let decision = key
-                .as_ref()
-                .map(|key| self.context_access().decide(key, now));
-            let waiting = self.wayland.context_state.scope_of(&id).is_none();
+            let decision = key.as_ref().map(|key| self.decide_for_client(&client, key));
+            let waiting = self.wayland.context_state.is_waiting(&id);
             let answered = self.context_answered.contains(&id);
             let Some(scope) = next_scope(decision, waiting, answered) else {
                 continue;
@@ -283,6 +327,31 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_that_could_not_be_written_holds_for_the_bound_clients() {
+        assert_eq!(
+            AnswerEffects::of(true, false),
+            AnswerEffects {
+                holds_for_bound_clients_only: true,
+                cool_down: false
+            }
+        );
+        assert_eq!(
+            AnswerEffects::of(false, false),
+            AnswerEffects {
+                holds_for_bound_clients_only: false,
+                cool_down: true
+            }
+        );
+        assert_eq!(
+            AnswerEffects::of(true, true),
+            AnswerEffects {
+                holds_for_bound_clients_only: false,
+                cool_down: false
+            }
+        );
+    }
+
+    #[test]
     fn a_grant_that_ends_revokes_unless_the_client_waits_or_was_answered() {
         let key = AppKey::Spawned {
             component: "agent".to_owned(),
@@ -310,22 +379,5 @@ mod tests {
             Some(None)
         );
         assert_eq!(next_scope(None, false, false), Some(None));
-    }
-
-    #[test]
-    fn apps_are_named_by_what_the_user_knows() {
-        assert_eq!(
-            display_name(&AppKey::HostExecutable {
-                path: "/usr/bin/agent".into()
-            }),
-            "agent"
-        );
-        assert_eq!(
-            display_name(&AppKey::Interpreted {
-                interpreter: "/usr/bin/python3".into(),
-                script: "/srv/bot.py".into()
-            }),
-            "bot.py"
-        );
     }
 }
