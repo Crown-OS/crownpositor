@@ -25,7 +25,9 @@ use crate::{
     input::shortcuts::{Action, Bindings, WorkspaceRef},
     layout::{Gaps, LayoutOp},
     shell::{morph::Choreography, tile::WindowState},
-    state::{BackendState, Exit, State, launch_target, lock_screen::LockReason},
+    state::{
+        BackendState, Exit, State, launch_target, lock_screen::LockReason, session_accessibility,
+    },
 };
 
 impl State {
@@ -445,6 +447,13 @@ impl State {
             }
             Update::VisualContext(rules) => {
                 self.windows.set_rules(&rules);
+                if rules.enabled != config.visual_context.enabled {
+                    session_accessibility::follow_switch(
+                        &self.common.tasks,
+                        matches!(self.backend, BackendState::Kms(_)),
+                        rules.enabled,
+                    );
+                }
                 config.visual_context = *rules;
             }
             Update::Theme(theme) => {

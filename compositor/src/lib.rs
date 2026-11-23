@@ -42,13 +42,14 @@ pub fn run() -> anyhow::Result<Exit> {
     tracing::info!(socket = ?state.common.socket_name, "crownpositor is running");
 
     // A nested session must not repoint the host's activated services at it.
-    if preference == backend::Preference::Kms {
+    let owns_session_bus = preference == backend::Preference::Kms;
+    if owns_session_bus {
         state.export_session_environment();
     }
 
     // Outputs exist and the socket is live, so a bar or wallpaper that connects
     // immediately has something to anchor to.
-    state.run_startup();
+    state.start_session_apps();
     state.start_control_service();
 
     event_loop
