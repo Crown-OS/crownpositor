@@ -40,13 +40,11 @@ impl ClientState {
         }
     }
 
-    /// The key of the client, if the process behind it did not exec another
-    /// program since it connected.
+    /// The key of the client, while the process that connected still runs.
+    /// The program is not read again: a process may have turned off
+    /// `PR_SET_DUMPABLE` since.
     pub fn current_app_key(&self) -> Option<&AppKey> {
-        let unchanged = self
-            .peer_process
-            .as_ref()
-            .is_none_or(PeerProcess::runs_same_executable);
+        let unchanged = self.peer_process.as_ref().is_none_or(PeerProcess::is_alive);
         self.app_key.as_ref().filter(|_| unchanged)
     }
 

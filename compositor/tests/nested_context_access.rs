@@ -20,6 +20,9 @@ use anyhow::{Context, bail, ensure};
 const STARTUP: Duration = Duration::from_secs(60);
 const POLL: Duration = Duration::from_millis(200);
 const APP_ID: &str = "nested-context-test";
+/// No X11 bridge, so the nested session does not take an X display, which
+/// every session on the machine shares.
+const NO_X11_BRIDGE: &str = "/nonexistent/xwayland-satellite";
 
 struct KilledOnDrop(Child);
 
@@ -144,6 +147,7 @@ fn each_client_gets_its_grant_and_a_revoke_cuts_a_live_client() -> anyhow::Resul
             .env("XDG_RUNTIME_DIR", &runtime)
             .env("WAYLAND_DISPLAY", &host_socket)
             .env("WORKSPACE", "headless")
+            .env("CROWN_XWAYLAND_SATELLITE", NO_X11_BRIDGE)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?,
