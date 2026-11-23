@@ -92,9 +92,14 @@ impl WaylandFocus for KeyboardFocusTarget {
         self.delivery_surface()
     }
 
+    /// False for a consent surface, as `wl_surface` is `None` for it: smithay sends a new
+    /// `wl_keyboard` of the focused client an enter with the focused surface, and unwraps it.
+    /// Such a keyboard gets its enter at the next focus change; keys reach it before.
     fn same_client_as(&self, object_id: &ObjectId) -> bool {
-        self.delivery_surface()
-            .is_some_and(|surface| surface.id().same_client_as(object_id))
+        !self.is_consent()
+            && self
+                .delivery_surface()
+                .is_some_and(|surface| surface.id().same_client_as(object_id))
     }
 }
 

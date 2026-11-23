@@ -97,6 +97,9 @@ name = "context_probe"
 name = "virtual_keyboard_probe"
 
 [[example]]
+name = "keyboard_focus_probe"
+
+[[example]]
 name = "multi_monitor_probe"
 
 [[example]]
