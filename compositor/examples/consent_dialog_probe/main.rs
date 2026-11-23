@@ -7,12 +7,12 @@
 //! ```
 //!
 //! With `layer` it maps an overlay layer in the dialog's namespace first. It
-//! answers with the exit status, as `crownos_config::consent_exit` encodes it.
+//! answers with the exit status, as `crownos_config::consent_dialog` encodes it.
 
 use std::{io::Write as _, time::Duration};
 
 use anyhow::{Context, bail};
-use crownos_config::consent_exit::{DECLINED, FIRST_ANSWER};
+use crownos_config::consent_dialog::{DECLINED, FIRST_ANSWER};
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},

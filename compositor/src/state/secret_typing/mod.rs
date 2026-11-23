@@ -21,7 +21,7 @@ use self::checks::{FieldCheck, check_app_key, check_field, is_terminal, outcome_
 use crate::{
     state::{ClientState, State},
     utils::{
-        consent_dialog::ConsentAnswer,
+        consent_dialog::ConsentOutcome,
         consent_questions::{SecretTypingPrompt, secret_typing_question, typing_allowed},
         id::WindowId,
         surface,
@@ -149,7 +149,7 @@ impl State {
         })
     }
 
-    fn secret_typing_answered(&mut self, ticket: u64, answer: &ConsentAnswer) {
+    fn secret_typing_answered(&mut self, ticket: u64, answer: &ConsentOutcome) {
         let Some(active) = self
             .secret_typing
             .active
@@ -161,8 +161,8 @@ impl State {
         let window = active.window;
         let outcome = match answer {
             _ if typing_allowed(answer) => None,
-            ConsentAnswer::TimedOut => Some(Outcome::TimedOut),
-            ConsentAnswer::Unavailable => Some(Outcome::Refused),
+            ConsentOutcome::TimedOut => Some(Outcome::TimedOut),
+            ConsentOutcome::Unavailable => Some(Outcome::Refused),
             _ => Some(Outcome::Cancelled),
         };
         let outcome = outcome

@@ -4,13 +4,14 @@
 
 use std::collections::HashMap;
 
+use crownos_config::consent_dialog::ConsentQuestion;
 use smithay::{desktop::LayerSurface, reexports::wayland_server::Resource};
 use tokio::sync::oneshot;
 
 use crate::{
     state::{ClientState, State},
     utils::{
-        consent_dialog::{ConsentAnswer, ConsentQuestion, DialogExit, wait_for_dialog},
+        consent_dialog::{ConsentOutcome, DialogExit, dialog_command, wait_for_dialog},
         consent_surface::consent_dialog_executable,
     },
 };
@@ -36,7 +37,7 @@ impl State {
     pub fn ask_consent(
         &mut self,
         question: ConsentQuestion,
-        on_answer: impl FnOnce(&mut State, u64, ConsentAnswer) + Send + 'static,
+        on_answer: impl FnOnce(&mut State, u64, ConsentOutcome) + Send + 'static,
     ) -> u64 {
         self.consent_dialogs.next_ticket += 1;
         let ticket = self.consent_dialogs.next_ticket;
@@ -44,27 +45,27 @@ impl State {
             tracing::warn!(target: AUDIT, "the consent dialog is not installed");
             self.common
                 .tasks
-                .deliver(move |state| on_answer(state, ticket, ConsentAnswer::Unavailable));
+                .deliver(move |state| on_answer(state, ticket, ConsentOutcome::Unavailable));
             return ticket;
         };
         let spawned = self
             .common
             .tasks
-            .spawn_process(&mut question.command(&executable));
+            .spawn_process(&mut dialog_command(&question, &executable));
         let child = match spawned {
             Ok(child) => child,
             Err(error) => {
                 tracing::warn!(target: AUDIT, %error, "cannot start the consent dialog");
                 self.common
                     .tasks
-                    .deliver(move |state| on_answer(state, ticket, ConsentAnswer::Unavailable));
+                    .deliver(move |state| on_answer(state, ticket, ConsentOutcome::Unavailable));
                 return ticket;
             }
         };
         let Some(pid) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
             self.common
                 .tasks
-                .deliver(move |state| on_answer(state, ticket, ConsentAnswer::Unavailable));
+                .deliver(move |state| on_answer(state, ticket, ConsentOutcome::Unavailable));
             return ticket;
         };
         let (withdraw, withdrawn) = oneshot::channel();
@@ -85,7 +86,7 @@ impl State {
         ticket
     }
 
-    /// Closes the dialog of `ticket`; its answer is [`ConsentAnswer::Withdrawn`].
+    /// Closes the dialog of `ticket`; its answer is [`ConsentOutcome::Withdrawn`].
     pub fn withdraw_consent(&mut self, ticket: u64) {
         if let Some(withdraw) = self
             .consent_dialogs
@@ -121,7 +122,7 @@ impl State {
         ticket: u64,
         question: &ConsentQuestion,
         exit: DialogExit,
-    ) -> ConsentAnswer {
+    ) -> ConsentOutcome {
         let shown = self
             .consent_dialogs
             .open
@@ -132,19 +133,22 @@ impl State {
 }
 
 /// The answer from what the dialog printed and whether it showed itself.
-fn decide(question: &ConsentQuestion, exit: DialogExit, shown: bool) -> ConsentAnswer {
+fn decide(question: &ConsentQuestion, exit: DialogExit, shown: bool) -> ConsentOutcome {
     match exit {
-        DialogExit::Exited(status) => match question.choice(status) {
-            Some(choice) if shown => ConsentAnswer::Chosen(choice),
-            Some(_) => {
-                tracing::warn!(target: AUDIT, "a dialog answered without showing itself");
-                ConsentAnswer::Unavailable
+        DialogExit::Exited(status) => match question.answer(status) {
+            Ok(answer) if answer.granted && !shown => {
+                tracing::warn!(target: AUDIT, "a dialog allowed without showing itself");
+                ConsentOutcome::Unavailable
             }
-            None => ConsentAnswer::Declined,
+            Ok(answer) => ConsentOutcome::Answered(answer),
+            Err(not_asked) => {
+                tracing::warn!(target: AUDIT, %not_asked, "the consent dialog asked nobody");
+                ConsentOutcome::Unavailable
+            }
         },
-        DialogExit::Failed => ConsentAnswer::Unavailable,
-        DialogExit::TimedOut => ConsentAnswer::TimedOut,
-        DialogExit::Withdrawn => ConsentAnswer::Withdrawn,
+        DialogExit::Failed => ConsentOutcome::Unavailable,
+        DialogExit::TimedOut => ConsentOutcome::TimedOut,
+        DialogExit::Withdrawn => ConsentOutcome::Withdrawn,
     }
 }
 
@@ -157,29 +161,33 @@ mod tests {
             dangerous: true,
             title: String::new(),
             message: String::new(),
-            decline: "Deny",
-            choices: vec![("grant", "Allow")],
+            grant: "Allow".into(),
+            deny: "Deny".into(),
+            options: Vec::new(),
         }
     }
 
     #[test]
     fn an_allow_counts_only_from_a_dialog_that_showed_itself() {
-        let printed = || DialogExit::Exited(Some(16));
+        let allowed = || DialogExit::Exited(Some(16));
+        assert!(decide(&question(), allowed(), true).granted());
         assert_eq!(
-            decide(&question(), printed(), true),
-            ConsentAnswer::Chosen("grant")
+            decide(&question(), allowed(), false),
+            ConsentOutcome::Unavailable
         );
-        assert_eq!(
-            decide(&question(), printed(), false),
-            ConsentAnswer::Unavailable
-        );
-        assert_eq!(
+        let denied = decide(&question(), DialogExit::Exited(Some(17)), false);
+        assert!(matches!(denied, ConsentOutcome::Answered(ref answer) if !answer.granted));
+        assert!(matches!(
             decide(&question(), DialogExit::Exited(Some(1)), true),
-            ConsentAnswer::Declined
+            ConsentOutcome::Answered(_)
+        ));
+        assert_eq!(
+            decide(&question(), DialogExit::Exited(Some(2)), true),
+            ConsentOutcome::Unavailable
         );
         assert_eq!(
             decide(&question(), DialogExit::TimedOut, true),
-            ConsentAnswer::TimedOut
+            ConsentOutcome::TimedOut
         );
     }
 }

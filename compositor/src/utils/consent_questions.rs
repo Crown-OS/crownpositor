@@ -1,15 +1,10 @@
-//! The wording of each consent question, and what each button means.
+//! The wording of each consent question, and what its answer means.
 
-use super::consent_dialog::{ConsentAnswer, ConsentQuestion};
+use crownos_config::consent_dialog::{ConsentOption, ConsentQuestion};
 
-const ALLOW: &str = "allow";
-const ALLOW_ALWAYS: &str = "allow-always";
-const DENY_ALWAYS: &str = "deny-always";
-const WINDOW_LIST: &str = "metadata";
-const WINDOW_LIST_ALWAYS: &str = "metadata-always";
-const TITLES: &str = "text";
-const TITLES_ALWAYS: &str = "text-always";
-const TYPE_SECRET: &str = "grant";
+use super::consent_dialog::ConsentOutcome;
+
+const REMEMBER: &str = "Remember this choice";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccessAnswer {
@@ -51,29 +46,30 @@ pub fn agent_access_question(app_id: &str, reason: &str) -> ConsentQuestion {
             "{reason}\n\nAgents will see everything in the app and can click and type in it. \
              You can take this back any time in Settings."
         ),
-        decline: "Don't Allow",
-        choices: vec![
-            (ALLOW, "Allow"),
-            (ALLOW_ALWAYS, "Always Allow"),
-            (DENY_ALWAYS, "Never Allow"),
-        ],
+        grant: "Allow".into(),
+        deny: "Don't Allow".into(),
+        options: vec![ConsentOption::Checkbox {
+            label: REMEMBER.into(),
+            initially_on: false,
+        }],
     }
 }
 
 /// `Err` when nobody could be asked.
-pub fn access_answer(answer: &ConsentAnswer) -> Result<AccessAnswer, String> {
-    let (granted, remember) = match answer {
-        ConsentAnswer::Chosen(ALLOW) => (true, false),
-        ConsentAnswer::Chosen(ALLOW_ALWAYS) => (true, true),
-        ConsentAnswer::Chosen(DENY_ALWAYS) => (false, true),
-        ConsentAnswer::Chosen(_) | ConsentAnswer::Declined | ConsentAnswer::TimedOut => {
-            (false, false)
+pub fn access_answer(outcome: &ConsentOutcome) -> Result<AccessAnswer, String> {
+    match outcome {
+        ConsentOutcome::Answered(answer) => Ok(AccessAnswer {
+            granted: answer.granted,
+            remember: answer.checked(0),
+        }),
+        ConsentOutcome::TimedOut => Ok(AccessAnswer {
+            granted: false,
+            remember: false,
+        }),
+        ConsentOutcome::Withdrawn | ConsentOutcome::Unavailable => {
+            Err("no consent dialog could ask".to_owned())
         }
-        ConsentAnswer::Withdrawn | ConsentAnswer::Unavailable => {
-            return Err("no consent dialog could ask".to_owned());
-        }
-    };
-    Ok(AccessAnswer { granted, remember })
+    }
 }
 
 pub fn context_access_question(app_name: &str, app_key: &str) -> ConsentQuestion {
@@ -84,37 +80,39 @@ pub fn context_access_question(app_name: &str, app_key: &str) -> ConsentQuestion
             "{app_key} asks to know which windows are open and which one you use. \
              It never sees the contents of a window. You can take this back any time in Settings."
         ),
-        decline: "Don't Allow",
-        choices: vec![
-            (WINDOW_LIST, "Allow Window List"),
-            (TITLES, "Allow Window List and Titles"),
-            (WINDOW_LIST_ALWAYS, "Always Allow Window List"),
-            (TITLES_ALWAYS, "Always Allow Window List and Titles"),
-            (DENY_ALWAYS, "Never Allow"),
+        grant: "Allow".into(),
+        deny: "Don't Allow".into(),
+        options: vec![
+            ConsentOption::Checkbox {
+                label: REMEMBER.into(),
+                initially_on: false,
+            },
+            ConsentOption::List {
+                label: "The app may see".into(),
+                items: vec!["Window list".into(), "Window list and titles".into()],
+                initial: 0,
+            },
         ],
     }
 }
 
 /// `Err` when nobody could be asked.
-pub fn context_answer(answer: &ConsentAnswer) -> Result<ContextAnswer, String> {
-    let (granted, remember, titles) = match answer {
-        ConsentAnswer::Chosen(WINDOW_LIST) => (true, false, false),
-        ConsentAnswer::Chosen(TITLES) => (true, false, true),
-        ConsentAnswer::Chosen(WINDOW_LIST_ALWAYS) => (true, true, false),
-        ConsentAnswer::Chosen(TITLES_ALWAYS) => (true, true, true),
-        ConsentAnswer::Chosen(DENY_ALWAYS) => (false, true, false),
-        ConsentAnswer::Chosen(_) | ConsentAnswer::Declined | ConsentAnswer::TimedOut => {
-            (false, false, false)
+pub fn context_answer(outcome: &ConsentOutcome) -> Result<ContextAnswer, String> {
+    match outcome {
+        ConsentOutcome::Answered(answer) => Ok(ContextAnswer {
+            granted: answer.granted,
+            remember: answer.checked(0),
+            titles: answer.chosen(1) == Some(1),
+        }),
+        ConsentOutcome::TimedOut => Ok(ContextAnswer {
+            granted: false,
+            remember: false,
+            titles: false,
+        }),
+        ConsentOutcome::Withdrawn | ConsentOutcome::Unavailable => {
+            Err("no consent dialog could ask".to_owned())
         }
-        ConsentAnswer::Withdrawn | ConsentAnswer::Unavailable => {
-            return Err("no consent dialog could ask".to_owned());
-        }
-    };
-    Ok(ContextAnswer {
-        granted,
-        remember,
-        titles,
-    })
+    }
 }
 
 pub fn secret_typing_question(prompt: &SecretTypingPrompt) -> ConsentQuestion {
@@ -137,8 +135,9 @@ pub fn secret_typing_question(prompt: &SecretTypingPrompt) -> ConsentQuestion {
              The agent does not see the value. Allow only if you asked the agent to sign in here.",
             prompt.agent, prompt.secret_names, prompt.app_name, prompt.app_key, prompt.window_title
         ),
-        decline: "Deny",
-        choices: vec![(TYPE_SECRET, "Allow")],
+        grant: "Allow".into(),
+        deny: "Deny".into(),
+        options: Vec::new(),
     }
 }
 
@@ -166,86 +165,74 @@ pub fn secret_use_question(prompt: &SecretUsePrompt) -> ConsentQuestion {
              The agent does not see the values.",
             prompt.agent_app_key, prompt.detail
         ),
-        decline: "Deny",
-        choices: vec![(TYPE_SECRET, "Allow")],
+        grant: "Allow".into(),
+        deny: "Deny".into(),
+        options: Vec::new(),
     }
 }
 
 /// Whether the user allowed the typing or the use.
-pub fn typing_allowed(answer: &ConsentAnswer) -> bool {
-    *answer == ConsentAnswer::Chosen(TYPE_SECRET)
+pub fn typing_allowed(outcome: &ConsentOutcome) -> bool {
+    outcome.granted()
 }
 
 #[cfg(test)]
 mod tests {
+    use crownos_config::consent_dialog::DialogAnswer;
+
     use super::*;
 
-    #[test]
-    fn every_context_choice_keeps_remember_and_titles_apart() {
-        let question = context_access_question("Contextd", "exe:/usr/bin/crown-contextd");
-        let answers: Vec<_> = question
-            .choices
-            .iter()
-            .map(|(id, _)| context_answer(&ConsentAnswer::Chosen(id)))
-            .collect();
-        assert_eq!(
-            answers,
-            [
-                Ok(ContextAnswer {
-                    granted: true,
-                    remember: false,
-                    titles: false
-                }),
-                Ok(ContextAnswer {
-                    granted: true,
-                    remember: false,
-                    titles: true
-                }),
-                Ok(ContextAnswer {
-                    granted: true,
-                    remember: true,
-                    titles: false
-                }),
-                Ok(ContextAnswer {
-                    granted: true,
-                    remember: true,
-                    titles: true
-                }),
-                Ok(ContextAnswer {
-                    granted: false,
-                    remember: true,
-                    titles: false
-                }),
-            ]
-        );
-        assert!(context_answer(&ConsentAnswer::Unavailable).is_err());
-        assert_eq!(
-            context_answer(&ConsentAnswer::TimedOut),
-            Ok(ContextAnswer {
-                granted: false,
-                remember: false,
-                titles: false
-            })
-        );
+    fn answered(question: &ConsentQuestion, choice: usize, values: Vec<usize>) -> ConsentOutcome {
+        let status = question.shape().encode(&DialogAnswer {
+            choice,
+            option_values: values,
+        });
+        question
+            .answer(status.map(i32::from))
+            .map_or(ConsentOutcome::Unavailable, ConsentOutcome::Answered)
     }
 
     #[test]
-    fn agent_access_choices_map_to_grant_and_remember() {
+    fn every_context_answer_keeps_remember_and_titles_apart() {
+        let question = context_access_question("Contextd", "exe:/usr/bin/crown-contextd");
+        let cases = [
+            ((0, vec![0, 0]), (true, false, false)),
+            ((0, vec![0, 1]), (true, false, true)),
+            ((0, vec![1, 0]), (true, true, false)),
+            ((0, vec![1, 1]), (true, true, true)),
+            ((1, vec![1, 0]), (false, true, false)),
+        ];
+        for ((choice, values), (granted, remember, titles)) in cases {
+            assert_eq!(
+                context_answer(&answered(&question, choice, values)),
+                Ok(ContextAnswer {
+                    granted,
+                    remember,
+                    titles
+                })
+            );
+        }
+        assert!(context_answer(&ConsentOutcome::Unavailable).is_err());
+    }
+
+    #[test]
+    fn agent_access_keeps_remember_on_a_deny() {
+        let question = agent_access_question("org.example.App", "");
         assert_eq!(
-            access_answer(&ConsentAnswer::Chosen(ALLOW_ALWAYS)),
+            access_answer(&answered(&question, 1, vec![1])),
             Ok(AccessAnswer {
-                granted: true,
+                granted: false,
                 remember: true
             })
         );
         assert_eq!(
-            access_answer(&ConsentAnswer::Declined),
+            access_answer(&answered(&question, 0, vec![0])),
             Ok(AccessAnswer {
-                granted: false,
+                granted: true,
                 remember: false
             })
         );
-        assert!(access_answer(&ConsentAnswer::Withdrawn).is_err());
+        assert!(access_answer(&ConsentOutcome::Withdrawn).is_err());
     }
 
     #[test]
@@ -260,7 +247,7 @@ mod tests {
         });
         assert!(question.message.contains("exe:/usr/lib/chromium/chromium"));
         assert!(question.message.contains("via crownos-secretsd"));
-        assert!(typing_allowed(&ConsentAnswer::Chosen(TYPE_SECRET)));
-        assert!(!typing_allowed(&ConsentAnswer::Declined));
+        assert!(typing_allowed(&answered(&question, 0, Vec::new())));
+        assert!(!typing_allowed(&answered(&question, 1, Vec::new())));
     }
 }

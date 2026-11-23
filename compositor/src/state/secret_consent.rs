@@ -7,7 +7,7 @@ use protocols::crownos_secret_input::{ConsentAction, SecretConsentQuestion};
 use crate::{
     state::{State, secret_typing::display_text},
     utils::{
-        consent_dialog::ConsentAnswer,
+        consent_dialog::ConsentOutcome,
         consent_questions::{SecretUsePrompt, secret_use_question, typing_allowed},
     },
 };
@@ -48,7 +48,7 @@ impl State {
         self.withdraw_consent(ticket);
     }
 
-    fn answer_secret_consent(&mut self, ticket: u64, answer: &ConsentAnswer) {
+    fn answer_secret_consent(&mut self, ticket: u64, answer: &ConsentOutcome) {
         let Some(index) = self
             .secret_consents
             .open
