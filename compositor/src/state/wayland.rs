@@ -99,7 +99,7 @@ use crate::{
     utils::{
         id::OutputId,
         privilege::{
-            TrustedExecutables, is_media_engine, is_privileged, is_trusted_agent,
+            TrustedExecutables, has_app_key, is_media_engine, is_privileged, is_trusted_agent,
             trusted_executables,
         },
     },
@@ -294,7 +294,7 @@ impl WaylandState {
             ),
             agent_cursor_state: AgentCursorState::new::<State, _>(display, agent_filter.clone()),
             guest_seat_state: GuestSeatState::new::<State, _>(display, is_media_engine),
-            context_state: ContextState::new::<State, _>(display, agent_filter),
+            context_state: ContextState::new::<State, _>(display, has_app_key),
             capture_privacy_state: CapturePrivacyState::new::<State>(display),
             agent_access_policy: AgentAccessPolicy::from_env(),
             plugin_host_state: PluginHostState::new::<State, _>(display, is_privileged),

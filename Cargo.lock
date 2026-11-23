@@ -399,6 +399,7 @@ dependencies = [
  "depthcut",
  "futures-util",
  "getrandom 0.3.4",
+ "libc",
  "lockscreen",
  "parking_lot",
  "protocols",
@@ -553,6 +554,7 @@ dependencies = [
 name = "crownos-ipc"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "log",
  "postcard",
  "rustix 1.1.4",

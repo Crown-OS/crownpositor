@@ -17,7 +17,13 @@ const PATH: &str = "/org/freedesktop/portal/desktop";
 const INTERFACE: &str = "org.freedesktop.impl.portal.Access";
 const SERVICE_UNKNOWN: &str = "org.freedesktop.DBus.Error.ServiceUnknown";
 const REMEMBER: &str = "remember";
+const CONTEXT_SCOPE: &str = "scope";
+const METADATA: &str = "metadata";
+const TEXT: &str = "text";
 const GRANTED: u32 = 0;
+
+/// One `a(ssa(ss)s)` entry of the `choices` option: id, label, items, initial.
+type Choice<'a> = (&'a str, &'a str, Vec<(&'a str, &'a str)>, &'a str);
 
 /// An application asking to show its UI to agents.
 #[derive(Debug, Clone)]
@@ -33,28 +39,111 @@ pub struct AccessAnswer {
     pub remember: bool,
 }
 
+/// An application asking for screen context for the first time.
+#[derive(Debug, Clone)]
+pub struct ContextPrompt {
+    pub ticket: u64,
+    /// The name the user knows the app by.
+    pub app_name: String,
+    /// The `AppKey` text, for the portal's records.
+    pub app_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextAnswer {
+    pub granted: bool,
+    pub remember: bool,
+    /// The user also allowed window titles.
+    pub titles: bool,
+}
+
+/// One question for the Access portal.
+struct AccessDialog<'a> {
+    ticket: u64,
+    app_id: &'a str,
+    title: &'a str,
+    subtitle: &'a str,
+    body: &'a str,
+    choices: Vec<Choice<'a>>,
+}
+
+/// Whether the user granted, with the answers to the choices.
+struct DialogAnswer {
+    granted: bool,
+    choices: Vec<(String, String)>,
+}
+
+impl DialogAnswer {
+    fn choice(&self, id: &str) -> Option<&str> {
+        self.choices
+            .iter()
+            .find(|(choice, _)| choice == id)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
 pub async fn ask_agent_access(prompt: AccessPrompt) -> Result<AccessAnswer, String> {
-    let connection = Connection::session()
-        .await
-        .map_err(|error| error.to_string())?;
-    let handle = ObjectPath::try_from(format!("/org/crownos/portal/request/{}", prompt.ticket))
-        .map_err(|error| error.to_string())?;
     let title = format!("Let AI agents use {}?", prompt.app_id);
     let subtitle = if prompt.reason.is_empty() {
         "The app asks to show its interface to AI agents.".to_owned()
     } else {
         prompt.reason.clone()
     };
-    let body = "Agents will see everything in the app and can click and type in it. \
-                You can take this back any time in Settings.";
-    let choices: Vec<(&str, &str, Vec<(&str, &str)>, &str)> =
-        vec![(REMEMBER, "Remember this choice", Vec::new(), "false")];
+    let answer = ask(AccessDialog {
+        ticket: prompt.ticket,
+        app_id: &prompt.app_id,
+        title: &title,
+        subtitle: &subtitle,
+        body: "Agents will see everything in the app and can click and type in it. \
+               You can take this back any time in Settings.",
+        choices: vec![(REMEMBER, "Remember this choice", Vec::new(), "false")],
+    })
+    .await?;
+    Ok(AccessAnswer {
+        granted: answer.granted,
+        remember: answer.choice(REMEMBER) == Some("true"),
+    })
+}
+
+pub async fn ask_context_access(prompt: ContextPrompt) -> Result<ContextAnswer, String> {
+    let title = format!("Let {} see what you do?", prompt.app_name);
+    let answer = ask(AccessDialog {
+        ticket: prompt.ticket,
+        app_id: &prompt.app_key,
+        title: &title,
+        subtitle: "The app asks to know which windows are open and which one you use.",
+        body: "It never sees the contents of a window. \
+               You can take this back any time in Settings.",
+        choices: vec![
+            (REMEMBER, "Remember this choice", Vec::new(), "false"),
+            (
+                CONTEXT_SCOPE,
+                "The app may see",
+                vec![(METADATA, "Window list"), (TEXT, "Window list and titles")],
+                METADATA,
+            ),
+        ],
+    })
+    .await?;
+    Ok(ContextAnswer {
+        granted: answer.granted,
+        remember: answer.choice(REMEMBER) == Some("true"),
+        titles: answer.choice(CONTEXT_SCOPE) == Some(TEXT),
+    })
+}
+
+async fn ask(dialog: AccessDialog<'_>) -> Result<DialogAnswer, String> {
+    let connection = Connection::session()
+        .await
+        .map_err(|error| error.to_string())?;
+    let handle = ObjectPath::try_from(format!("/org/crownos/portal/request/{}", dialog.ticket))
+        .map_err(|error| error.to_string())?;
     let mut options: HashMap<&str, Value<'_>> = HashMap::new();
     options.insert("modal", true.into());
     options.insert("grant_label", "Allow".into());
     options.insert("deny_label", "Don't allow".into());
     options.insert("icon", "dialog-password-symbolic".into());
-    options.insert("choices", Value::new(choices));
+    options.insert("choices", Value::new(dialog.choices));
     for backend in BACKENDS {
         let reply = connection
             .call_method(
@@ -64,11 +153,11 @@ pub async fn ask_agent_access(prompt: AccessPrompt) -> Result<AccessAnswer, Stri
                 "AccessDialog",
                 &(
                     &handle,
-                    prompt.app_id.as_str(),
+                    dialog.app_id,
                     "",
-                    title.as_str(),
-                    subtitle.as_str(),
-                    body,
+                    dialog.title,
+                    dialog.subtitle,
+                    dialog.body,
                     &options,
                 ),
             )
@@ -79,17 +168,13 @@ pub async fn ask_agent_access(prompt: AccessPrompt) -> Result<AccessAnswer, Stri
                     .body()
                     .deserialize()
                     .map_err(|error| error.to_string())?;
-                let remember = results
+                let choices = results
                     .get("choices")
                     .and_then(|choices| <Vec<(String, String)>>::try_from(choices.clone()).ok())
-                    .is_some_and(|choices| {
-                        choices
-                            .iter()
-                            .any(|(id, value)| id == REMEMBER && value == "true")
-                    });
-                return Ok(AccessAnswer {
+                    .unwrap_or_default();
+                return Ok(DialogAnswer {
                     granted: response == GRANTED,
-                    remember,
+                    choices,
                 });
             }
             Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == SERVICE_UNKNOWN => {}

@@ -11,6 +11,7 @@ use config::{Config, Update};
 use protocols::{
     background_effect::Capability as BackgroundEffectCapability,
     crownos_background_effects::Capability as CrownosEffectCapability,
+    crownos_context::RevokeReason,
 };
 
 use spacecontrol::animations::spring::SpringProfile;
@@ -314,6 +315,7 @@ impl State {
             self.queue_pointer_redraw();
         }
         self.config.current = new;
+        self.rescope_context_clients(RevokeReason::User);
         self.reapply_window_rules();
         self.apply_output_settings();
         self.refresh_output_heads();
@@ -433,6 +435,11 @@ impl State {
                     *trusted = trusted_executables(&agents.trusted_executables);
                 }
                 config.agents = *agents;
+                self.rescope_context_clients(RevokeReason::User);
+            }
+            Update::ContextAccess(access) => {
+                config.context_access = *access;
+                self.rescope_context_clients(RevokeReason::User);
             }
             Update::VisualContext(rules) => {
                 self.windows.set_rules(&rules);

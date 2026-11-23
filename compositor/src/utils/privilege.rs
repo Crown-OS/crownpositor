@@ -18,6 +18,14 @@ pub fn is_privileged(client: &Client) -> bool {
         .is_some_and(|state| state.security_context.is_none())
 }
 
+/// Whether the client can be named for `context_access.ron`. The context
+/// global is shown only to such clients; the grant decides at bind.
+pub fn has_app_key(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .is_some_and(|state| state.app_key.is_some())
+}
+
 /// Whether the client is one of the programs `agents.ron` trusts to drive the
 /// desktop: its executable, read when it connected, is in `trusted`.
 pub fn is_trusted_agent(client: &Client, trusted: &TrustedExecutables) -> bool {

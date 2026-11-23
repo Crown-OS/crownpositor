@@ -4,8 +4,6 @@
 
 use std::{collections::HashMap, ffi::OsStr};
 
-use protocols::crownos_agent_access::AgentAccessRequest;
-
 /// Read once at startup. `allow` and `deny` answer everything without asking;
 /// anything else leaves the decision to the config and the user.
 const POLICY_VARIABLE: &str = "CROWNOS_AGENT_ACCESS";
@@ -35,29 +33,36 @@ impl AgentAccessPolicy {
 
 /// Requests parked while the user is being asked, by the ticket the portal
 /// request was made under.
-#[derive(Debug, Default)]
-pub struct PendingPrompts {
+#[derive(Debug)]
+pub struct PendingPrompts<Request> {
     next_ticket: u64,
-    waiting: HashMap<u64, AgentAccessRequest>,
+    waiting: HashMap<u64, Request>,
 }
 
-impl PendingPrompts {
-    pub fn park(&mut self, request: AgentAccessRequest) -> u64 {
+impl<Request> Default for PendingPrompts<Request> {
+    fn default() -> Self {
+        Self {
+            next_ticket: 0,
+            waiting: HashMap::new(),
+        }
+    }
+}
+
+impl<Request> PendingPrompts<Request> {
+    pub fn park(&mut self, request: Request) -> u64 {
         self.next_ticket += 1;
         self.waiting.insert(self.next_ticket, request);
         self.next_ticket
     }
 
-    pub fn take(&mut self, ticket: u64) -> Option<AgentAccessRequest> {
+    pub fn take(&mut self, ticket: u64) -> Option<Request> {
         self.waiting.remove(&ticket)
     }
 
-    /// Whether `app_id` is already being asked about, so one dialog serves
-    /// every request the app makes meanwhile.
-    pub fn is_asking(&self, app_id: &str) -> bool {
-        self.waiting
-            .values()
-            .any(|request| request.app_id() == app_id)
+    /// Whether a matching request is already being asked about, so one
+    /// dialog serves every request meanwhile.
+    pub fn is_asking(&self, matches: impl Fn(&Request) -> bool) -> bool {
+        self.waiting.values().any(matches)
     }
 }
 
