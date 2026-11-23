@@ -77,6 +77,7 @@ use protocols::{
     crownos_output_info::OutputInfoState,
     crownos_plugin_host::PluginHostState,
     crownos_screencast::ScreencastState,
+    crownos_secret_input::SecretInputState,
     crownos_surface_animation::SurfaceAnimationState,
     crownos_surface_visibility::SurfaceVisibilityState,
     crownos_virtual_output::VirtualOutputState,
@@ -102,6 +103,7 @@ use crate::{
             ContextGrants, TrustedExecutables, has_app_key, is_media_engine, is_privileged,
             may_drive_agents, trusted_executables,
         },
+        secrets_daemon::is_secrets_daemon,
     },
 };
 use crownos_config::schema::{Agents, Input, Scope as GrantScope};
@@ -111,6 +113,8 @@ pub struct WaylandState {
     /// `crownos_agent_access_v1`. Privileged: a grant lets an app hand its
     /// whole UI to an AI agent.
     pub agent_access_state: AgentAccessState,
+    /// `crownos_secret_input_v1`, for crownos-secretsd only.
+    pub secret_input_state: SecretInputState,
     /// Who answers `crownos_agent_access_v1` requests.
     pub agent_access_policy: AgentAccessPolicy,
     /// `crownos_plugin_host_v1`. Privileged: crownplugind's lock scene and
@@ -245,6 +249,8 @@ pub struct WaylandState {
     /// `zwp_text_input_v3`, the client half of IME. Chromium binds it by
     /// default.
     pub text_input_state: TextInputManagerState,
+    /// The content purpose of each text input, which smithay does not keep.
+    pub text_input_purposes: crate::state::text_input_purposes::TextInputPurposes,
     /// `zwp_input_method_v2`. Privileged: an input method sees every
     /// keystroke while it is active.
     pub input_method_state: InputMethodManagerState,
@@ -304,6 +310,7 @@ impl WaylandState {
             context_state: ContextState::new::<State, _>(display, has_app_key),
             capture_privacy_state: CapturePrivacyState::new::<State>(display),
             agent_access_policy: AgentAccessPolicy::from_env(),
+            secret_input_state: SecretInputState::new::<State, _>(display, is_secrets_daemon),
             plugin_host_state: PluginHostState::new::<State, _>(display, is_privileged),
             // Everything the renderer can do, which the config then narrows
             // to what it will do — see
@@ -404,6 +411,7 @@ impl WaylandState {
             xdg_foreign_state: XdgForeignState::new::<State>(display),
             fixes_state: FixesState::new::<State>(display),
             text_input_state: TextInputManagerState::new::<State>(display),
+            text_input_purposes: Default::default(),
             input_method_state: InputMethodManagerState::new::<State, _>(display, is_privileged),
             virtual_keyboard_state: VirtualKeyboardManagerState::new::<State, _>(
                 display,

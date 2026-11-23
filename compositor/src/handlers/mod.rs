@@ -14,6 +14,7 @@ mod crownos_input;
 mod crownos_output_brightness;
 mod crownos_output_info;
 mod crownos_screencast;
+mod crownos_secret_input;
 mod crownos_surface_animation;
 mod crownos_surface_visibility;
 mod crownos_virtual_output;

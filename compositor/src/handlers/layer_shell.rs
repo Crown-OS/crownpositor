@@ -60,6 +60,9 @@ impl WlrLayerShellHandler for State {
             return;
         }
 
+        if is_consent_layer(&layer) {
+            self.consent_layer_mapped(&layer);
+        }
         self.shell.track_layer(wl_surface, &output);
         self.shell.refresh_usable(&output);
     }

@@ -149,7 +149,7 @@ impl State {
 
     /// Whether anyone needs the window directory this iteration: a protocol client, a plugin
     /// watching windows, or a window capture whose sensitivity has to be known.
-    fn windows_are_watched(&self) -> bool {
+    pub(crate) fn windows_are_watched(&self) -> bool {
         self.wayland.window_control_state.has_watchers()
             || self.wayland.context_state.is_bound()
             || self.wayland.plugin_host_state.watching() & WATCH_WINDOWS != 0

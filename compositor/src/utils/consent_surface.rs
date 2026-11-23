@@ -7,7 +7,10 @@
 //! change. While one is mapped it is the only overlay drawn and hit, so no
 //! other overlay can cover it.
 
-use std::{path::Path, sync::LazyLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
 use crownos_config::schema::AppKey;
 use smithay::{
@@ -17,7 +20,10 @@ use smithay::{
     wayland::shell::wlr_layer::Layer,
 };
 
-use crate::{handlers::seat::PointerFocusTarget, state::ClientState};
+use crate::{
+    handlers::seat::PointerFocusTarget, state::ClientState,
+    utils::development_override::development_path,
+};
 
 /// The layer-shell namespace of `crownos-portal-dialog`.
 pub const PORTAL_DIALOG_NAMESPACE: &str = "crownos-portal-dialog";
@@ -27,15 +33,9 @@ const PORTAL_DIALOG_EXECUTABLE: &str = "/usr/lib/crownos-portal-dialog";
 /// Read once from the compositor's own environment, and honoured only in a
 /// debug build or a nested session.
 const DIALOG_OVERRIDE: &str = "CROWN_CONSENT_DIALOG";
-const BACKEND_VARIABLE: &str = "CROWN_BACKEND";
-const NESTED_BACKEND: &str = "winit";
 
-static DEVELOPMENT_DIALOG: LazyLock<Option<std::path::PathBuf>> = LazyLock::new(|| {
-    let nested = std::env::var(BACKEND_VARIABLE).is_ok_and(|backend| backend == NESTED_BACKEND);
-    (cfg!(debug_assertions) || nested)
-        .then(|| std::env::var_os(DIALOG_OVERRIDE).map(std::path::PathBuf::from))
-        .flatten()
-});
+static DEVELOPMENT_DIALOG: LazyLock<Option<PathBuf>> =
+    LazyLock::new(|| development_path(DIALOG_OVERRIDE));
 
 /// Warns when the installed dialog is missing: no window then counts as a
 /// consent dialog, so synthetic input is not kept from the question.
@@ -53,6 +53,7 @@ pub fn is_consent_layer(layer: &LayerSurface) -> bool {
         && layer.wl_surface().client().is_some_and(|client| {
             client
                 .get_data::<ClientState>()
+                .filter(|state| !state.is_preloaded())
                 .and_then(ClientState::verified_executable)
                 .is_some_and(is_consent_executable)
         })
@@ -87,6 +88,16 @@ pub fn shows_consent_dialog(output: &Output) -> bool {
     smithay::desktop::layer_map_for_output(output)
         .layers()
         .any(is_consent_layer)
+}
+
+/// The dialog to start for a consent question: the development build the
+/// compositor was started with, or the installed one while root controls it.
+pub fn consent_dialog_executable() -> Option<PathBuf> {
+    if let Some(development) = DEVELOPMENT_DIALOG.as_deref() {
+        return Some(development.to_path_buf());
+    }
+    let installed = Path::new(PORTAL_DIALOG_EXECUTABLE);
+    (installed.is_file() && is_consent_executable(installed)).then(|| installed.to_path_buf())
 }
 
 /// Whether `layer` of kind `kind` is left out while `map` holds a consent
