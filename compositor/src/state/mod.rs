@@ -99,6 +99,8 @@ pub struct State {
         agent_access::PendingPrompts<protocols::crownos_agent_access::AgentAccessRequest>,
     /// Apps asking for screen context while the user is asked, by key.
     pub context_prompts: agent_access::PendingPrompts<crownos_config::schema::AppKey>,
+    /// Clients the user allowed without remembering the answer.
+    pub context_answered: std::collections::HashSet<wayland_server::backend::ClientId>,
     /// The seats behind `crownos_agent_cursor_v1`, one per agent.
     pub agent_seats: agent_seats::AgentSeats,
     /// The seats behind `crownos_guest_seat_v1`, one per remote desktop guest.
@@ -219,6 +221,7 @@ impl State {
             windows: windows::WindowDirectory::new(&visual_context_rules),
             agent_prompts: agent_access::PendingPrompts::default(),
             context_prompts: agent_access::PendingPrompts::default(),
+            context_answered: std::collections::HashSet::new(),
             agent_seats: agent_seats::AgentSeats::default(),
             guest_seats: guest_seats::GuestSeats::default(),
         };

@@ -59,7 +59,8 @@ pub struct ContextAnswer {
 
 /// One question for the Access portal.
 struct AccessDialog<'a> {
-    ticket: u64,
+    /// The object path of the portal request, unique among open dialogs.
+    request_path: String,
     app_id: &'a str,
     title: &'a str,
     subtitle: &'a str,
@@ -90,7 +91,7 @@ pub async fn ask_agent_access(prompt: AccessPrompt) -> Result<AccessAnswer, Stri
         prompt.reason.clone()
     };
     let answer = ask(AccessDialog {
-        ticket: prompt.ticket,
+        request_path: format!("/org/crownos/portal/request/agent/{}", prompt.ticket),
         app_id: &prompt.app_id,
         title: &title,
         subtitle: &subtitle,
@@ -107,11 +108,15 @@ pub async fn ask_agent_access(prompt: AccessPrompt) -> Result<AccessAnswer, Stri
 
 pub async fn ask_context_access(prompt: ContextPrompt) -> Result<ContextAnswer, String> {
     let title = format!("Let {} see what you do?", prompt.app_name);
+    let subtitle = format!(
+        "{} asks to know which windows are open and which one you use.",
+        prompt.app_key
+    );
     let answer = ask(AccessDialog {
-        ticket: prompt.ticket,
+        request_path: format!("/org/crownos/portal/request/context/{}", prompt.ticket),
         app_id: &prompt.app_key,
         title: &title,
-        subtitle: "The app asks to know which windows are open and which one you use.",
+        subtitle: &subtitle,
         body: "It never sees the contents of a window. \
                You can take this back any time in Settings.",
         choices: vec![
@@ -136,8 +141,8 @@ async fn ask(dialog: AccessDialog<'_>) -> Result<DialogAnswer, String> {
     let connection = Connection::session()
         .await
         .map_err(|error| error.to_string())?;
-    let handle = ObjectPath::try_from(format!("/org/crownos/portal/request/{}", dialog.ticket))
-        .map_err(|error| error.to_string())?;
+    let handle =
+        ObjectPath::try_from(dialog.request_path.as_str()).map_err(|error| error.to_string())?;
     let mut options: HashMap<&str, Value<'_>> = HashMap::new();
     options.insert("modal", true.into());
     options.insert("grant_label", "Allow".into());

@@ -57,6 +57,22 @@ pub fn protocol_scope(scopes: ScopeSet) -> Scope {
     .fold(Scope::empty(), |scope, (_, bit)| scope | bit)
 }
 
+/// What a new decision does to a bound client, or `None` to leave it as it
+/// is. Only a client that waits for the user, or that the user allowed
+/// without remembering, keeps its state when the file says ask: any other
+/// client lost the grant its scope came from.
+fn next_scope(
+    decision: Option<ContextDecision>,
+    waiting: bool,
+    answered_without_remembering: bool,
+) -> Option<Option<Scope>> {
+    match decision {
+        Some(ContextDecision::Granted(scopes)) => Some(Some(protocol_scope(scopes))),
+        Some(ContextDecision::Ask) if waiting || answered_without_remembering => None,
+        Some(ContextDecision::Ask | ContextDecision::Denied) | None => Some(None),
+    }
+}
+
 fn app_key_of(client: &Client) -> Option<AppKey> {
     client
         .get_data::<ClientState>()
@@ -156,6 +172,9 @@ impl State {
         }
         let scope = answer.granted.then(|| protocol_scope(scopes));
         for client in self.clients_with_key(&key) {
+            if answer.granted && !answer.remember {
+                self.context_answered.insert(client.clone());
+            }
             let display = self.common.display_handle.clone();
             self.wayland.context_state.set_scope::<State>(
                 &display,
@@ -203,16 +222,19 @@ impl State {
     pub fn rescope_context_clients(&mut self, reason: RevokeReason) {
         let display = self.common.display_handle.clone();
         let now = SystemTime::now();
-        for client in self.wayland.context_state.clients() {
+        let clients = self.wayland.context_state.clients();
+        self.context_answered
+            .retain(|answered| clients.iter().any(|client| client.id() == *answered));
+        for client in clients {
             let id = client.id();
             let key = app_key_of(&client);
-            let scope = match key
+            let decision = key
                 .as_ref()
-                .map(|key| self.context_access().decide(key, now))
-            {
-                Some(ContextDecision::Granted(scopes)) => Some(protocol_scope(scopes)),
-                Some(ContextDecision::Ask) => continue,
-                Some(ContextDecision::Denied) | None => None,
+                .map(|key| self.context_access().decide(key, now));
+            let waiting = self.wayland.context_state.scope_of(&id).is_none();
+            let answered = self.context_answered.contains(&id);
+            let Some(scope) = next_scope(decision, waiting, answered) else {
+                continue;
             };
             let changed = self
                 .wayland
@@ -258,6 +280,36 @@ mod tests {
             protocol_scope(ScopeSet::EMPTY.with(GrantScope::Engine).with_included()),
             Scope::Metadata | Scope::Text | Scope::Raw | Scope::Engine | Scope::Pause
         );
+    }
+
+    #[test]
+    fn a_grant_that_ends_revokes_unless_the_client_waits_or_was_answered() {
+        let key = AppKey::Spawned {
+            component: "agent".to_owned(),
+        };
+        let mut access = ContextAccess::default();
+        access.grant(
+            &key,
+            ScopeSet::EMPTY.with(GrantScope::Metadata),
+            Expiry::At(100),
+        );
+        let at = |seconds| std::time::UNIX_EPOCH + Duration::from_secs(seconds);
+        let before = Some(access.decide(&key, at(99)));
+        let after = Some(access.decide(&key, at(100)));
+        assert_eq!(after, Some(ContextDecision::Ask));
+
+        assert_eq!(
+            next_scope(before, false, false),
+            Some(Some(Scope::Metadata))
+        );
+        assert_eq!(next_scope(after, false, false), Some(None));
+        assert_eq!(next_scope(after, true, false), None);
+        assert_eq!(next_scope(after, false, true), None);
+        assert_eq!(
+            next_scope(Some(ContextDecision::Denied), true, true),
+            Some(None)
+        );
+        assert_eq!(next_scope(None, false, false), Some(None));
     }
 
     #[test]

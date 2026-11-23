@@ -10,7 +10,7 @@ use crate::handlers::seat::PointerFocusTarget;
 pub const PORTAL_DIALOG_NAMESPACE: &str = "crownos-portal-dialog";
 
 pub fn is_consent_layer(layer: &LayerSurface) -> bool {
-    is_consent_namespace(&layer.namespace())
+    is_consent_namespace(layer.namespace())
 }
 
 fn is_consent_namespace(namespace: &str) -> bool {
