@@ -49,7 +49,7 @@ pub fn run() -> anyhow::Result<Exit> {
 
     // Outputs exist and the socket is live, so a bar or wallpaper that connects
     // immediately has something to anchor to.
-    state.start_session_apps(owns_session_bus);
+    state.start_session_apps();
     state.start_control_service();
 
     event_loop

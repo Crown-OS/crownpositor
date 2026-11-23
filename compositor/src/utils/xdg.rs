@@ -24,6 +24,12 @@ fn system_data_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
+pub fn state_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home().map(|home| home.join(".local/state")))
+}
+
 pub fn config_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
