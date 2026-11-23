@@ -23,6 +23,7 @@ use crate::rendering::{corners::CornerMemory, warp::WarpCanvases};
 use crate::{
     backend::{
         capture::{
+            blank::{BlankIds, sensitive_blanks},
             formats::buffer_constraints,
             nv12::Nv12Error,
             session::{CaptureSession, RenderTargets},
@@ -101,6 +102,8 @@ pub struct Scene<'a> {
     pub glass: &'a GlassSettings,
     pub text: &'a mut TextRenderer,
     pub hovered: Option<(WindowId, Control)>,
+    /// Sensitive windows, drawn as black boxes.
+    pub blanks: &'a BlankIds,
 }
 
 pub struct RenderedFrame {
@@ -358,6 +361,7 @@ where
         glass: _,
         text,
         hovered,
+        blanks,
     } = scene;
 
     let monitor = placement.monitor;
@@ -385,7 +389,8 @@ where
     if locked {
         return Elements::<R, R::Decorator<'frame>>::new();
     }
-    match placement.view {
+    let covers = sensitive_blanks(shell, &placement, blanks, scale);
+    let mut elements = match placement.view {
         View::Window(tile) => window_elements(
             shell,
             tile,
@@ -416,7 +421,9 @@ where
             }
             elements
         }
-    }
+    };
+    elements.splice(0..0, covers.into_iter().map(Into::into));
+    elements
 }
 
 /// Renders into `target`, returning the damage in buffer coordinates, or

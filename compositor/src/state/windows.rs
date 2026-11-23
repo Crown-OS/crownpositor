@@ -21,12 +21,14 @@ use protocols::{
 };
 use regex::Regex;
 use smithay::{
+    backend::renderer::element::Id,
     reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
     utils::{Clock, Monotonic},
     wayland::compositor::with_states,
 };
 
 use crate::{
+    backend::capture::blank::BlankIds,
     handlers::ext_workspace::workspace_identifier,
     shell::tile::WindowState,
     state::{
@@ -47,6 +49,7 @@ pub struct WindowDirectory {
     /// Windows the engine flagged, until when.
     flagged: HashMap<WindowId, Instant>,
     sensitive: HashSet<WindowId>,
+    blank_ids: BlankIds,
     plugin_known: HashMap<WindowId, (String, String)>,
     plugin_focus: Option<WindowId>,
     pub activity: ActivityCounters,
@@ -60,6 +63,7 @@ impl WindowDirectory {
             private_titles: patterns(&rules.private_titles),
             flagged: HashMap::new(),
             sensitive: HashSet::new(),
+            blank_ids: BlankIds::new(),
             plugin_known: HashMap::new(),
             plugin_focus: None,
             activity: ActivityCounters::default(),
@@ -80,6 +84,11 @@ impl WindowDirectory {
     }
 
     /// Whether captures of `id` must fail right now.
+    /// An element id per sensitive window, for the black boxes in captures.
+    pub fn blank_ids(&self) -> &BlankIds {
+        &self.blank_ids
+    }
+
     pub fn is_sensitive(&self, id: WindowId) -> bool {
         self.sensitive.contains(&id)
     }
@@ -144,7 +153,7 @@ impl State {
         self.wayland.window_control_state.has_watchers()
             || self.wayland.context_state.is_bound()
             || self.wayland.plugin_host_state.watching() & WATCH_WINDOWS != 0
-            || !self.capture.copies.is_empty()
+            || self.capture.is_active()
     }
 
     /// Describes every window once and hands the description to each watcher. Costs a
@@ -268,6 +277,12 @@ impl State {
                     .and_then(|index| u32::try_from(index).ok())
                     .unwrap_or(0),
             });
+        }
+        self.windows
+            .blank_ids
+            .retain(|id, _| sensitive.contains(id));
+        for id in &sensitive {
+            self.windows.blank_ids.entry(*id).or_insert_with(Id::new);
         }
         self.windows.sensitive = sensitive;
         let display = self.common.display_handle.clone();

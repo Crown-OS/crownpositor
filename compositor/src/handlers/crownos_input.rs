@@ -15,19 +15,31 @@ use protocols::crownos_input::{
     InputState,
 };
 
-use crate::state::State;
+use crate::{state::State, utils::consent_surface::shows_consent_dialog};
+
+impl State {
+    pub fn consent_dialog_is_open(&self) -> bool {
+        self.shell
+            .monitors()
+            .iter()
+            .any(|monitor| shows_consent_dialog(monitor.output()))
+    }
+}
 
 impl InputHandler for State {
     fn input_protocol_state(&mut self) -> &mut InputState {
         &mut self.wayland.crownos_input_state
     }
 
-    /// Refused while locked: a remote client may not type at, or click
-    /// through, the lock screen.
+    /// Refused while locked or while a consent dialog is open: a remote
+    /// client may not type at, or click through, the lock screen, and may
+    /// not answer a question about access in the user's place.
     fn inject_input(&mut self, frame: InjectedFrame) {
-        if !self.shell.is_locked() {
-            self.apply_injected_frame(frame);
+        if self.shell.is_locked() || self.consent_dialog_is_open() {
+            tracing::debug!("dropped injected input while the user must answer");
+            return;
         }
+        self.apply_injected_frame(frame);
     }
 
     fn arm_input_capture(&mut self, capture: &InputCapture, edges: Edge) {
