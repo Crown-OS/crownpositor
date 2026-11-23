@@ -90,4 +90,7 @@ name = "data_control_probe"
 name = "capture_sources"
 
 [[example]]
+name = "context_probe"
+
+[[example]]
 name = "multi_monitor_probe"
