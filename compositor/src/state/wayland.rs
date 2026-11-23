@@ -99,12 +99,12 @@ use crate::{
     utils::{
         id::OutputId,
         privilege::{
-            TrustedExecutables, is_media_engine, is_privileged, is_trusted_agent,
-            trusted_executables,
+            ContextGrants, TrustedExecutables, has_app_key, is_media_engine, is_privileged,
+            may_drive_agents, trusted_executables,
         },
     },
 };
-use crownos_config::schema::{Agents, Input};
+use crownos_config::schema::{Agents, Input, Scope as GrantScope};
 use wayland_server::Client;
 
 pub struct WaylandState {
@@ -125,8 +125,10 @@ pub struct WaylandState {
     pub agent_cursor_state: AgentCursorState,
     /// `crownos_guest_seat_v1`. crownlink only.
     pub guest_seat_state: GuestSeatState,
-    /// `crownos_context_v1`. Trusted context engine only.
+    /// `crownos_context_v1`, scoped per client by `context_access.ron`.
     pub context_state: ContextState,
+    /// The grants, shared with the global filters that outlive any one config.
+    pub context_grants: ContextGrants,
     /// `crownos_capture_privacy_v1`. Any client: it only hides its own surfaces.
     pub capture_privacy_state: CapturePrivacyState,
     pub appmenu_state: AppmenuState,
@@ -280,21 +282,26 @@ impl WaylandState {
         let trusted: TrustedExecutables = Arc::new(RwLock::new(trusted_executables(
             &agents.trusted_executables,
         )));
-        let agent_filter = {
+        let context_grants: ContextGrants = Arc::new(RwLock::new(config::load_context_access()));
+        let agent_filter = |scope: GrantScope| {
             let trusted = Arc::clone(&trusted);
-            move |client: &Client| is_trusted_agent(client, &trusted)
+            let grants = Arc::clone(&context_grants);
+            move |client: &Client| may_drive_agents(client, &grants, &trusted, scope)
         };
+        let window_control_filter = agent_filter(GrantScope::WaylandWindowControl);
+        let agent_cursor_filter = agent_filter(GrantScope::WaylandAgentCursor);
 
         Ok(Self {
             agent_access_state: AgentAccessState::new::<State, _>(display, is_privileged),
             trusted_executables: trusted,
             window_control_state: WindowControlState::new::<State, _>(
                 display,
-                agent_filter.clone(),
+                window_control_filter,
             ),
-            agent_cursor_state: AgentCursorState::new::<State, _>(display, agent_filter.clone()),
+            agent_cursor_state: AgentCursorState::new::<State, _>(display, agent_cursor_filter),
+            context_grants,
             guest_seat_state: GuestSeatState::new::<State, _>(display, is_media_engine),
-            context_state: ContextState::new::<State, _>(display, agent_filter),
+            context_state: ContextState::new::<State, _>(display, has_app_key),
             capture_privacy_state: CapturePrivacyState::new::<State>(display),
             agent_access_policy: AgentAccessPolicy::from_env(),
             plugin_host_state: PluginHostState::new::<State, _>(display, is_privileged),

@@ -11,23 +11,56 @@ use crownos_protocols::input::v1::server::{
     crownos_input_manager_v1::CrownosInputManagerV1,
 };
 use protocols::crownos_input::{
-    CaptureData, Edge, InjectedFrame, InjectorData, InputCapture, InputGlobalData, InputHandler,
-    InputState,
+    CaptureData, Edge, InjectedEvent, InjectedFrame, InjectorData, InputCapture, InputGlobalData,
+    InputHandler, InputState,
 };
 
-use crate::state::State;
+use crate::{state::State, utils::consent_surface::shows_consent_dialog};
+
+impl State {
+    /// Lets go of every key and button injection holds, before a consent
+    /// dialog takes the focus, so none stays down while injection is refused.
+    pub fn release_injected_input(&mut self) {
+        let events = self.input.injected_held.let_go();
+        if !events.is_empty() {
+            self.apply_injected_frame(InjectedFrame {
+                events,
+                time_usec: 0,
+            });
+        }
+    }
+
+    pub fn consent_dialog_is_open(&self) -> bool {
+        self.shell
+            .monitors()
+            .iter()
+            .any(|monitor| shows_consent_dialog(monitor.output()))
+    }
+}
 
 impl InputHandler for State {
     fn input_protocol_state(&mut self) -> &mut InputState {
         &mut self.wayland.crownos_input_state
     }
 
-    /// Refused while locked: a remote client may not type at, or click
-    /// through, the lock screen.
+    /// Refused while locked or while a consent dialog is open: a remote
+    /// client may not type at, or click through, the lock screen, and may
+    /// not answer a question about access in the user's place.
     fn inject_input(&mut self, frame: InjectedFrame) {
-        if !self.shell.is_locked() {
-            self.apply_injected_frame(frame);
+        if self.shell.is_locked() || self.consent_dialog_is_open() {
+            tracing::debug!("dropped injected input while the user must answer");
+            return;
         }
+        for event in &frame.events {
+            match event {
+                InjectedEvent::Key { key, state } => self.input.injected_held.key(*key, *state),
+                InjectedEvent::Button { button, state } => {
+                    self.input.injected_held.button(*button, *state);
+                }
+                _ => {}
+            }
+        }
+        self.apply_injected_frame(frame);
     }
 
     fn arm_input_capture(&mut self, capture: &InputCapture, edges: Edge) {

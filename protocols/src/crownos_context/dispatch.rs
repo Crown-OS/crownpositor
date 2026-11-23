@@ -8,7 +8,7 @@ use wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, WEnum, backend::ClientId,
 };
 
-use super::{ContextGlobalData, ContextHandler, ContextState, WindowKey};
+use super::{ContextGlobalData, ContextHandler, ContextState, PauseOrigin, Scope, WindowKey};
 
 /// The bounds every impl in this module shares, named once.
 pub trait ContextDispatch:
@@ -35,15 +35,14 @@ impl<D: ContextDispatch> GlobalDispatch<CrownosContextManagerV1, ContextGlobalDa
     fn bind(
         state: &mut D,
         handle: &DisplayHandle,
-        _client: &Client,
+        client: &Client,
         resource: New<CrownosContextManagerV1>,
         _global_data: &ContextGlobalData,
         data_init: &mut DataInit<'_, D>,
     ) {
         let manager = data_init.init(resource, ());
-        if !state.context_state().bind::<D>(handle, manager) {
-            tracing::warn!("a second client bound crownos_context_manager_v1 and was left inert");
-        }
+        let decision = state.context_bind_decision(client);
+        state.context_state().bind::<D>(handle, manager, decision);
     }
 
     fn can_view(client: Client, global_data: &ContextGlobalData) -> bool {
@@ -55,20 +54,39 @@ impl<D: ContextDispatch> Dispatch<CrownosContextManagerV1, (), D> for ContextSta
     fn request(
         state: &mut D,
         _client: &Client,
-        _manager: &CrownosContextManagerV1,
+        manager: &CrownosContextManagerV1,
         request: crownos_context_manager_v1::Request,
         _data: &(),
-        _dhandle: &DisplayHandle,
+        dhandle: &DisplayHandle,
         _data_init: &mut DataInit<'_, D>,
     ) {
-        if let crownos_context_manager_v1::Request::SetPaused { paused } = request {
-            state.set_context_paused(paused != 0);
+        let crownos_context_manager_v1::Request::SetPaused { paused } = request else {
+            return;
+        };
+        let Some(bound) = state
+            .context_state()
+            .bound_of(manager)
+            .filter(|bound| bound.is_live())
+        else {
+            return;
+        };
+        if !bound.pauses_everyone() {
+            state
+                .context_state()
+                .set_client_paused::<D>(dhandle, manager, paused != 0);
+            return;
         }
+        let origin = if bound.scope().contains(Scope::Engine) {
+            PauseOrigin::Engine
+        } else {
+            PauseOrigin::Client
+        };
+        state.set_context_paused(paused != 0, origin);
     }
 
     fn destroyed(state: &mut D, _client: ClientId, resource: &CrownosContextManagerV1, _data: &()) {
-        if state.context_state().unbind(resource) {
-            state.context_engine_gone();
+        if let Some(client) = state.context_state().unbind(resource) {
+            state.context_client_gone(client);
         }
     }
 }
@@ -77,7 +95,7 @@ impl<D: ContextDispatch> Dispatch<CrownosContextWindowV1, WindowKey, D> for Cont
     fn request(
         state: &mut D,
         _client: &Client,
-        _resource: &CrownosContextWindowV1,
+        resource: &CrownosContextWindowV1,
         request: crownos_context_window_v1::Request,
         key: &WindowKey,
         _dhandle: &DisplayHandle,
@@ -90,7 +108,8 @@ impl<D: ContextDispatch> Dispatch<CrownosContextWindowV1, WindowKey, D> for Cont
         else {
             return;
         };
-        if state.context_state().knows(*key) {
+        let context = state.context_state();
+        if context.knows(*key) && context.may_flag(resource, *key) {
             state.flag_window_sensitive(*key, reason, duration_ms);
         }
     }

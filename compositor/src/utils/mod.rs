@@ -1,5 +1,7 @@
 pub mod affine;
 pub mod app_icon;
+pub mod app_key;
+pub mod consent_surface;
 pub mod constraint_region;
 pub mod edid;
 pub mod geometry;

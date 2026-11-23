@@ -22,7 +22,10 @@ use smithay::{
 use crate::{
     handlers::seat::KeyboardFocusTarget,
     state::State,
-    utils::id::{OutputId, WindowId},
+    utils::{
+        consent_surface::is_consent_target,
+        id::{OutputId, WindowId},
+    },
 };
 
 const XKB_KEYCODE_OFFSET: u32 = 8;
@@ -155,7 +158,10 @@ impl State {
         time: InputTime,
     ) {
         driven.position = location;
-        let under = self.shell.pointer_focus_under(location);
+        let under = self
+            .shell
+            .pointer_focus_under(location)
+            .filter(|(target, _)| !is_consent_target(target));
         pointer.motion(
             self,
             under,

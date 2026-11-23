@@ -3,8 +3,8 @@ pub mod startup;
 pub mod watch;
 
 pub use crownos_config::schema::{
-    AccessDecision, Agents, AnimationProfile, Binding, CloseAnimation, Compositor, EdgeGlow,
-    GamingOptions, Glass as GlassSettings, Input, Lock, MinimizeAnimation, OutputLayout,
+    AccessDecision, Agents, AnimationProfile, Binding, CloseAnimation, Compositor, ContextAccess,
+    EdgeGlow, GamingOptions, Glass as GlassSettings, Input, Lock, MinimizeAnimation, OutputLayout,
     OutputSetting, OutputTransform, Theme, VisualContext, Vrr, WindowRule, WorkspaceMode,
 };
 pub use crownos_config::{Appearance, Display, Keybinds};
@@ -12,7 +12,16 @@ pub use rules::{ResolvedRule, WindowRules};
 pub use startup::split_argv;
 pub use watch::{Update, Watch};
 
-use crownos_config::load;
+use crownos_config::{load, load_strict};
+
+/// Grants are read strictly: a file that does not parse gives no grants for
+/// now, and is never replaced with defaults.
+pub fn load_context_access() -> ContextAccess {
+    load_strict(ContextAccess::SECTION).unwrap_or_else(|error| {
+        tracing::warn!(%error, "context_access.ron does not parse; no app gets context");
+        ContextAccess::default()
+    })
+}
 
 #[derive(Debug, Default)]
 pub struct Config {
@@ -26,6 +35,7 @@ pub struct Config {
     pub window_rules: WindowRules,
     pub agents: Agents,
     pub visual_context: VisualContext,
+    pub context_access: ContextAccess,
     pub input: Input,
 }
 
@@ -45,6 +55,7 @@ impl Config {
             theme: load(Theme::SECTION),
             agents: load(Agents::SECTION),
             visual_context: load(VisualContext::SECTION),
+            context_access: load_context_access(),
             input: load(Input::SECTION),
         }
     }

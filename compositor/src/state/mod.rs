@@ -9,6 +9,7 @@ pub mod clamshell;
 mod client;
 mod common;
 mod config;
+pub mod context_access;
 mod control;
 mod cursor;
 mod display;
@@ -94,7 +95,15 @@ pub struct State {
     /// crownplugind see it, and which windows are off limits to captures.
     pub windows: windows::WindowDirectory,
     /// Apps waiting for the user's answer about agent access.
-    pub agent_prompts: agent_access::PendingPrompts,
+    pub agent_prompts:
+        agent_access::PendingPrompts<protocols::crownos_agent_access::AgentAccessRequest>,
+    /// Apps asking for screen context while the user is asked, by key.
+    pub context_prompts: agent_access::PendingPrompts<crownos_config::schema::AppKey>,
+    /// Clients the user allowed without remembering the answer.
+    pub context_answered: std::collections::HashSet<wayland_server::backend::ClientId>,
+    /// Apps the user refused without remembering, and when they may ask again.
+    pub context_cooldown:
+        std::collections::HashMap<crownos_config::schema::AppKey, std::time::Instant>,
     /// The seats behind `crownos_agent_cursor_v1`, one per agent.
     pub agent_seats: agent_seats::AgentSeats,
     /// The seats behind `crownos_guest_seat_v1`, one per remote desktop guest.
@@ -184,6 +193,8 @@ impl State {
 
     pub fn try_new(event_loop: &mut EventLoop<'static, State>) -> anyhow::Result<Self> {
         let common = CommonState::try_new(event_loop)?;
+        context_access::prepare_on_startup();
+        crate::utils::consent_surface::warn_if_dialog_missing();
         let config = ConfigState::init(&common.event_loop_handle)?;
         let input = InputState::new(&config.current);
         let backend = BackendState::try_new()?;
@@ -213,10 +224,14 @@ impl State {
             screensaver_holds: idle::ScreenSaverHolds::default(),
             windows: windows::WindowDirectory::new(&visual_context_rules),
             agent_prompts: agent_access::PendingPrompts::default(),
+            context_prompts: agent_access::PendingPrompts::default(),
+            context_answered: std::collections::HashSet::new(),
+            context_cooldown: std::collections::HashMap::new(),
             agent_seats: agent_seats::AgentSeats::default(),
             guest_seats: guest_seats::GuestSeats::default(),
         };
         state.arm_activity_flush();
+        state.arm_context_expiry();
         // The global was created advertising everything the renderer can do;
         // the config gets the first word on what it will actually do.
         state.sync_background_effect_capabilities();

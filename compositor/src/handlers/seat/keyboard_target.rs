@@ -13,6 +13,7 @@ use smithay::{
 };
 
 use crate::state::State;
+use crate::utils::consent_surface::is_consent_layer;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyboardFocusTarget {
@@ -57,8 +58,9 @@ impl IsAlive for KeyboardFocusTarget {
     }
 }
 
-impl WaylandFocus for KeyboardFocusTarget {
-    fn wl_surface(&self) -> Option<Cow<'_, WlSurface>> {
+impl KeyboardFocusTarget {
+    /// The surface real keys are delivered to.
+    fn delivery_surface(&self) -> Option<Cow<'_, WlSurface>> {
         match self {
             Self::Window(window) => window.wl_surface(),
             Self::Popup(popup) => Some(Cow::Borrowed(popup.wl_surface())),
@@ -67,8 +69,31 @@ impl WaylandFocus for KeyboardFocusTarget {
         }
     }
 
+    /// A consent dialog or the lock screen: the user answers there, so no
+    /// program may type into it.
+    pub fn is_consent(&self) -> bool {
+        match self {
+            Self::LayerShell(layer) => is_consent_layer(layer),
+            Self::LockScreen(_) => true,
+            Self::Window(_) | Self::Popup(_) => false,
+        }
+    }
+}
+
+/// The surface smithay's protocol code sees as focused. It is hidden for a
+/// consent surface, so `zwp_virtual_keyboard_v1` keys, which smithay sends to
+/// this surface directly, reach nobody while the user answers. Real keys
+/// still arrive through [`KeyboardTarget`], which uses the delivery surface.
+impl WaylandFocus for KeyboardFocusTarget {
+    fn wl_surface(&self) -> Option<Cow<'_, WlSurface>> {
+        if self.is_consent() {
+            return None;
+        }
+        self.delivery_surface()
+    }
+
     fn same_client_as(&self, object_id: &ObjectId) -> bool {
-        self.wl_surface()
+        self.delivery_surface()
             .is_some_and(|surface| surface.id().same_client_as(object_id))
     }
 }
@@ -86,13 +111,13 @@ impl KeyboardTarget<State> for KeyboardFocusTarget {
         keys: Vec<KeysymHandle<'_>>,
         serial: Serial,
     ) {
-        if let Some(surface) = self.wl_surface() {
+        if let Some(surface) = self.delivery_surface() {
             KeyboardTarget::enter(surface.as_ref(), seat, data, keys, serial);
         }
     }
 
     fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial) {
-        if let Some(surface) = self.wl_surface() {
+        if let Some(surface) = self.delivery_surface() {
             KeyboardTarget::leave(surface.as_ref(), seat, data, serial);
         }
     }
@@ -106,7 +131,7 @@ impl KeyboardTarget<State> for KeyboardFocusTarget {
         serial: Serial,
         time: InputTime,
     ) {
-        if let Some(surface) = self.wl_surface() {
+        if let Some(surface) = self.delivery_surface() {
             KeyboardTarget::key(surface.as_ref(), seat, data, key, state, serial, time);
         }
     }
@@ -118,7 +143,7 @@ impl KeyboardTarget<State> for KeyboardFocusTarget {
         modifiers: ModifiersState,
         serial: Serial,
     ) {
-        if let Some(surface) = self.wl_surface() {
+        if let Some(surface) = self.delivery_surface() {
             KeyboardTarget::modifiers(surface.as_ref(), seat, data, modifiers, serial);
         }
     }

@@ -9,13 +9,16 @@
 
 mod dispatch;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crownos_protocols::window_control::v1::server::{
     crownos_window_control_manager_v1::CrownosWindowControlManagerV1,
     crownos_window_v1::CrownosWindowV1,
 };
-use wayland_server::{Client, DisplayHandle, Resource, backend::GlobalId};
+use wayland_server::{
+    Client, DisplayHandle, Resource,
+    backend::{ClientId, GlobalId},
+};
 
 pub use crownos_protocols::window_control::v1::server::crownos_window_v1::State as WindowFlags;
 pub use dispatch::WindowControlDispatch;
@@ -85,6 +88,8 @@ pub struct WindowControlState {
     managers: Vec<Manager>,
     known: HashMap<WindowKey, WindowRecord>,
     focus: Option<WindowKey>,
+    /// Clients whose access was withdrawn; their objects are inert.
+    revoked: HashSet<ClientId>,
 }
 
 impl WindowControlState {
@@ -104,7 +109,50 @@ impl WindowControlState {
             managers: Vec::new(),
             known: HashMap::new(),
             focus: None,
+            revoked: HashSet::new(),
         }
+    }
+
+    /// Closes every window of the managers whose client `revoked` selects,
+    /// and makes the client's objects inert. Returns how many were cut.
+    pub fn revoke_where(&mut self, mut revoked: impl FnMut(&Client) -> bool) -> usize {
+        let mut cut = Vec::new();
+        self.managers.retain(|manager| {
+            let Some(client) = manager.resource.client() else {
+                return false;
+            };
+            if !revoked(&client) {
+                return true;
+            }
+            for window in manager.windows.values() {
+                window.closed();
+            }
+            cut.push(client.id());
+            false
+        });
+        let count = cut.len();
+        self.revoked.extend(cut);
+        count
+    }
+
+    /// The clients that hold a manager.
+    pub fn clients(&self) -> Vec<Client> {
+        let mut clients: Vec<Client> = Vec::new();
+        for client in self
+            .managers
+            .iter()
+            .filter_map(|manager| manager.resource.client())
+        {
+            if !clients.iter().any(|known| known.id() == client.id()) {
+                clients.push(client);
+            }
+        }
+        clients
+    }
+
+    /// Whether the access of `client` was withdrawn.
+    pub fn is_revoked(&self, client: &ClientId) -> bool {
+        self.revoked.contains(client)
     }
 
     pub fn global(&self) -> GlobalId {
@@ -180,6 +228,9 @@ impl WindowControlState {
         display: &DisplayHandle,
         resource: CrownosWindowControlManagerV1,
     ) {
+        if let Some(client) = resource.client() {
+            self.revoked.remove(&client.id());
+        }
         let mut manager = Manager {
             resource,
             windows: HashMap::new(),

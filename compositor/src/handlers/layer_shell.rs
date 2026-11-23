@@ -12,6 +12,7 @@ use smithay::{
 };
 
 use crate::state::State;
+use crate::utils::consent_surface::is_consent_layer;
 
 impl WlrLayerShellHandler for State {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
@@ -43,6 +44,9 @@ impl WlrLayerShellHandler for State {
 
         let layer = LayerSurface::new(surface, namespace);
         let wl_surface = layer.wl_surface().clone();
+        if is_consent_layer(&layer) {
+            self.release_injected_input();
+        }
 
         // A second guard for the same output deadlocks, so keep the scope tight.
         let mapped = {

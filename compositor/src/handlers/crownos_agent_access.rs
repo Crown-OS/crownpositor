@@ -53,7 +53,10 @@ impl State {
             Some(AccessDecision::Allow) => self.grant_agent_access(request),
             Some(AccessDecision::Deny) => self.deny_agent_access(request, "remembered"),
             None if !agents.ask_for_app_access => self.deny_agent_access(request, "policy"),
-            None if self.agent_prompts.is_asking(request.app_id()) => {
+            None if self
+                .agent_prompts
+                .is_asking(|asked| asked.app_id() == request.app_id()) =>
+            {
                 self.deny_agent_access(request, "already asking")
             }
             None => self.prompt_agent_access(request),

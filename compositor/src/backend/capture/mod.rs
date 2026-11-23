@@ -9,6 +9,7 @@
 //! nothing, and an encoder that holds every slot stops the compositor from
 //! rendering for it at all.
 
+pub mod blank;
 pub mod copy;
 pub mod copy_cursor;
 mod cursor;
@@ -75,6 +76,14 @@ pub struct CaptureState {
 }
 
 impl CaptureState {
+    /// Whether any capture may draw a frame soon, so sensitive windows must
+    /// be known.
+    pub fn is_active(&self) -> bool {
+        !self.sessions.is_empty()
+            || !self.copies.is_empty()
+            || !self.screencopies.pending.is_empty()
+    }
+
     pub fn insert(&mut self, session: CaptureSession) {
         self.sessions.push(session);
     }
@@ -323,6 +332,7 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
             input,
             config,
             text,
+            windows,
             ..
         } = state;
         let Some(session) = capture.session_mut(id) else {
@@ -345,6 +355,7 @@ fn render_session(state: &mut State, id: &ObjectId, now: Duration) {
             glass: &config.current.glass,
             text,
             hovered: input.hovered_control,
+            blanks: windows.blank_ids(),
         };
         let Some(outcome) =
             with_capture_renderer!(backend, |renderer| capture_frame(renderer, session, scene))
@@ -430,6 +441,7 @@ fn render_copies(state: &mut State) {
             input,
             config,
             text,
+            windows,
             ..
         } = state;
         let copy = &mut capture.copies[index];
@@ -446,6 +458,7 @@ fn render_copies(state: &mut State) {
             glass: &config.current.glass,
             text,
             hovered: input.hovered_control,
+            blanks: windows.blank_ids(),
         };
         let Some(outcome) =
             with_capture_renderer!(backend, |renderer| copy.copy(renderer, scene, dma))
@@ -500,6 +513,7 @@ fn render_screencopies(state: &mut State) {
             input,
             config,
             text,
+            windows,
             ..
         } = state;
         let source = CaptureSource::Output(pending.output.clone());
@@ -516,6 +530,7 @@ fn render_screencopies(state: &mut State) {
             glass: &config.current.glass,
             text,
             hovered: input.hovered_control,
+            blanks: windows.blank_ids(),
         };
         let copier = capture.screencopies.copier(&pending.output);
         let outcome = with_capture_renderer!(backend, |renderer| screencopy::copy(

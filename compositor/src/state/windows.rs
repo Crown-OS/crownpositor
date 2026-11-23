@@ -21,12 +21,14 @@ use protocols::{
 };
 use regex::Regex;
 use smithay::{
+    desktop::PopupManager,
     reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
     utils::{Clock, Monotonic},
     wayland::compositor::with_states,
 };
 
 use crate::{
+    backend::capture::blank::BlankIds,
     handlers::ext_workspace::workspace_identifier,
     shell::tile::WindowState,
     state::{
@@ -47,6 +49,7 @@ pub struct WindowDirectory {
     /// Windows the engine flagged, until when.
     flagged: HashMap<WindowId, Instant>,
     sensitive: HashSet<WindowId>,
+    blank_ids: BlankIds,
     plugin_known: HashMap<WindowId, (String, String)>,
     plugin_focus: Option<WindowId>,
     pub activity: ActivityCounters,
@@ -60,6 +63,7 @@ impl WindowDirectory {
             private_titles: patterns(&rules.private_titles),
             flagged: HashMap::new(),
             sensitive: HashSet::new(),
+            blank_ids: BlankIds::default(),
             plugin_known: HashMap::new(),
             plugin_focus: None,
             activity: ActivityCounters::default(),
@@ -77,6 +81,11 @@ impl WindowDirectory {
         let until = Instant::now() + duration;
         let entry = self.flagged.entry(id).or_insert(until);
         *entry = (*entry).max(until);
+    }
+
+    /// An element id per sensitive window, for the black boxes in captures.
+    pub fn blank_ids(&self) -> &BlankIds {
+        &self.blank_ids
     }
 
     /// Whether captures of `id` must fail right now.
@@ -144,7 +153,7 @@ impl State {
         self.wayland.window_control_state.has_watchers()
             || self.wayland.context_state.is_bound()
             || self.wayland.plugin_host_state.watching() & WATCH_WINDOWS != 0
-            || !self.capture.copies.is_empty()
+            || self.capture.is_active()
     }
 
     /// Describes every window once and hands the description to each watcher. Costs a
@@ -269,6 +278,31 @@ impl State {
                     .unwrap_or(0),
             });
         }
+        let closing: HashSet<WindowId> = self
+            .shell
+            .monitors()
+            .iter()
+            .flat_map(|monitor| monitor.workspaces())
+            .flat_map(|workspace| workspace.closing())
+            .map(|closing| closing.tile().id())
+            .collect();
+        let blanked: HashSet<WindowId> = sensitive.union(&closing).copied().collect();
+        let popups = self
+            .shell
+            .tiles()
+            .filter(|tile| blanked.contains(&tile.id()))
+            .filter_map(|tile| {
+                tile.window()
+                    .toplevel()
+                    .map(|toplevel| toplevel.wl_surface().clone())
+            })
+            .flat_map(|surface| {
+                PopupManager::popups_for_surface(&surface)
+                    .map(|(popup, _)| popup.wl_surface().id())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        self.windows.blank_ids.keep(&blanked, &sensitive, popups);
         self.windows.sensitive = sensitive;
         let display = self.common.display_handle.clone();
         let focus_key = focus.map(WindowId::raw);

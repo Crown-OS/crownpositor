@@ -418,6 +418,7 @@ dependencies = [
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-misc",
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "wayland-server",
@@ -553,6 +554,7 @@ dependencies = [
 name = "crownos-ipc"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "log",
  "postcard",
  "rustix 1.1.4",

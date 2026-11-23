@@ -1,25 +1,36 @@
 //! Server-side `crownos_context_v1`: what the user is doing, without content,
-//! for the visual context engine.
+//! for the visual context engine and the apps the user lets see it.
 //!
-//! One client binds at a time. The compositor syncs window records every
-//! loop iteration, and pushes session changes, input activity buckets and
-//! selection metadata as they happen; the engine's own requests come back
-//! through [`ContextHandler`].
+//! Many clients can bind. Each gets a scope from the compositor, through
+//! [`ContextHandler::context_bind_decision`] or later through
+//! [`ContextState::set_scope`], and only the events its scope allows. The
+//! compositor syncs window records every loop iteration, and pushes session
+//! changes, input activity buckets and selection metadata as they happen;
+//! the clients' own requests come back through [`ContextHandler`].
 
+mod bound;
 mod dispatch;
+mod window_events;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use crownos_protocols::context::v1::server::{
     crownos_context_manager_v1::CrownosContextManagerV1,
     crownos_context_window_v1::CrownosContextWindowV1,
 };
-use wayland_server::{Client, DisplayHandle, Resource, backend::GlobalId};
+use wayland_server::{
+    Client, DisplayHandle, Resource,
+    backend::{ClientId, GlobalId},
+};
+
+use bound::{Bound, Grant};
+use window_events::{announce, send_changes};
 
 pub use crate::crownos_window_control::{Placement, WindowKey};
 pub use crownos_protocols::context::v1::server::{
     crownos_context_manager_v1::{
-        ActivityFlags, PauseOrigin, SelectionFlags, SelectionKind, SessionState,
+        ActivityFlags, PauseOrigin, RevokeReason, Scope, SelectionFlags, SelectionKind,
+        SessionState,
     },
     crownos_context_window_v1::{
         ContentType, FlagReason, Sensitivity, State as ContextWindowFlags,
@@ -28,7 +39,7 @@ pub use crownos_protocols::context::v1::server::{
 pub use dispatch::ContextDispatch;
 
 /// The protocol version this module speaks.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The `wp_security_context_v1` a client came from; all empty when unsandboxed.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -106,16 +117,28 @@ pub struct SelectionChange {
     pub flags: SelectionFlags,
 }
 
+/// What the compositor decides when a client binds the manager.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindDecision {
+    Granted(Scope),
+    /// The compositor asks the user and answers through [`ContextState::set_scope`].
+    Pending,
+    Refused,
+}
+
 /// What the compositor provides for this protocol to be delegated to
 /// [`ContextState`].
 pub trait ContextHandler {
     fn context_state(&mut self) -> &mut ContextState;
-    /// The engine paused or resumed observation.
-    fn set_context_paused(&mut self, paused: bool);
-    /// The engine saw something in a window that must not be captured.
+    /// The scope of a client that just bound the manager.
+    fn context_bind_decision(&mut self, client: &Client) -> BindDecision;
+    /// A client with the engine or pause scope paused or resumed observation
+    /// for every client.
+    fn set_context_paused(&mut self, paused: bool, origin: PauseOrigin);
+    /// A client saw something in a window that must not be captured.
     fn flag_window_sensitive(&mut self, key: WindowKey, reason: FlagReason, duration_ms: u32);
-    /// The engine disconnected.
-    fn context_engine_gone(&mut self);
+    /// A client destroyed its manager.
+    fn context_client_gone(&mut self, client: Option<ClientId>);
 }
 
 /// Global data: which clients may see the manager.
@@ -123,15 +146,10 @@ pub struct ContextGlobalData {
     filter: Box<dyn Fn(&Client) -> bool + Send + Sync>,
 }
 
-struct Bound {
-    manager: CrownosContextManagerV1,
-    windows: HashMap<WindowKey, CrownosContextWindowV1>,
-}
-
 /// Delegate type for the `crownos_context_manager_v1` global.
 pub struct ContextState {
     global: GlobalId,
-    bound: Option<Bound>,
+    bound: Vec<Bound>,
     known: HashMap<WindowKey, ContextRecord>,
     focus: Option<WindowKey>,
     session: SessionState,
@@ -152,7 +170,7 @@ impl ContextState {
         );
         Self {
             global,
-            bound: None,
+            bound: Vec::new(),
             known: HashMap::new(),
             focus: None,
             session: SessionState::Active,
@@ -164,10 +182,9 @@ impl ContextState {
         self.global.clone()
     }
 
+    /// Whether any client sees windows, so the directory must be kept.
     pub fn is_bound(&self) -> bool {
-        self.bound
-            .as_ref()
-            .is_some_and(|bound| bound.manager.is_alive())
+        self.bound.iter().any(Bound::sees_metadata)
     }
 
     pub fn is_paused(&self) -> bool {
@@ -178,7 +195,47 @@ impl ContextState {
         self.known.contains_key(&key)
     }
 
-    /// Brings the engine up to date. While paused, nothing is sent and the
+    /// The clients with a manager that is not revoked, to decide again when
+    /// the grants change.
+    pub fn clients(&self) -> Vec<Client> {
+        let mut clients: Vec<Client> = Vec::new();
+        for client in self
+            .bound
+            .iter()
+            .filter(|bound| bound.grant != Grant::Revoked)
+            .filter_map(|bound| bound.manager.client())
+        {
+            if !clients.iter().any(|known| known.id() == client.id()) {
+                clients.push(client);
+            }
+        }
+        clients
+    }
+
+    /// Whether `client` waits for the user: one of its managers is pending
+    /// and none has a scope. A revoked manager does not count.
+    pub fn is_waiting(&self, client: &ClientId) -> bool {
+        let of_client = || {
+            self.bound.iter().filter(move |bound| {
+                bound.client.as_ref() == Some(client) && bound.manager.is_alive()
+            })
+        };
+        of_client().any(|bound| bound.grant == Grant::Pending)
+            && !of_client().any(|bound| matches!(bound.grant, Grant::Scoped(_)))
+    }
+
+    /// The scope of `client`, or `None` while it waits or after a revoke.
+    pub fn scope_of(&self, client: &ClientId) -> Option<Scope> {
+        self.bound
+            .iter()
+            .filter(|bound| bound.client.as_ref() == Some(client))
+            .find_map(|bound| match bound.grant {
+                Grant::Scoped(scope) => Some(scope),
+                Grant::Pending | Grant::Revoked => None,
+            })
+    }
+
+    /// Brings every client up to date. While paused, nothing is sent and the
     /// records are not remembered, so resuming announces the current state.
     pub fn sync<D: ContextDispatch>(
         &mut self,
@@ -187,11 +244,9 @@ impl ContextState {
         focus: Option<WindowKey>,
         time_ms: u32,
     ) {
+        self.bound.retain(|bound| bound.manager.is_alive());
         if self.paused {
             return;
-        }
-        if !self.is_bound() {
-            self.bound = None;
         }
         let gone: Vec<WindowKey> = self
             .known
@@ -201,38 +256,35 @@ impl ContextState {
             .collect();
         for key in gone {
             self.known.remove(&key);
-            if let Some(window) = self
-                .bound
-                .as_mut()
-                .and_then(|bound| bound.windows.remove(&key))
-            {
-                window.closed();
+            for bound in &mut self.bound {
+                if let Some(window) = bound.windows.remove(&key) {
+                    window.closed();
+                }
             }
         }
         for record in records {
-            match self.known.get(&record.key) {
-                Some(known) if known == record => continue,
-                Some(known) => {
-                    if let Some(window) = self
-                        .bound
-                        .as_ref()
-                        .and_then(|bound| bound.windows.get(&record.key))
-                    {
-                        send_changes(window, known, record);
+            let known = self.known.get(&record.key);
+            if known == Some(record) {
+                continue;
+            }
+            for bound in &mut self.bound {
+                if !bound.sees_windows(false) {
+                    continue;
+                }
+                let with_text = bound.sees_text(false);
+                match (known, bound.windows.get(&record.key)) {
+                    (Some(known), Some(window)) => {
+                        send_changes(window, known, record, with_text);
                         window.done();
                     }
-                }
-                None => {
-                    if let Some(bound) = &mut self.bound {
-                        announce::<D>(display, bound, record);
-                    }
+                    _ => announce::<D>(display, bound, record, with_text),
                 }
             }
             self.known.insert(record.key, record.clone());
         }
         if self.focus != focus {
             self.focus = focus;
-            if let Some(bound) = &self.bound {
+            for bound in self.bound.iter().filter(|bound| bound.sees_windows(false)) {
                 bound
                     .manager
                     .focus(focus.and_then(|key| bound.windows.get(&key)), time_ms);
@@ -245,176 +297,273 @@ impl ContextState {
             return;
         }
         self.session = session;
-        if let Some(bound) = &self.bound {
+        for bound in self.bound.iter().filter(|bound| bound.sees_metadata()) {
             bound.manager.session(session);
         }
     }
 
     pub fn input_activity(&self, activity: InputActivity) {
-        let Some(bound) = self.bound.as_ref().filter(|_| !self.paused) else {
-            return;
-        };
-        let window = self.focus.and_then(|key| bound.windows.get(&key));
-        bound.manager.input_activity(
-            window,
-            activity.interval_ms,
-            activity.text,
-            activity.edit,
-            activity.nav,
-            activity.chords,
-            activity.clicks,
-            activity.scroll_ticks,
-            activity.pointer_travel,
-            activity.flags,
-        );
+        for bound in self
+            .bound
+            .iter()
+            .filter(|bound| bound.sees_windows(self.paused))
+        {
+            let window = self.focus.and_then(|key| bound.windows.get(&key));
+            bound.manager.input_activity(
+                window,
+                activity.interval_ms,
+                activity.text,
+                activity.edit,
+                activity.nav,
+                activity.chords,
+                activity.clicks,
+                activity.scroll_ticks,
+                activity.pointer_travel,
+                activity.flags,
+            );
+        }
     }
 
     pub fn selection(&self, change: &SelectionChange) {
-        let Some(bound) = self.bound.as_ref().filter(|_| !self.paused) else {
-            return;
-        };
-        let window = change.window.and_then(|key| bound.windows.get(&key));
-        bound.manager.selection(
-            change.kind,
-            window,
-            change.mime_types.clone(),
-            change.size_hint,
-            change.flags,
-        );
+        for bound in self
+            .bound
+            .iter()
+            .filter(|bound| bound.sees_text(self.paused))
+        {
+            let window = change.window.and_then(|key| bound.windows.get(&key));
+            bound.manager.selection(
+                change.kind,
+                window,
+                change.mime_types.clone(),
+                change.size_hint,
+                change.flags,
+            );
+        }
     }
 
-    /// Pauses or resumes. Pausing forgets the announced windows and closes
-    /// them for the engine; resuming re-announces them on the next sync.
+    /// Pauses or resumes observation for every client. Pausing forgets the
+    /// announced windows and closes them; resuming re-announces them on the
+    /// next sync.
     pub fn set_paused(&mut self, paused: bool, origin: PauseOrigin) {
         if self.paused == paused {
             return;
         }
         self.paused = paused;
-        if let Some(bound) = &mut self.bound {
-            if paused {
-                for window in bound.windows.drain() {
-                    window.1.closed();
-                }
-                self.known.clear();
-                self.focus = None;
-            }
-            bound.manager.paused(u32::from(paused), origin);
+        if paused {
+            self.known.clear();
+            self.focus = None;
         }
+        for bound in self.bound.iter_mut().filter(|bound| bound.is_live()) {
+            if paused {
+                bound.close_windows();
+            }
+            bound.send_paused(paused, origin);
+        }
+    }
+
+    /// Gives every manager of `client` a new scope, or revokes it with
+    /// `reason` when `scope` is `None`. A version 1 manager keeps working
+    /// only with the engine scope. Returns whether anything changed.
+    pub fn set_scope<D: ContextDispatch>(
+        &mut self,
+        display: &DisplayHandle,
+        client: &ClientId,
+        scope: Option<Scope>,
+        reason: RevokeReason,
+    ) -> bool {
+        let mut changed = false;
+        for index in 0..self.bound.len() {
+            if self.bound[index].client.as_ref() != Some(client) {
+                continue;
+            }
+            changed |= self.rescope::<D>(display, index, scope, reason);
+        }
+        changed
+    }
+
+    fn rescope<D: ContextDispatch>(
+        &mut self,
+        display: &DisplayHandle,
+        index: usize,
+        scope: Option<Scope>,
+        reason: RevokeReason,
+    ) -> bool {
+        let bound = &self.bound[index];
+        let scope =
+            scope.filter(|scope| bound.is_scoped_version() || scope.contains(Scope::Engine));
+        match (bound.grant, scope) {
+            (Grant::Revoked, _) => false,
+            (Grant::Pending, Some(scope)) => {
+                self.activate::<D>(display, index, scope);
+                true
+            }
+            (Grant::Scoped(old), Some(new)) if old == new => false,
+            (Grant::Scoped(old), Some(new)) => {
+                self.change_scope::<D>(display, index, old, new);
+                true
+            }
+            (Grant::Pending | Grant::Scoped(_), None) => {
+                revoke(&mut self.bound[index], reason);
+                true
+            }
+        }
+    }
+
+    /// The first scope of a manager: the scope event, then the description.
+    fn activate<D: ContextDispatch>(
+        &mut self,
+        display: &DisplayHandle,
+        index: usize,
+        scope: Scope,
+    ) {
+        let paused = self.paused;
+        let bound = &mut self.bound[index];
+        bound.grant = Grant::Scoped(scope);
+        if bound.is_scoped_version() {
+            bound.manager.scope(scope);
+        }
+        if bound.sees_metadata() {
+            self.describe::<D>(display, index);
+            let bound = &self.bound[index];
+            bound.manager.session(self.session);
+        }
+        let bound = &self.bound[index];
+        if paused {
+            bound.send_paused(true, PauseOrigin::Engine);
+        }
+        bound.manager.done();
+    }
+
+    /// Announces every known window, and the focus, to one manager.
+    fn describe<D: ContextDispatch>(&mut self, display: &DisplayHandle, index: usize) {
+        let paused = self.paused;
+        let bound = &mut self.bound[index];
+        if !bound.sees_windows(paused) {
+            return;
+        }
+        let with_text = bound.sees_text(paused);
+        for record in self.known.values() {
+            announce::<D>(display, bound, record, with_text);
+        }
+        bound
+            .manager
+            .focus(self.focus.and_then(|key| bound.windows.get(&key)), 0);
+    }
+
+    fn change_scope<D: ContextDispatch>(
+        &mut self,
+        display: &DisplayHandle,
+        index: usize,
+        old: Scope,
+        new: Scope,
+    ) {
+        let paused = self.paused;
+        let bound = &mut self.bound[index];
+        bound.grant = Grant::Scoped(new);
+        if bound.is_scoped_version() {
+            bound.manager.scope(new);
+        }
+        if !new.contains(Scope::Metadata) {
+            bound.close_windows();
+            return;
+        }
+        if !old.contains(Scope::Metadata) {
+            self.describe::<D>(display, index);
+            let bound = &self.bound[index];
+            bound.manager.session(self.session);
+            bound.manager.done();
+            return;
+        }
+        let gained_text = new.contains(Scope::Text) && !old.contains(Scope::Text);
+        if gained_text && bound.sees_windows(paused) {
+            for (key, window) in &bound.windows {
+                if let Some(record) = self.known.get(key) {
+                    window.title(record.title.clone());
+                    window.done();
+                }
+            }
+        }
+    }
+
+    /// A client without the engine or pause scope paused or resumed its own
+    /// stream.
+    fn set_client_paused<D: ContextDispatch>(
+        &mut self,
+        display: &DisplayHandle,
+        manager: &CrownosContextManagerV1,
+        paused: bool,
+    ) {
+        let Some(index) = self.index_of(manager) else {
+            return;
+        };
+        let bound = &mut self.bound[index];
+        if bound.self_paused == paused {
+            return;
+        }
+        bound.self_paused = paused;
+        if paused {
+            bound.close_windows();
+        }
+        bound.send_paused(paused, PauseOrigin::Client);
+        if !paused {
+            self.describe::<D>(display, index);
+            self.bound[index].manager.done();
+        }
+    }
+
+    fn index_of(&self, manager: &CrownosContextManagerV1) -> Option<usize> {
+        self.bound
+            .iter()
+            .position(|bound| bound.manager.id() == manager.id())
+    }
+
+    fn bound_of(&self, manager: &CrownosContextManagerV1) -> Option<&Bound> {
+        self.index_of(manager).map(|index| &self.bound[index])
+    }
+
+    /// Whether the client that owns `window` may flag `key` now.
+    fn may_flag(&mut self, window: &CrownosContextWindowV1, key: WindowKey) -> bool {
+        let now = Instant::now();
+        self.bound
+            .iter_mut()
+            .find(|bound| bound.is_live() && bound.owns_window(window))
+            .is_some_and(|bound| bound.take_flag(key, now))
     }
 
     fn bind<D: ContextDispatch>(
         &mut self,
         display: &DisplayHandle,
         manager: CrownosContextManagerV1,
-    ) -> bool {
-        if self.is_bound() {
-            manager.done();
-            return false;
-        }
-        let mut bound = Bound {
-            manager,
-            windows: HashMap::new(),
-        };
-        if !self.paused {
-            for record in self.known.values() {
-                announce::<D>(display, &mut bound, record);
+        decision: BindDecision,
+    ) {
+        self.bound.push(Bound::new(manager));
+        let index = self.bound.len() - 1;
+        match decision {
+            BindDecision::Granted(scope) => {
+                self.rescope::<D>(display, index, Some(scope), RevokeReason::User);
             }
-            bound
-                .manager
-                .focus(self.focus.and_then(|key| bound.windows.get(&key)), 0);
+            BindDecision::Pending if self.bound[index].is_scoped_version() => {}
+            BindDecision::Pending | BindDecision::Refused => {
+                revoke(&mut self.bound[index], RevokeReason::User);
+            }
         }
-        bound.manager.session(self.session);
-        if self.paused {
-            bound.manager.paused(1, PauseOrigin::Engine);
-        }
+    }
+
+    fn unbind(&mut self, manager: &CrownosContextManagerV1) -> Option<Option<ClientId>> {
+        let index = self.index_of(manager)?;
+        Some(self.bound.remove(index).client)
+    }
+}
+
+/// Makes a manager inert: a version 2 client gets revoked, a version 1
+/// client sees its windows close and the description end.
+fn revoke(bound: &mut Bound, reason: RevokeReason) {
+    let was_pending = bound.grant == Grant::Pending;
+    bound.grant = Grant::Revoked;
+    bound.close_windows();
+    if bound.is_scoped_version() {
+        bound.manager.revoked(reason);
+    } else if was_pending {
         bound.manager.done();
-        self.bound = Some(bound);
-        true
     }
-
-    fn unbind(&mut self, manager: &CrownosContextManagerV1) -> bool {
-        if self
-            .bound
-            .as_ref()
-            .is_some_and(|bound| bound.manager.id() == manager.id())
-        {
-            self.bound = None;
-            return true;
-        }
-        false
-    }
-}
-
-fn announce<D: ContextDispatch>(
-    display: &DisplayHandle,
-    bound: &mut Bound,
-    record: &ContextRecord,
-) {
-    let Some(client) = bound.manager.client() else {
-        return;
-    };
-    let Ok(window) = client.create_resource::<CrownosContextWindowV1, WindowKey, D>(
-        display,
-        bound.manager.version(),
-        record.key,
-    ) else {
-        return;
-    };
-    bound.manager.window(&window, record.identifier.clone());
-    window.app_id(record.app_id.clone());
-    window.title(record.title.clone());
-    window.process(record.pid);
-    window.sandbox(
-        record.sandbox.engine.clone(),
-        record.sandbox.app_id.clone(),
-        record.sandbox.instance_id.clone(),
-    );
-    send_placement(&window, &record.placement);
-    window.state(record.flags);
-    window.content_type(record.content_type);
-    window.sensitivity(record.sensitivity);
-    window.done();
-    bound.windows.insert(record.key, window);
-}
-
-fn send_changes(window: &CrownosContextWindowV1, known: &ContextRecord, record: &ContextRecord) {
-    if known.app_id != record.app_id {
-        window.app_id(record.app_id.clone());
-    }
-    if known.title != record.title {
-        window.title(record.title.clone());
-    }
-    if known.pid != record.pid {
-        window.process(record.pid);
-    }
-    if known.sandbox != record.sandbox {
-        window.sandbox(
-            record.sandbox.engine.clone(),
-            record.sandbox.app_id.clone(),
-            record.sandbox.instance_id.clone(),
-        );
-    }
-    if known.placement != record.placement {
-        send_placement(window, &record.placement);
-    }
-    if known.flags != record.flags {
-        window.state(record.flags);
-    }
-    if known.content_type != record.content_type {
-        window.content_type(record.content_type);
-    }
-    if known.sensitivity != record.sensitivity {
-        window.sensitivity(record.sensitivity);
-    }
-}
-
-fn send_placement(window: &CrownosContextWindowV1, placement: &Placement) {
-    window.placement(
-        placement.x,
-        placement.y,
-        placement.width,
-        placement.height,
-        placement.output.clone(),
-        placement.workspace.clone(),
-    );
 }
