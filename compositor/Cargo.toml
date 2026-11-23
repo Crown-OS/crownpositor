@@ -100,6 +100,9 @@ name = "virtual_keyboard_probe"
 name = "keyboard_focus_probe"
 
 [[example]]
+name = "agent_cursor_probe"
+
+[[example]]
 name = "multi_monitor_probe"
 
 [[example]]

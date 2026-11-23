@@ -103,6 +103,11 @@ impl AgentCursor {
         self.0.is_alive()
     }
 
+    /// The client that asked for the cursor, while it is connected.
+    pub fn client(&self) -> Option<Client> {
+        self.0.client()
+    }
+
     pub fn created(&self, seat: &str) {
         self.0.created(seat.to_owned());
     }
