@@ -39,6 +39,10 @@ impl PeerProcess {
         pidfd_names_pid(&self.pidfd, self.pid)
     }
 
+    pub const fn pid(&self) -> i32 {
+        self.pid
+    }
+
     pub const fn is_preloaded(&self) -> bool {
         self.preloaded
     }

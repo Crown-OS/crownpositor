@@ -71,7 +71,7 @@ impl<D: SecretInputDispatch> Dispatch<CrownosSecretInputManagerV1, (), D> for Se
         let crownos_secret_input_manager_v1::Request::CreateRequest {
             id,
             window_identifier,
-            app_id,
+            expected_app_key,
             require_password_field,
             agent,
             secret_name,
@@ -82,7 +82,7 @@ impl<D: SecretInputDispatch> Dispatch<CrownosSecretInputManagerV1, (), D> for Se
         };
         let details = RequestDetails {
             window_identifier,
-            app_id,
+            expected_app_key,
             require_password_field: require_password_field != 0,
             agent,
             secret_names: secret_name,

@@ -1,7 +1,7 @@
 //! Delegation glue for `crownos_agent_access_v1`, and the audit trail of every
 //! decision. The protocol lives in [`protocols::crownos_agent_access`], the
 //! policy in [`crate::state::agent_access`], the dialog in
-//! [`crate::utils::portal`].
+//! [`crate::utils::consent_questions`].
 
 use crownos_config::schema::{AccessDecision, Agents};
 use wayland_server::{delegate_dispatch, delegate_global_dispatch};
@@ -18,7 +18,7 @@ use protocols::crownos_agent_access::{
 use crate::{
     state::{State, agent_access::AgentAccessPolicy},
     utils::{
-        portal::{AccessAnswer, AccessPrompt, ask_agent_access},
+        consent_questions::{AccessAnswer, access_answer, agent_access_question},
         token::random_hex_token,
     },
 };
@@ -64,17 +64,13 @@ impl State {
     }
 
     fn prompt_agent_access(&mut self, request: AgentAccessRequest) {
-        let prompt = AccessPrompt {
-            ticket: 0,
-            app_id: request.app_id().to_owned(),
-            reason: request.reason().to_owned(),
-        };
+        let question = agent_access_question(request.app_id(), request.reason());
+        let app_id = request.app_id().to_owned();
         let ticket = self.agent_prompts.park(request);
-        tracing::info!(target: AUDIT, app_id = prompt.app_id, ticket, "asking the user");
-        self.common.tasks.run(
-            ask_agent_access(AccessPrompt { ticket, ..prompt }),
-            move |state, answer| state.answer_agent_access(ticket, answer),
-        );
+        tracing::info!(target: AUDIT, app_id, ticket, "asking the user");
+        self.ask_consent(question, move |state, answer| {
+            state.answer_agent_access(ticket, access_answer(&answer));
+        });
     }
 
     fn answer_agent_access(&mut self, ticket: u64, answer: Result<AccessAnswer, String>) {

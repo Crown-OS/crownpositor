@@ -9,6 +9,7 @@ pub mod clamshell;
 mod client;
 mod common;
 mod config;
+pub mod consent_dialogs;
 pub mod context_access;
 mod control;
 mod cursor;
@@ -111,6 +112,8 @@ pub struct State {
     pub guest_seats: guest_seats::GuestSeats,
     /// The `crownos_secret_input_v1` request being confirmed or typed.
     pub secret_typing: secret_typing::SecretTyping,
+    /// The consent dialogs the compositor started and has not heard back from.
+    pub consent_dialogs: consent_dialogs::ConsentDialogs,
 }
 
 impl State {
@@ -233,6 +236,7 @@ impl State {
             agent_seats: agent_seats::AgentSeats::default(),
             guest_seats: guest_seats::GuestSeats::default(),
             secret_typing: secret_typing::SecretTyping::default(),
+            consent_dialogs: consent_dialogs::ConsentDialogs::default(),
         };
         state.arm_activity_flush();
         state.arm_context_expiry();

@@ -25,7 +25,8 @@ pub struct TypingValue {
 #[derive(Debug, Clone, Default)]
 pub struct RequestDetails {
     pub window_identifier: String,
-    pub app_id: String,
+    /// The verified app key the window's client must have, as text.
+    pub expected_app_key: String,
     pub require_password_field: bool,
     pub agent: String,
     pub secret_names: String,

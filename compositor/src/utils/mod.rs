@@ -1,6 +1,8 @@
 pub mod affine;
 pub mod app_icon;
 pub mod app_key;
+pub mod consent_dialog;
+pub mod consent_questions;
 pub mod consent_surface;
 pub mod constraint_region;
 pub mod development_override;
@@ -12,7 +14,6 @@ pub mod mode;
 pub mod output_setting;
 pub mod panel;
 pub mod pixels;
-pub mod portal;
 pub mod privilege;
 pub mod process_env;
 pub mod raster;

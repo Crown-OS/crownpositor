@@ -1,11 +1,13 @@
 //! The decisions of a typing request that need no compositor state.
 
+use crownos_config::schema::AppKey;
 use protocols::crownos_secret_input::Outcome;
 
 use crate::state::text_input_purposes::AppliedTextInput;
 
-/// App ids of terminal emulators: text typed there is a command line.
-const TERMINAL_APP_IDS: [&str; 16] = [
+/// App ids of terminal emulators and of editors with a terminal inside: text
+/// typed there can be a command line.
+const TERMINAL_APP_IDS: [&str; 30] = [
     "kgx",
     "org.gnome.console",
     "org.gnome.ptyxis",
@@ -22,25 +24,85 @@ const TERMINAL_APP_IDS: [&str; 16] = [
     "urxvt",
     "com.mitchellh.ghostty",
     "io.elementary.terminal",
+    "com.raggesilver.blackbox",
+    "blackbox",
+    "dev.warp.warp",
+    "warp",
+    "org.tabby",
+    "tabby",
+    "code",
+    "code-oss",
+    "codium",
+    "com.visualstudio.code",
+    "com.vscodium.codium",
+    "cursor",
+    "dev.zed.zed",
+    "zed",
+];
+
+/// Executable names of the same programs, for a window whose app id says
+/// something else.
+const TERMINAL_EXECUTABLES: [&str; 22] = [
+    "kgx",
+    "gnome-terminal-server",
+    "ptyxis",
+    "foot",
+    "kitty",
+    "alacritty",
+    "konsole",
+    "tilix",
+    "terminator",
+    "st",
+    "urxvt",
+    "xterm",
+    "wezterm-gui",
+    "ghostty",
+    "blackbox",
+    "warp",
+    "tabby",
+    "code",
+    "codium",
+    "cursor",
+    "zed",
+    "zeditor",
 ];
 
 /// The longest display text the dialog shows for one field.
 const DISPLAY_TEXT_CHARACTERS: usize = 120;
 
-pub fn is_terminal_app(app_id: &str) -> bool {
-    let app_id = app_id.to_ascii_lowercase();
-    TERMINAL_APP_IDS.contains(&app_id.as_str())
-        || app_id.contains("terminal")
-        || app_id.ends_with("term")
+fn looks_like_terminal(name: &str) -> bool {
+    TERMINAL_APP_IDS.contains(&name)
+        || name.contains("terminal")
+        || name.ends_with("term")
+        || name.starts_with("jetbrains-")
 }
 
-/// The window must exist and carry the app id the daemon asked for.
-pub fn check_target(requested_app_id: &str, window_app_id: Option<&str>) -> Result<(), Outcome> {
-    let window_app_id = window_app_id.ok_or(Outcome::UnknownWindow)?;
-    if requested_app_id.is_empty() || requested_app_id != window_app_id {
-        return Err(Outcome::TargetMismatch);
+pub fn is_terminal(app_id: &str, app_key: &AppKey) -> bool {
+    let executable = match app_key {
+        AppKey::HostExecutable { path } => path.file_name(),
+        AppKey::Interpreted { script, .. } => script.file_name(),
+        AppKey::Sandboxed { .. } | AppKey::Spawned { .. } => None,
     }
-    Ok(())
+    .and_then(|name| name.to_str())
+    .map(str::to_ascii_lowercase);
+    let sandboxed_app = match app_key {
+        AppKey::Sandboxed { app_id, .. } => Some(app_id.to_ascii_lowercase()),
+        _ => None,
+    };
+    looks_like_terminal(&app_id.to_ascii_lowercase())
+        || sandboxed_app.is_some_and(|app| looks_like_terminal(&app))
+        || executable.is_some_and(|name| {
+            TERMINAL_EXECUTABLES.contains(&name.as_str()) || looks_like_terminal(&name)
+        })
+}
+
+/// The window's client must have the app key that the daemon expects. A
+/// client without a verified key never matches.
+pub fn check_app_key(expected: &str, actual: Option<AppKey>) -> Result<AppKey, Outcome> {
+    let expected: AppKey = expected.parse().map_err(|_| Outcome::TargetMismatch)?;
+    actual
+        .filter(|actual| *actual == expected)
+        .ok_or(Outcome::TargetMismatch)
 }
 
 /// What the focused field allows for the next value.
@@ -112,36 +174,66 @@ mod tests {
         }
     }
 
+    fn exe(path: &str) -> AppKey {
+        AppKey::HostExecutable { path: path.into() }
+    }
+
     #[test]
-    fn a_window_of_another_app_is_a_target_mismatch() {
+    fn a_spoofed_app_id_does_not_change_the_verified_key() {
+        let browser = exe("/usr/lib/chromium/chromium");
         assert_eq!(
-            check_target("org.mozilla.firefox", Some("org.mozilla.firefox")),
-            Ok(())
+            check_app_key("exe:/usr/lib/chromium/chromium", Some(browser.clone())),
+            Ok(browser)
         );
         assert_eq!(
-            check_target("org.mozilla.firefox", Some("org.evil.app")),
+            check_app_key(
+                "exe:/usr/lib/chromium/chromium",
+                Some(exe("/home/user/evil"))
+            ),
             Err(Outcome::TargetMismatch)
         );
-        assert_eq!(check_target("", Some("")), Err(Outcome::TargetMismatch));
         assert_eq!(
-            check_target("org.mozilla.firefox", None),
-            Err(Outcome::UnknownWindow)
+            check_app_key("exe:/usr/lib/chromium/chromium", None),
+            Err(Outcome::TargetMismatch)
+        );
+        assert_eq!(
+            check_app_key("not a key", Some(exe("/usr/bin/x"))),
+            Err(Outcome::TargetMismatch)
         );
     }
 
     #[test]
-    fn terminals_are_known_by_app_id() {
+    fn terminals_are_known_by_app_id_or_executable() {
+        let plain = exe("/usr/lib/chromium/chromium");
         for app_id in [
             "kitty",
             "org.gnome.Terminal",
             "Alacritty",
             "org.wezfurlong.wezterm",
-            "xterm",
+            "com.raggesilver.BlackBox",
+            "dev.warp.Warp",
+            "jetbrains-idea",
+            "code",
         ] {
-            assert!(is_terminal_app(app_id), "{app_id}");
+            assert!(is_terminal(app_id, &plain), "{app_id}");
         }
+        for executable in [
+            "/usr/bin/kitty",
+            "/usr/bin/gnome-terminal-server",
+            "/opt/tabby/tabby",
+        ] {
+            assert!(
+                is_terminal("org.example.Browser", &exe(executable)),
+                "{executable}"
+            );
+        }
+        let flatpak = AppKey::Sandboxed {
+            engine: "org.flatpak".into(),
+            app_id: "com.raggesilver.BlackBox".into(),
+        };
+        assert!(is_terminal("bank", &flatpak));
         for app_id in ["chromium", "org.mozilla.firefox", "org.gnome.Nautilus"] {
-            assert!(!is_terminal_app(app_id), "{app_id}");
+            assert!(!is_terminal(app_id, &plain), "{app_id}");
         }
     }
 

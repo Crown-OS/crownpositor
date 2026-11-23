@@ -78,9 +78,20 @@ impl Dispatch<CrownosContextWindowV1, ()> for Printer {
             window::Event::AppId { app_id } => print_line(&format!("app_id {app_id}")),
             window::Event::Title { .. } => print_line("title"),
             window::Event::Closed => print_line("closed"),
+            window::Event::Sensitivity { sensitivity } => print_line(&format!(
+                "sensitivity {:?} at {}",
+                sensitivity,
+                monotonic_milliseconds()
+            )),
             _ => {}
         }
     }
+}
+
+/// `CLOCK_MONOTONIC` in milliseconds, comparable with other processes' clocks.
+fn monotonic_milliseconds() -> i64 {
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    now.tv_sec * 1000 + now.tv_nsec / 1_000_000
 }
 
 fn main() -> anyhow::Result<()> {

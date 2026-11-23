@@ -7,7 +7,10 @@
 //! change. While one is mapped it is the only overlay drawn and hit, so no
 //! other overlay can cover it.
 
-use std::{path::Path, sync::LazyLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
 use crownos_config::schema::AppKey;
 use smithay::{
@@ -31,7 +34,7 @@ const PORTAL_DIALOG_EXECUTABLE: &str = "/usr/lib/crownos-portal-dialog";
 /// debug build or a nested session.
 const DIALOG_OVERRIDE: &str = "CROWN_CONSENT_DIALOG";
 
-static DEVELOPMENT_DIALOG: LazyLock<Option<std::path::PathBuf>> =
+static DEVELOPMENT_DIALOG: LazyLock<Option<PathBuf>> =
     LazyLock::new(|| development_path(DIALOG_OVERRIDE));
 
 /// Warns when the installed dialog is missing: no window then counts as a
@@ -84,6 +87,16 @@ pub fn shows_consent_dialog(output: &Output) -> bool {
     smithay::desktop::layer_map_for_output(output)
         .layers()
         .any(is_consent_layer)
+}
+
+/// The dialog to start for a consent question: the development build the
+/// compositor was started with, or the installed one while root controls it.
+pub fn consent_dialog_executable() -> Option<PathBuf> {
+    if let Some(development) = DEVELOPMENT_DIALOG.as_deref() {
+        return Some(development.to_path_buf());
+    }
+    let installed = Path::new(PORTAL_DIALOG_EXECUTABLE);
+    (installed.is_file() && is_consent_executable(installed)).then(|| installed.to_path_buf())
 }
 
 /// Whether `layer` of kind `kind` is left out while `map` holds a consent

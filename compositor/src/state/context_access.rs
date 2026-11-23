@@ -15,7 +15,7 @@ use protocols::crownos_agent_cursor::RevokeReason as AgentRevokeReason;
 
 use crate::{
     state::{ClientState, State},
-    utils::portal::{ContextAnswer, ContextPrompt, ask_context_access},
+    utils::consent_questions::{ContextAnswer, context_access_question, context_answer},
     utils::privilege::may_drive_agents,
 };
 
@@ -171,17 +171,12 @@ impl State {
         if self.context_prompts.is_asking(|asked| *asked == key) {
             return;
         }
-        let prompt = ContextPrompt {
-            ticket: 0,
-            app_name: key.display_name(),
-            app_key: key.to_string(),
-        };
+        let question = context_access_question(&key.display_name(), &key.to_string());
         tracing::info!(target: AUDIT, actor = %key, "asking the user");
         let ticket = self.context_prompts.park(key);
-        self.common.tasks.run(
-            ask_context_access(ContextPrompt { ticket, ..prompt }),
-            move |state, answer| state.answer_context_access(ticket, answer),
-        );
+        self.ask_consent(question, move |state, answer| {
+            state.answer_context_access(ticket, context_answer(&answer));
+        });
     }
 
     fn answer_context_access(&mut self, ticket: u64, answer: Result<ContextAnswer, String>) {

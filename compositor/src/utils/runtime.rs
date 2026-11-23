@@ -100,6 +100,16 @@ impl TaskSender {
         }
     }
 
+    /// Starts a process on the pool's reactor, so its exit can be awaited there. The pid is
+    /// known when this returns.
+    pub fn spawn_process(
+        &self,
+        command: &mut tokio::process::Command,
+    ) -> std::io::Result<tokio::process::Child> {
+        let _entered = self.runtime.enter();
+        command.spawn()
+    }
+
     /// Fire-and-forget async work that never needs the compositor state.
     pub fn spawn<F>(&self, future: F)
     where

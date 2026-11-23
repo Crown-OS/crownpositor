@@ -1,6 +1,6 @@
 //! Typing a secret for crownos-secretsd: one request at a time, confirmed in
-//! the portal dialog, then typed through text-input into the window that the
-//! request names.
+//! the consent dialog that the compositor starts itself, then typed through
+//! text-input into the window that the request names.
 
 mod checks;
 mod text_entry;
@@ -8,6 +8,7 @@ mod text_entry;
 use std::time::{Duration, Instant};
 
 use calloop::timer::{TimeoutAction, Timer};
+use crownos_config::schema::AppKey;
 use crownos_protocols::secret_input::v1::server::crownos_secret_input_request_v1::CrownosSecretInputRequestV1;
 use protocols::crownos_secret_input::{Outcome, RequestDetails, SecretInputRequest, ValueKind};
 use smithay::{
@@ -16,16 +17,14 @@ use smithay::{
 };
 
 use self::checks::{
-    FieldCheck, check_field, check_target, display_text, is_terminal_app, outcome_after_wait,
+    FieldCheck, check_app_key, check_field, display_text, is_terminal, outcome_after_wait,
 };
 use crate::{
-    state::State,
+    state::{ClientState, State},
     utils::{
+        consent_dialog::ConsentAnswer,
+        consent_questions::{SecretTypingPrompt, secret_typing_question, typing_allowed},
         id::WindowId,
-        portal::{
-            SecretTypingAnswer, SecretTypingPrompt, ask_secret_typing, close_dialog,
-            secret_typing_request_path,
-        },
         surface,
     },
 };
@@ -41,15 +40,24 @@ const SENSITIVE_AFTER: Duration = Duration::from_secs(30);
 #[derive(Default)]
 pub struct SecretTyping {
     active: Option<ActiveTyping>,
-    next_ticket: u64,
 }
 
 struct ActiveTyping {
     request: SecretInputRequest,
     window: WindowId,
+    /// The title the dialog showed; the window must still have it after Allow.
+    shown_title: String,
+    /// The consent dialog's ticket.
     ticket: u64,
     phase: Phase,
     turned_input_method_on: bool,
+}
+
+struct TypingWindow {
+    window: WindowId,
+    title: String,
+    app_id: String,
+    app_key: AppKey,
 }
 
 #[derive(Clone)]
@@ -71,43 +79,39 @@ impl State {
         if self.shell.is_locked() {
             return finish_request(request, Outcome::SessionLocked);
         }
-        let (window, window_title) = match self.typing_window(request.details()) {
-            Ok(window) => window,
+        let target = match self.typing_window(request.details()) {
+            Ok(target) => target,
             Err(outcome) => return finish_request(request, outcome),
         };
-        if is_terminal_app(&request.details().app_id) {
+        if is_terminal(&target.app_id, &target.app_key) {
             return finish_request(request, Outcome::Refused);
         }
-        self.secret_typing.next_ticket += 1;
-        let ticket = self.secret_typing.next_ticket;
         let details = request.details();
         let prompt = SecretTypingPrompt {
-            ticket,
             agent: display_text(&details.agent),
             secret_names: display_text(&details.secret_names),
-            app_id: display_text(&details.app_id),
-            window_title: display_text(&window_title),
+            app_name: display_text(&target.app_key.display_name()),
+            app_key: display_text(&target.app_key.to_string()),
+            window_title: display_text(&target.title),
             origin: display_text(&details.origin),
         };
         tracing::info!(
             target: AUDIT,
-            app_id = details.app_id,
+            app_key = %target.app_key,
             secrets = details.secret_names,
-            ticket,
             "asking the user to allow typing"
         );
+        let ticket = self.ask_consent(secret_typing_question(&prompt), |state, answer| {
+            state.secret_typing_answered(&answer);
+        });
         self.secret_typing.active = Some(ActiveTyping {
             request,
-            window,
+            window: target.window,
+            shown_title: target.title,
             ticket,
             phase: Phase::Asking,
             turned_input_method_on: false,
         });
-        self.common
-            .tasks
-            .run(ask_secret_typing(prompt), move |state, answer| {
-                state.secret_typing_answered(ticket, answer);
-            });
     }
 
     pub fn withdraw_secret_typing(&mut self, resource: &CrownosSecretInputRequestV1) {
@@ -121,39 +125,47 @@ impl State {
         }
     }
 
-    fn typing_window(&self, details: &RequestDetails) -> Result<(WindowId, String), Outcome> {
+    /// The window of the request, with its verified app key, after the checks
+    /// that need no user.
+    fn typing_window(&self, details: &RequestDetails) -> Result<TypingWindow, Outcome> {
         let tile = self
             .wayland
             .foreign_toplevels
             .window(&details.window_identifier)
             .and_then(|window| self.shell.tile(window))
             .ok_or(Outcome::UnknownWindow)?;
-        check_target(&details.app_id, surface::app_id(tile.surface()).as_deref())?;
-        Ok((tile.id(), tile.title().to_owned()))
+        let app_key = tile.surface().client().and_then(|client| {
+            client
+                .get_data::<ClientState>()
+                .and_then(ClientState::current_app_key)
+                .cloned()
+        });
+        let app_key = check_app_key(&details.expected_app_key, app_key)?;
+        Ok(TypingWindow {
+            window: tile.id(),
+            title: tile.title().to_owned(),
+            app_id: surface::app_id(tile.surface()).unwrap_or_default(),
+            app_key,
+        })
     }
 
-    fn secret_typing_answered(&mut self, ticket: u64, answer: Result<SecretTypingAnswer, String>) {
+    fn secret_typing_answered(&mut self, answer: &ConsentAnswer) {
         let Some(active) = self.secret_typing.active.as_ref() else {
             return;
         };
-        if active.ticket != ticket {
-            return;
-        }
         let window = active.window;
         let outcome = match answer {
-            Ok(SecretTypingAnswer::Allowed) => None,
-            Ok(SecretTypingAnswer::Denied) => Some(Outcome::Cancelled),
-            Ok(SecretTypingAnswer::TimedOut) => Some(Outcome::TimedOut),
-            Err(error) => {
-                tracing::warn!(target: AUDIT, %error, "nobody could be asked");
-                Some(Outcome::Refused)
-            }
+            _ if typing_allowed(answer) => None,
+            ConsentAnswer::TimedOut => Some(Outcome::TimedOut),
+            ConsentAnswer::Unavailable => Some(Outcome::Refused),
+            _ => Some(Outcome::Cancelled),
         };
         let outcome = outcome
             .or_else(|| self.shell.is_locked().then_some(Outcome::SessionLocked))
             .or_else(|| match self.typing_window(active.request.details()) {
-                Ok((still, _)) if still == window => None,
-                Ok(_) => Some(Outcome::UnknownWindow),
+                Ok(still) if still.window != window => Some(Outcome::UnknownWindow),
+                Ok(still) if still.title != active.shown_title => Some(Outcome::FocusChanged),
+                Ok(_) => None,
                 Err(outcome) => Some(outcome),
             });
         if let Some(outcome) = outcome {
@@ -162,6 +174,9 @@ impl State {
             }
             return self.finish_secret_typing(outcome);
         }
+        let value_count = u32::try_from(active.request.values().len()).unwrap_or(u32::MAX);
+        self.windows
+            .flag(window, FIELD_WAIT * value_count + SENSITIVE_AFTER);
         let handle = self.text_input_handle();
         let turn_on =
             !handle.compositor_input_method() && !self.wayland.seat.input_method().has_instance();
@@ -260,9 +275,9 @@ impl State {
             FieldCheck::Wait => return true,
             FieldCheck::Ready => {}
         }
-        let remaining = u32::try_from(value_count - next_value).unwrap_or(u32::MAX);
-        self.windows
-            .flag(window, FIELD_WAIT * remaining + SENSITIVE_AFTER);
+        if !self.windows.is_sensitive(window) && self.windows_are_watched() {
+            return true;
+        }
         if let Some(active) = self.secret_typing.active.as_ref()
             && let Some(value) = active.request.values().get(next_value)
         {
@@ -299,13 +314,11 @@ impl State {
             self.text_input_handle().set_compositor_input_method(false);
         }
         if matches!(active.phase, Phase::Asking) {
-            self.common
-                .tasks
-                .spawn(close_dialog(secret_typing_request_path(active.ticket)));
+            self.withdraw_consent(active.ticket);
         }
         tracing::info!(
             target: AUDIT,
-            app_id = active.request.details().app_id,
+            app_key = active.request.details().expected_app_key,
             ticket = active.ticket,
             ?outcome,
             "typing request ended"
@@ -317,7 +330,7 @@ impl State {
 fn finish_request(request: SecretInputRequest, outcome: Outcome) {
     tracing::info!(
         target: AUDIT,
-        app_id = request.details().app_id,
+        app_key = request.details().expected_app_key,
         ?outcome,
         "typing request refused before the dialog"
     );

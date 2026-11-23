@@ -3,10 +3,10 @@
 //! `crownos_secret_input_v1` request and prints its outcome.
 //!
 //! ```text
-//! secret_input_probe <app_id> <require_password_field 0|1> <kind>:<value>[:tab] ...
+//! secret_input_probe <app_id> <expected_app_key> <require_password_field 0|1> <kind>:<value>[:tab] ...
 //! ```
 //!
-//! `PROBE_CLAIMED_APP_ID` sends another app id than the window has.
+//! The app id finds the window; the expected app key goes to the compositor.
 //!
 //! The values are test values only.
 
@@ -131,8 +131,10 @@ fn sealed_value(text: &str) -> anyhow::Result<OwnedFd> {
 
 fn main() -> anyhow::Result<()> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let [app_id, require, values @ ..] = arguments.as_slice() else {
-        bail!("usage: secret_input_probe <app_id> <0|1> <kind>:<value>[:tab] ...");
+    let [app_id, expected_app_key, require, values @ ..] = arguments.as_slice() else {
+        bail!(
+            "usage: secret_input_probe <app_id> <expected_app_key> <0|1> <kind>:<value>[:tab] ..."
+        );
     };
     let connection = Connection::connect_to_env().context("no Wayland display")?;
     let (globals, mut queue) = registry_queue_init::<Probe>(&connection)?;
@@ -159,10 +161,9 @@ fn main() -> anyhow::Result<()> {
                 .collect();
             format!("no window of that app among {known:?}")
         })?;
-    let claimed_app_id = std::env::var("PROBE_CLAIMED_APP_ID").unwrap_or_else(|_| app_id.clone());
     let request = manager.create_request(
         identifier,
-        claimed_app_id,
+        expected_app_key.clone(),
         require.parse()?,
         "probe agent".into(),
         "probe secret".into(),

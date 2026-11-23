@@ -43,7 +43,7 @@ parking_lot = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 smithay-drm-extras = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process", "macros"] }
 tracing = { workspace = true }
 tracing-journald = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -73,7 +73,7 @@ wayland-protocols = { version = "0.32", default-features = false, features = ["s
 crownos-protocols = { workspace = true, features = ["client"] }
 tempfile = "3.27.0"
 wayland-protocols-misc = { version = "0.3", default-features = false, features = ["client"] }
-rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+rustix = { version = "1", default-features = false, features = ["fs", "std", "time"] }
 
 [[example]]
 name = "wlr_outputs"
@@ -101,3 +101,6 @@ name = "multi_monitor_probe"
 
 [[example]]
 name = "secret_input_probe"
+
+[[example]]
+name = "consent_dialog_probe"
