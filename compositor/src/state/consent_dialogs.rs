@@ -21,6 +21,8 @@ use crate::{
 const AUDIT: &str = "crownpositor::audit::consent";
 /// How many questions may wait while a dialog is open.
 const MAX_WAITING: usize = 4;
+/// How many of them one asker may have, so one client cannot fill the queue.
+const MAX_WAITING_PER_ASKER: usize = 1;
 
 type OnAnswer = Box<dyn FnOnce(&mut State, u64, ConsentOutcome) + Send>;
 
@@ -40,6 +42,7 @@ struct OpenDialog {
 
 struct WaitingQuestion {
     ticket: u64,
+    asker: String,
     question: ConsentQuestion,
     on_answer: OnAnswer,
 }
@@ -52,10 +55,15 @@ enum Admission {
 }
 
 impl ConsentDialogs {
-    fn admission(&self) -> Admission {
+    fn admission(&self, asker: &str) -> Admission {
+        let waiting_of_asker = self
+            .waiting
+            .iter()
+            .filter(|waiting| waiting.asker == asker)
+            .count();
         if self.open.is_none() && self.waiting.is_empty() {
             Admission::Start
-        } else if self.waiting.len() < MAX_WAITING {
+        } else if self.waiting.len() < MAX_WAITING && waiting_of_asker < MAX_WAITING_PER_ASKER {
             Admission::Wait
         } else {
             Admission::Refuse
@@ -66,24 +74,27 @@ impl ConsentDialogs {
 impl State {
     /// Shows the question when no other dialog is open, or queues it, and
     /// calls `on_answer` with its ticket and the answer on the compositor
-    /// thread. Returns the ticket, for [`Self::withdraw_consent`].
+    /// thread. `asker` names who asks, such as an app key; each asker may have
+    /// one question waiting. Returns the ticket, for [`Self::withdraw_consent`].
     pub fn ask_consent(
         &mut self,
+        asker: &str,
         question: ConsentQuestion,
         on_answer: impl FnOnce(&mut State, u64, ConsentOutcome) + Send + 'static,
     ) -> u64 {
         self.consent_dialogs.next_ticket += 1;
         let ticket = self.consent_dialogs.next_ticket;
         let on_answer: OnAnswer = Box::new(on_answer);
-        match self.consent_dialogs.admission() {
+        match self.consent_dialogs.admission(asker) {
             Admission::Start => self.start_consent(ticket, question, on_answer),
             Admission::Wait => self.consent_dialogs.waiting.push_back(WaitingQuestion {
                 ticket,
+                asker: asker.to_owned(),
                 question,
                 on_answer,
             }),
             Admission::Refuse => {
-                tracing::warn!(target: AUDIT, ticket, "too many consent questions; refused");
+                tracing::warn!(target: AUDIT, ticket, asker, "too many consent questions; refused");
                 self.answer_later(ticket, on_answer, ConsentOutcome::Unavailable);
             }
         }
@@ -269,7 +280,7 @@ mod tests {
     #[test]
     fn a_second_question_waits_and_the_queue_is_bounded() {
         let mut dialogs = ConsentDialogs::default();
-        assert_eq!(dialogs.admission(), Admission::Start);
+        assert_eq!(dialogs.admission("first"), Admission::Start);
         dialogs.open = Some(OpenDialog {
             ticket: 1,
             pid: 1,
@@ -277,15 +288,37 @@ mod tests {
             withdraw: None,
         });
         for ticket in 2..2 + MAX_WAITING as u64 {
-            assert_eq!(dialogs.admission(), Admission::Wait);
+            let asker = format!("asker-{ticket}");
+            assert_eq!(dialogs.admission(&asker), Admission::Wait);
             dialogs.waiting.push_back(WaitingQuestion {
                 ticket,
+                asker,
                 question: question(),
                 on_answer: Box::new(|_, _, _| {}),
             });
         }
-        assert_eq!(dialogs.admission(), Admission::Refuse);
+        assert_eq!(dialogs.admission("another"), Admission::Refuse);
         dialogs.waiting.pop_front();
-        assert_eq!(dialogs.admission(), Admission::Wait);
+        assert_eq!(dialogs.admission("another"), Admission::Wait);
+    }
+
+    #[test]
+    fn one_asker_cannot_fill_the_queue() {
+        let mut dialogs = ConsentDialogs::default();
+        dialogs.open = Some(OpenDialog {
+            ticket: 1,
+            pid: 1,
+            shown: false,
+            withdraw: None,
+        });
+        assert_eq!(dialogs.admission("agent"), Admission::Wait);
+        dialogs.waiting.push_back(WaitingQuestion {
+            ticket: 2,
+            asker: "agent".to_owned(),
+            question: question(),
+            on_answer: Box::new(|_, _, _| {}),
+        });
+        assert_eq!(dialogs.admission("agent"), Admission::Refuse);
+        assert_eq!(dialogs.admission("other"), Admission::Wait);
     }
 }

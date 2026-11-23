@@ -173,8 +173,9 @@ impl State {
         }
         let question = context_access_question(&key.display_name(), &key.to_string());
         tracing::info!(target: AUDIT, actor = %key, "asking the user");
+        let asker = key.to_string();
         let ticket = self.context_prompts.park(key);
-        self.ask_consent(question, move |state, _, answer| {
+        self.ask_consent(&asker, question, move |state, _, answer| {
             state.answer_context_access(ticket, context_answer(&answer));
         });
     }

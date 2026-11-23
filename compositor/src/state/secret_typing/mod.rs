@@ -100,9 +100,14 @@ impl State {
             secrets = details.secret_names,
             "asking the user to allow typing"
         );
-        let ticket = self.ask_consent(secret_typing_question(&prompt), |state, ticket, answer| {
-            state.secret_typing_answered(ticket, &answer);
-        });
+        let asker = details.agent.clone();
+        let ticket = self.ask_consent(
+            &asker,
+            secret_typing_question(&prompt),
+            |state, ticket, answer| {
+                state.secret_typing_answered(ticket, &answer);
+            },
+        );
         self.secret_typing.active = Some(ActiveTyping {
             request,
             window: target.window,

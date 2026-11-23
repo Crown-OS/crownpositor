@@ -29,9 +29,14 @@ impl State {
             detail: display_text(&question.detail),
         };
         tracing::info!(target: AUDIT, agent = prompt.agent_app_key, secrets = prompt.secret_names, "asking the user");
-        let ticket = self.ask_consent(secret_use_question(&prompt), |state, ticket, answer| {
-            state.answer_secret_consent(ticket, &answer);
-        });
+        let asker = question.agent_app_key.clone();
+        let ticket = self.ask_consent(
+            &asker,
+            secret_use_question(&prompt),
+            |state, ticket, answer| {
+                state.answer_secret_consent(ticket, &answer);
+            },
+        );
         self.secret_consents.open.push((ticket, question));
     }
 

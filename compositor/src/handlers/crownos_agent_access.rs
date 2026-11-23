@@ -68,7 +68,7 @@ impl State {
         let app_id = request.app_id().to_owned();
         let ticket = self.agent_prompts.park(request);
         tracing::info!(target: AUDIT, app_id, ticket, "asking the user");
-        self.ask_consent(question, move |state, _, answer| {
+        self.ask_consent(&app_id, question, move |state, _, answer| {
             state.answer_agent_access(ticket, access_answer(&answer));
         });
     }
