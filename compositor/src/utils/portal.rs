@@ -15,6 +15,7 @@ const BACKENDS: [&str; 2] = [
 ];
 const PATH: &str = "/org/freedesktop/portal/desktop";
 const INTERFACE: &str = "org.freedesktop.impl.portal.Access";
+const REQUEST_INTERFACE: &str = "org.freedesktop.impl.portal.Request";
 const SERVICE_UNKNOWN: &str = "org.freedesktop.DBus.Error.ServiceUnknown";
 const REMEMBER: &str = "remember";
 const CONTEXT_SCOPE: &str = "scope";
@@ -57,6 +58,25 @@ pub struct ContextAnswer {
     pub remember: bool,
     /// The user also allowed window titles.
     pub titles: bool,
+}
+
+/// crownos-secretsd asking to type a secret for an agent. Each text is
+/// display text only, already cleaned of control characters.
+#[derive(Debug, Clone)]
+pub struct SecretTypingPrompt {
+    pub ticket: u64,
+    pub agent: String,
+    pub secret_names: String,
+    pub app_id: String,
+    pub window_title: String,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretTypingAnswer {
+    Allowed,
+    Denied,
+    TimedOut,
 }
 
 /// One question for the Access portal.
@@ -137,6 +157,76 @@ pub async fn ask_context_access(prompt: ContextPrompt) -> Result<ContextAnswer, 
         remember: answer.choice(REMEMBER) == Some("true"),
         titles: answer.choice(CONTEXT_SCOPE) == Some(TEXT),
     })
+}
+
+pub fn secret_typing_request_path(ticket: u64) -> String {
+    format!("/org/crownos/portal/request/secret/{ticket}")
+}
+
+pub async fn ask_secret_typing(prompt: SecretTypingPrompt) -> Result<SecretTypingAnswer, String> {
+    let request_path = secret_typing_request_path(prompt.ticket);
+    let target = if prompt.window_title.is_empty() {
+        prompt.app_id.as_str()
+    } else {
+        prompt.window_title.as_str()
+    };
+    let title = format!("Type a secret into “{target}”?");
+    let subtitle = format!(
+        "{} asks via crownos-secretsd to type {}.",
+        prompt.agent, prompt.secret_names
+    );
+    let origin = if prompt.origin.is_empty() {
+        "none"
+    } else {
+        prompt.origin.as_str()
+    };
+    let body = format!(
+        "App: {}\nWindow: {}\nPage, as the agent reports it: {origin}\n\n\
+         The agent does not see the value. Allow only if you asked the agent to sign in here.",
+        prompt.app_id, prompt.window_title
+    );
+    let dialog = AccessDialog {
+        request_path: request_path.clone(),
+        app_id: "crownos-secretsd",
+        title: &title,
+        subtitle: &subtitle,
+        body: &body,
+        choices: Vec::new(),
+    };
+    match tokio::time::timeout(ANSWER_DEADLINE, ask_portal(dialog)).await {
+        Ok(answer) => answer.map(|answer| {
+            if answer.granted {
+                SecretTypingAnswer::Allowed
+            } else {
+                SecretTypingAnswer::Denied
+            }
+        }),
+        Err(_) => {
+            close_dialog(request_path).await;
+            Ok(SecretTypingAnswer::TimedOut)
+        }
+    }
+}
+
+/// Closes an open dialog, for example when its request was withdrawn.
+pub async fn close_dialog(request_path: String) {
+    let Ok(connection) = Connection::session().await else {
+        return;
+    };
+    for backend in BACKENDS {
+        let closed = connection
+            .call_method(
+                Some(backend),
+                request_path.as_str(),
+                Some(REQUEST_INTERFACE),
+                "Close",
+                &(),
+            )
+            .await;
+        if closed.is_ok() {
+            return;
+        }
+    }
 }
 
 /// Asks, and counts no answer within [`ANSWER_DEADLINE`] as a refusal.

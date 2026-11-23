@@ -24,6 +24,7 @@ pub mod crownos_output_brightness;
 pub mod crownos_output_info;
 pub mod crownos_plugin_host;
 pub mod crownos_screencast;
+pub mod crownos_secret_input;
 pub mod crownos_surface_animation;
 pub mod crownos_surface_visibility;
 pub mod crownos_virtual_output;

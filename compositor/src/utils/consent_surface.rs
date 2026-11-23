@@ -17,7 +17,10 @@ use smithay::{
     wayland::shell::wlr_layer::Layer,
 };
 
-use crate::{handlers::seat::PointerFocusTarget, state::ClientState};
+use crate::{
+    handlers::seat::PointerFocusTarget, state::ClientState,
+    utils::development_override::development_path,
+};
 
 /// The layer-shell namespace of `crownos-portal-dialog`.
 pub const PORTAL_DIALOG_NAMESPACE: &str = "crownos-portal-dialog";
@@ -27,15 +30,9 @@ const PORTAL_DIALOG_EXECUTABLE: &str = "/usr/lib/crownos-portal-dialog";
 /// Read once from the compositor's own environment, and honoured only in a
 /// debug build or a nested session.
 const DIALOG_OVERRIDE: &str = "CROWN_CONSENT_DIALOG";
-const BACKEND_VARIABLE: &str = "CROWN_BACKEND";
-const NESTED_BACKEND: &str = "winit";
 
-static DEVELOPMENT_DIALOG: LazyLock<Option<std::path::PathBuf>> = LazyLock::new(|| {
-    let nested = std::env::var(BACKEND_VARIABLE).is_ok_and(|backend| backend == NESTED_BACKEND);
-    (cfg!(debug_assertions) || nested)
-        .then(|| std::env::var_os(DIALOG_OVERRIDE).map(std::path::PathBuf::from))
-        .flatten()
-});
+static DEVELOPMENT_DIALOG: LazyLock<Option<std::path::PathBuf>> =
+    LazyLock::new(|| development_path(DIALOG_OVERRIDE));
 
 /// Warns when the installed dialog is missing: no window then counts as a
 /// consent dialog, so synthetic input is not kept from the question.

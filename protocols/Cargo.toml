@@ -12,12 +12,14 @@ features = ["wayland_frontend"]
 [dependencies]
 crownos-protocols = { workspace = true, features = ["server"] }
 motion = { path = "../../crownui/motion" }
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wayland-protocols = { version = "0.32", default-features = false, features = ["staging", "server"] }
 wayland-protocols-plasma = { version = "0.3", default-features = false, features = ["server"] }
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["server"] }
 wayland-server = { workspace = true }
+zeroize = "1"
 
 [dev-dependencies]
 crownos-protocols = { workspace = true, features = ["client"] }

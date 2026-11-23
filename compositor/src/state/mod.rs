@@ -12,6 +12,7 @@ mod config;
 pub mod context_access;
 mod control;
 mod cursor;
+mod dispatch;
 mod display;
 pub mod driven_seat;
 pub mod guest_seats;
@@ -24,7 +25,9 @@ pub mod output_layouts;
 mod output_lifecycle;
 pub mod outputs;
 mod overview;
+pub mod secret_typing;
 pub mod session_env;
+pub mod text_input_purposes;
 mod visibility;
 mod wayland;
 mod windowcontrol;
@@ -58,8 +61,6 @@ use crate::{
     utils::surface::root_surface,
     xwayland::Xwayland,
 };
-
-smithay::delegate_dispatch2!(State);
 
 pub struct State {
     pub common: CommonState,
@@ -108,6 +109,8 @@ pub struct State {
     pub agent_seats: agent_seats::AgentSeats,
     /// The seats behind `crownos_guest_seat_v1`, one per remote desktop guest.
     pub guest_seats: guest_seats::GuestSeats,
+    /// The `crownos_secret_input_v1` request being confirmed or typed.
+    pub secret_typing: secret_typing::SecretTyping,
 }
 
 impl State {
@@ -229,6 +232,7 @@ impl State {
             context_cooldown: std::collections::HashMap::new(),
             agent_seats: agent_seats::AgentSeats::default(),
             guest_seats: guest_seats::GuestSeats::default(),
+            secret_typing: secret_typing::SecretTyping::default(),
         };
         state.arm_activity_flush();
         state.arm_context_expiry();

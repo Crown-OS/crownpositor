@@ -404,6 +404,7 @@ dependencies = [
  "protocols",
  "regex",
  "resvg",
+ "rustix 1.1.4",
  "serde",
  "skrifa 0.40.0",
  "smithay",
@@ -2326,6 +2327,7 @@ version = "0.1.0"
 dependencies = [
  "crownos-protocols",
  "motion",
+ "rustix 1.1.4",
  "smithay",
  "thiserror 2.0.20",
  "tracing",
@@ -2334,6 +2336,7 @@ dependencies = [
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "wayland-server",
+ "zeroize",
 ]
 
 [[package]]
