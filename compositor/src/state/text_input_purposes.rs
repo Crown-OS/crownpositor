@@ -35,7 +35,8 @@ pub struct TextInputPurposes {
 pub struct AppliedTextInput {
     pub enabled: bool,
     pub purpose: Option<ContentPurpose>,
-    pub commits: u32,
+    /// How many commits enabled the text input: one more each time a field takes the focus.
+    pub enables: u32,
 }
 
 impl AppliedTextInput {
@@ -52,6 +53,7 @@ impl AppliedTextInput {
             Some(true) => {
                 self.enabled = true;
                 self.purpose = pending.purpose.flatten();
+                self.enables = self.enables.wrapping_add(1);
             }
             Some(false) => {
                 self.enabled = false;
@@ -63,7 +65,6 @@ impl AppliedTextInput {
                 }
             }
         }
-        self.commits = self.commits.wrapping_add(1);
     }
 }
 
@@ -136,7 +137,7 @@ mod tests {
     fn nothing_applies_before_the_commit() {
         let applied = after(&[Request::Enable, content_type(ContentPurpose::Password)]);
         assert!(!applied.is_password());
-        assert_eq!(applied.commits, 0);
+        assert_eq!(applied.enables, 0);
     }
 
     #[test]
@@ -147,7 +148,7 @@ mod tests {
             Request::Commit,
         ]);
         assert!(applied.is_password());
-        assert_eq!(applied.commits, 1);
+        assert_eq!(applied.enables, 1);
     }
 
     #[test]
@@ -161,6 +162,7 @@ mod tests {
         ]);
         assert!(applied.enabled);
         assert_eq!(applied.purpose, None);
+        assert_eq!(applied.enables, 2);
     }
 
     #[test]
@@ -184,6 +186,7 @@ mod tests {
             Request::Commit,
         ]);
         assert!(kept.is_password());
+        assert_eq!(kept.enables, 1, "a commit without enable is the same field");
         let changed = after(&[
             Request::Enable,
             content_type(ContentPurpose::Password),

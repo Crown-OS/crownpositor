@@ -51,17 +51,17 @@ pub enum FieldCheck {
     Refuse(Outcome),
 }
 
-/// `commits_before` is the commit count of the same text input when Tab was
-/// pressed: the field that Tab moved to must declare itself again.
+/// `enables_before` is the enable count of the same text input when Tab was
+/// pressed: the field that Tab moved to must enable the text input again.
 pub fn check_field(
     applied: Option<AppliedTextInput>,
     needs_password_field: bool,
-    commits_before: Option<u32>,
+    enables_before: Option<u32>,
 ) -> FieldCheck {
     let Some(applied) = applied else {
         return FieldCheck::Wait;
     };
-    if commits_before.is_some_and(|before| applied.commits == before) || !applied.enabled {
+    if enables_before.is_some_and(|before| applied.enables == before) || !applied.enabled {
         return FieldCheck::Wait;
     }
     if applied.is_terminal() {
@@ -104,11 +104,11 @@ mod tests {
 
     use super::*;
 
-    fn field(enabled: bool, purpose: Option<ContentPurpose>, commits: u32) -> AppliedTextInput {
+    fn field(enabled: bool, purpose: Option<ContentPurpose>, enables: u32) -> AppliedTextInput {
         AppliedTextInput {
             enabled,
             purpose,
-            commits,
+            enables,
         }
     }
 

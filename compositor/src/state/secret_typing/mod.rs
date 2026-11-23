@@ -239,13 +239,13 @@ impl State {
         let applied = text_input
             .as_ref()
             .and_then(|text_input| self.wayland.text_input_purposes.applied(text_input));
-        let commits_before = match (&tab_from, &text_input) {
-            (Some((object, commits)), Some(text_input)) if text_input.id() == *object => {
-                Some(*commits)
+        let enables_before = match (&tab_from, &text_input) {
+            (Some((object, enables)), Some(text_input)) if text_input.id() == *object => {
+                Some(*enables)
             }
             _ => None,
         };
-        match check_field(applied, needs_password_field, commits_before) {
+        match check_field(applied, needs_password_field, enables_before) {
             FieldCheck::Refuse(outcome) => {
                 self.finish_secret_typing(outcome);
                 return false;
@@ -272,7 +272,7 @@ impl State {
             self.press_tab();
             text_input
                 .zip(applied)
-                .map(|(text_input, applied)| (text_input.id(), applied.commits))
+                .map(|(text_input, applied)| (text_input.id(), applied.enables))
         } else {
             None
         };
