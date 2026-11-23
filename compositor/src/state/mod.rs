@@ -23,6 +23,7 @@ pub mod output_layouts;
 mod output_lifecycle;
 pub mod outputs;
 mod overview;
+pub mod session_accessibility;
 pub mod session_env;
 mod visibility;
 mod wayland;
