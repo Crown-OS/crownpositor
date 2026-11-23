@@ -174,7 +174,7 @@ impl State {
         let question = context_access_question(&key.display_name(), &key.to_string());
         tracing::info!(target: AUDIT, actor = %key, "asking the user");
         let ticket = self.context_prompts.park(key);
-        self.ask_consent(question, move |state, answer| {
+        self.ask_consent(question, move |state, _, answer| {
             state.answer_context_access(ticket, context_answer(&answer));
         });
     }

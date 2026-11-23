@@ -30,12 +30,13 @@ struct OpenDialog {
 }
 
 impl State {
-    /// Starts the dialog and calls `on_answer` with the answer on the
-    /// compositor thread. Returns the ticket, for [`Self::withdraw_consent`].
+    /// Starts the dialog and calls `on_answer` with its ticket and the answer
+    /// on the compositor thread. Returns the ticket, for
+    /// [`Self::withdraw_consent`].
     pub fn ask_consent(
         &mut self,
         question: ConsentQuestion,
-        on_answer: impl FnOnce(&mut State, ConsentAnswer) + Send + 'static,
+        on_answer: impl FnOnce(&mut State, u64, ConsentAnswer) + Send + 'static,
     ) -> u64 {
         self.consent_dialogs.next_ticket += 1;
         let ticket = self.consent_dialogs.next_ticket;
@@ -43,7 +44,7 @@ impl State {
             tracing::warn!(target: AUDIT, "the consent dialog is not installed");
             self.common
                 .tasks
-                .deliver(move |state| on_answer(state, ConsentAnswer::Unavailable));
+                .deliver(move |state| on_answer(state, ticket, ConsentAnswer::Unavailable));
             return ticket;
         };
         let spawned = self
@@ -56,14 +57,14 @@ impl State {
                 tracing::warn!(target: AUDIT, %error, "cannot start the consent dialog");
                 self.common
                     .tasks
-                    .deliver(move |state| on_answer(state, ConsentAnswer::Unavailable));
+                    .deliver(move |state| on_answer(state, ticket, ConsentAnswer::Unavailable));
                 return ticket;
             }
         };
         let Some(pid) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
             self.common
                 .tasks
-                .deliver(move |state| on_answer(state, ConsentAnswer::Unavailable));
+                .deliver(move |state| on_answer(state, ticket, ConsentAnswer::Unavailable));
             return ticket;
         };
         let (withdraw, withdrawn) = oneshot::channel();
@@ -79,7 +80,7 @@ impl State {
             .tasks
             .run(wait_for_dialog(child, withdrawn), move |state, exit| {
                 let answer = state.consent_answer(ticket, &question, exit);
-                on_answer(state, answer);
+                on_answer(state, ticket, answer);
             });
         ticket
     }
@@ -126,18 +127,59 @@ impl State {
             .open
             .remove(&ticket)
             .is_some_and(|open| open.shown);
-        match exit {
-            DialogExit::Printed(line) => match question.choice(&line) {
-                Some(choice) if shown => ConsentAnswer::Chosen(choice),
-                Some(_) => {
-                    tracing::warn!(target: AUDIT, ticket, "a dialog answered without showing itself");
-                    ConsentAnswer::Unavailable
-                }
-                None => ConsentAnswer::Declined,
-            },
-            DialogExit::Declined => ConsentAnswer::Declined,
-            DialogExit::TimedOut => ConsentAnswer::TimedOut,
-            DialogExit::Withdrawn => ConsentAnswer::Withdrawn,
+        decide(question, exit, shown)
+    }
+}
+
+/// The answer from what the dialog printed and whether it showed itself.
+fn decide(question: &ConsentQuestion, exit: DialogExit, shown: bool) -> ConsentAnswer {
+    match exit {
+        DialogExit::Printed(line) => match question.choice(&line) {
+            Some(choice) if shown => ConsentAnswer::Chosen(choice),
+            Some(_) => {
+                tracing::warn!(target: AUDIT, "a dialog answered without showing itself");
+                ConsentAnswer::Unavailable
+            }
+            None => ConsentAnswer::Declined,
+        },
+        DialogExit::Declined => ConsentAnswer::Declined,
+        DialogExit::TimedOut => ConsentAnswer::TimedOut,
+        DialogExit::Withdrawn => ConsentAnswer::Withdrawn,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn question() -> ConsentQuestion {
+        ConsentQuestion {
+            dangerous: true,
+            title: String::new(),
+            message: String::new(),
+            decline: "Deny",
+            choices: vec![("grant", "Allow")],
         }
+    }
+
+    #[test]
+    fn an_allow_counts_only_from_a_dialog_that_showed_itself() {
+        let printed = || DialogExit::Printed("grant".into());
+        assert_eq!(
+            decide(&question(), printed(), true),
+            ConsentAnswer::Chosen("grant")
+        );
+        assert_eq!(
+            decide(&question(), printed(), false),
+            ConsentAnswer::Unavailable
+        );
+        assert_eq!(
+            decide(&question(), DialogExit::Printed("other".into()), true),
+            ConsentAnswer::Declined
+        );
+        assert_eq!(
+            decide(&question(), DialogExit::TimedOut, true),
+            ConsentAnswer::TimedOut
+        );
     }
 }

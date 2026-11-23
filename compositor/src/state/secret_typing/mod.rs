@@ -101,8 +101,8 @@ impl State {
             secrets = details.secret_names,
             "asking the user to allow typing"
         );
-        let ticket = self.ask_consent(secret_typing_question(&prompt), |state, answer| {
-            state.secret_typing_answered(&answer);
+        let ticket = self.ask_consent(secret_typing_question(&prompt), |state, ticket, answer| {
+            state.secret_typing_answered(ticket, &answer);
         });
         self.secret_typing.active = Some(ActiveTyping {
             request,
@@ -149,8 +149,13 @@ impl State {
         })
     }
 
-    fn secret_typing_answered(&mut self, answer: &ConsentAnswer) {
-        let Some(active) = self.secret_typing.active.as_ref() else {
+    fn secret_typing_answered(&mut self, ticket: u64, answer: &ConsentAnswer) {
+        let Some(active) = self
+            .secret_typing
+            .active
+            .as_ref()
+            .filter(|active| active.ticket == ticket && matches!(active.phase, Phase::Asking))
+        else {
             return;
         };
         let window = active.window;
