@@ -9,6 +9,7 @@ use smithay::{
     },
     reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
     wayland::{
+        input_method::InputMethodSeat,
         seat::WaylandFocus,
         selection::{data_device::set_data_device_focus, primary_selection::set_primary_focus},
     },
@@ -61,12 +62,35 @@ impl SeatHandler for State {
         };
 
         self.offer_selections_to(seat, focused);
+        if focused.is_some_and(KeyboardFocusTarget::is_consent) {
+            self.release_input_method_grab(seat);
+        }
     }
 
     fn led_state_changed(&mut self, _seat: &Seat<Self>, _led_state: LedState) {}
 }
 
 impl State {
+    /// An input method (fcitx5 and the like) that grabbed the keyboard gets every real key, so
+    /// a consent dialog or a screen locker would see only what it forwards. Its grab ends when
+    /// such a surface takes the focus; the input method can grab again later. The grab ends
+    /// from an idle callback, outside the keyboard's focus change.
+    fn release_input_method_grab(&self, seat: &Seat<Self>) {
+        if !seat.input_method().keyboard_grabbed() {
+            return;
+        }
+        let Some(keyboard) = seat.get_keyboard() else {
+            return;
+        };
+        self.common.event_loop_handle.insert_idle(move |state| {
+            if !state.wayland.seat.input_method().keyboard_grabbed() {
+                return;
+            }
+            keyboard.unset_grab(state);
+            tracing::info!("released the input method's keyboard grab for a consent surface");
+        });
+    }
+
     /// Hands the clipboard and primary selection to `focus`'s client. A no-op
     /// when that client already holds them, so calling it both before
     /// `wl_keyboard.enter` (where the protocol wants the offer) and again from
