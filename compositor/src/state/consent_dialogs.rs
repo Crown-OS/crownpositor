@@ -304,13 +304,15 @@ mod tests {
 
     #[test]
     fn one_asker_cannot_fill_the_queue() {
-        let mut dialogs = ConsentDialogs::default();
-        dialogs.open = Some(OpenDialog {
-            ticket: 1,
-            pid: 1,
-            shown: false,
-            withdraw: None,
-        });
+        let mut dialogs = ConsentDialogs {
+            open: Some(OpenDialog {
+                ticket: 1,
+                pid: 1,
+                shown: false,
+                withdraw: None,
+            }),
+            ..ConsentDialogs::default()
+        };
         assert_eq!(dialogs.admission("agent"), Admission::Wait);
         dialogs.waiting.push_back(WaitingQuestion {
             ticket: 2,
