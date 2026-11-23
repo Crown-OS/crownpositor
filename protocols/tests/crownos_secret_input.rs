@@ -42,10 +42,13 @@ use wayland_server::{Display, backend::ClientData, delegate_dispatch, delegate_g
 const ALREADY_COMMITTED: u32 = 0;
 const NO_VALUE: u32 = 1;
 
-/// What the compositor side saw, without the values themselves.
+/// A value as the compositor side read it: text, kind, Tab after.
+type SeenValue = (String, ValueKind, bool);
+
+/// What the compositor side saw.
 #[derive(Default)]
 struct Seen {
-    committed: Vec<(String, Vec<(String, ValueKind, bool)>)>,
+    committed: Vec<(String, Vec<SeenValue>)>,
     withdrawn: usize,
 }
 
