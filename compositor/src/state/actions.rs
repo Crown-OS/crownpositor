@@ -484,7 +484,9 @@ impl State {
     }
 
     pub fn run_startup(&self) {
-        for argv in config::startup::commands(&self.config.current.compositor.startup) {
+        let compositor = &self.config.current.compositor;
+        let session_then_user = compositor.session_startup.iter().chain(&compositor.startup);
+        for argv in config::startup::commands(session_then_user) {
             tracing::info!(command = %argv.join(" "), "startup");
             self.spawn(&argv);
         }

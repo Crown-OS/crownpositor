@@ -46,9 +46,9 @@ pub fn split_argv(line: &str) -> Vec<String> {
 }
 
 /// Every startup entry as argv, with blank lines dropped.
-pub fn commands(lines: &[String]) -> Vec<Vec<String>> {
+pub fn commands<'a>(lines: impl IntoIterator<Item = &'a String>) -> Vec<Vec<String>> {
     lines
-        .iter()
+        .into_iter()
         .map(|line| split_argv(line))
         .filter(|argv| !argv.is_empty())
         .collect()
