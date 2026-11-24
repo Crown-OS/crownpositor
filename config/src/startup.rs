@@ -46,12 +46,25 @@ pub fn split_argv(line: &str) -> Vec<String> {
 }
 
 /// Every startup entry as argv, with blank lines dropped.
-pub fn commands<'a>(lines: impl IntoIterator<Item = &'a String>) -> Vec<Vec<String>> {
+pub fn commands(lines: &[String]) -> Vec<Vec<String>> {
     lines
-        .into_iter()
+        .iter()
         .map(|line| split_argv(line))
         .filter(|argv| !argv.is_empty())
         .collect()
+}
+
+/// The session programs, then the user's own programs that are not session
+/// programs too. A home from an earlier release can still list a session
+/// program in `startup`, and it must not start two times.
+pub fn session_then_user_commands(session: &[String], user: &[String]) -> Vec<Vec<String>> {
+    let mut all = commands(session);
+    for argv in commands(user) {
+        if !all.contains(&argv) {
+            all.push(argv);
+        }
+    }
+    all
 }
 
 #[cfg(test)]
@@ -92,5 +105,26 @@ mod tests {
     fn blank_entries_are_dropped_rather_than_spawned() {
         let lines = vec!["crownbar".to_string(), "   ".to_string(), String::new()];
         assert_eq!(commands(&lines), [vec!["crownbar".to_string()]]);
+    }
+
+    #[test]
+    fn a_session_program_in_the_user_list_starts_one_time() {
+        let session = vec![
+            "crownpaper".to_string(),
+            "crownos-theme-engine watch".to_string(),
+        ];
+        let user = vec![
+            "crownpaper".to_string(),
+            "crownos-theme-engine  watch".to_string(),
+            "kitty".to_string(),
+        ];
+        assert_eq!(
+            session_then_user_commands(&session, &user),
+            [
+                vec!["crownpaper".to_string()],
+                vec!["crownos-theme-engine".to_string(), "watch".to_string()],
+                vec!["kitty".to_string()],
+            ]
+        );
     }
 }
