@@ -82,6 +82,9 @@ name = "wlr_outputs"
 name = "color_info"
 
 [[example]]
+name = "keybind_probe"
+
+[[example]]
 name = "liquid_glass"
 
 [[example]]

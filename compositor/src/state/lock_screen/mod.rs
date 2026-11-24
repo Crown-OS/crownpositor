@@ -205,6 +205,7 @@ impl State {
         if let Some(keyboard) = self.wayland.seat.get_keyboard() {
             keyboard.unset_grab(self);
         }
+        self.input.app_keybinds.cancel_all();
         self.update_keyboard_focus();
         self.update_pointer_focus();
         self.input.cursor.status = CursorImageStatus::Named(CursorIcon::Default);

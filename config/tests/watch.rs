@@ -1,8 +1,9 @@
 //! Live keybinds, end to end.
 //!
-//! An edit to `keybinds.custom_keybinds` has to reach the compositor while it
-//! is running, and an edit to anything else in that file has to not — which is
-//! the whole reason the watch subscribes per key rather than per section.
+//! An edit to `keybinds.custom_keybinds`, `keybinds.app_keybinds` or `keybinds.launcher` has to reach
+//! the compositor while it is running, and an edit to anything else in that
+//! file has to not — which is the whole reason the watch subscribes per key
+//! rather than per section.
 //!
 //! One test function, because `CROWN_CONFIG_DIR` is process-global and cargo
 //! runs test functions on parallel threads.
@@ -10,7 +11,7 @@
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
-use config::{Binding, Update, Watch};
+use config::{AppKeybind, Binding, Update, Watch};
 use crownos_config::{CONFIG_DIR_ENV, Keybind, Keybinds, path_for};
 
 /// How long to wait for an update that should arrive.
@@ -27,9 +28,14 @@ fn keybind_edits_reach_a_running_compositor() {
     // spawned yet.
     unsafe { std::env::set_var(CONFIG_DIR_ENV, &dir) };
 
-    let (sender, updates) = channel();
-    let _watch = Watch::spawn(move |update| {
-        let _ = sender.send(update);
+    let (custom_sender, updates) = channel();
+    let (app_sender, app_updates) = channel();
+    let (launcher_sender, launcher_updates) = channel();
+    let _watch = Watch::spawn(move |update| match update {
+        Update::AppKeybinds(app_keybinds) => drop(app_sender.send(app_keybinds)),
+        Update::Launcher(launcher) => drop(launcher_sender.send(launcher)),
+        custom @ Update::CustomKeybinds(_) => drop(custom_sender.send(custom)),
+        _ => {}
     });
 
     let mut keybinds = Keybinds {
@@ -43,16 +49,39 @@ fn keybind_edits_reach_a_running_compositor() {
         "an edited keybind should reach the compositor"
     );
 
+    while launcher_updates.recv_timeout(SILENT).is_ok() {}
     keybinds.launcher = Keybind::NONE;
     write(&keybinds);
     assert!(
         updates.recv_timeout(SILENT).is_err(),
         "another key in the same file must not rebuild the binding table"
     );
+    assert_eq!(
+        launcher_updates.recv_timeout(DELIVERED).ok(),
+        Some(Keybind::NONE),
+        "an edited launcher chord should reach the compositor"
+    );
 
     keybinds.custom_keybinds.push(row("Super+L", "none"));
     write(&keybinds);
     assert_eq!(keybinds_from(&updates), keybinds.custom_keybinds);
+
+    while app_updates.recv_timeout(SILENT).is_ok() {}
+    keybinds.app_keybinds.push(AppKeybind {
+        app_id: "org.crownos.SoundRecorder".to_owned(),
+        name: "toggle-recording".to_owned(),
+        keys: "Super+Alt+R".parse().expect("parse chord"),
+    });
+    write(&keybinds);
+    assert_eq!(
+        app_updates.recv_timeout(DELIVERED).ok(),
+        Some(keybinds.app_keybinds.clone()),
+        "an edited application chord should reach the compositor"
+    );
+    assert!(
+        updates.recv_timeout(SILENT).is_err(),
+        "an application chord must not rebuild the desktop binding table"
+    );
 
     unsafe { std::env::remove_var(CONFIG_DIR_ENV) };
     let _ = std::fs::remove_dir_all(&dir);

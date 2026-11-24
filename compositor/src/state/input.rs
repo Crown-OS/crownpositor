@@ -13,7 +13,7 @@ use crate::{
     input::keyboard::HeldControl,
     input::mouse::constraint::PointerLock,
     input::{
-        shortcuts::{Bindings, GestureBindings, ModMask},
+        shortcuts::{AppKeybinds, Bindings, GestureBindings, ModMask},
         trackpad::gestures::GestureState,
     },
     rendering::cursor::Cursor,
@@ -23,6 +23,8 @@ use crate::{
 
 pub struct InputState {
     pub bindings: Bindings,
+    /// Chords that applications registered through `crownos_keybind_v1`.
+    pub app_keybinds: AppKeybinds,
     pub gesture_bindings: GestureBindings,
     pub gesture: GestureState,
 
@@ -75,6 +77,7 @@ impl InputState {
                 &config.keybinds.custom_keybinds,
                 crate::backend::Preference::detect(),
             ),
+            app_keybinds: AppKeybinds::default(),
             gesture_bindings: GestureBindings::defaults(),
             gesture: GestureState::new(),
             intercepted: HashSet::new(),

@@ -10,7 +10,7 @@ use config::Binding;
 use crate::backend::Preference;
 use crate::input::shortcuts::{
     action::Action,
-    chord::{Chord, ModMask},
+    chord::{Chord, ModMask, pressed_chords},
     custom::{self, Override},
     defaults,
 };
@@ -74,22 +74,18 @@ impl Bindings {
         }
     }
 
-    /// Prefers the layout-independent symbol, so Super+Q is still Super+Q on a
-    /// Cyrillic or Dvorak keymap, then falls back to the modified symbol.
     pub fn lookup(&self, modifiers: &ModifiersState, handle: &KeysymHandle<'_>) -> Option<Action> {
-        let mods = ModMask::from_smithay(modifiers);
-        let at = |key| {
-            self.keys.get(&Chord {
-                mods,
-                key: Some(key),
-            })
-        };
-
-        handle
-            .raw_latin_sym_or_raw_current_sym()
-            .and_then(at)
-            .or_else(|| at(handle.modified_sym()))
+        pressed_chords(modifiers, handle)
+            .find_map(|chord| self.keys.get(&chord))
             .cloned()
+    }
+
+    /// Whether the desktop acts on `chord` itself.
+    pub fn is_bound(&self, chord: Chord) -> bool {
+        match chord.key {
+            Some(_) => self.keys.contains_key(&chord),
+            None => self.mod_only.contains_key(&chord.mods),
+        }
     }
 
     pub fn lookup_mod_only(&self, mods: ModMask) -> Option<Action> {

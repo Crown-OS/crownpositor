@@ -7,7 +7,7 @@
 //! it does.
 
 use crownos_config::{KeyCode, Keybind, Mods};
-use smithay::input::keyboard::{Keysym, ModifiersState, keysyms};
+use smithay::input::keyboard::{Keysym, KeysymHandle, ModifiersState, keysyms};
 
 /// The four modifiers a shortcut may name.
 ///
@@ -70,6 +70,24 @@ impl From<Keybind> for Chord {
             key: bind.key.map(keysym),
         }
     }
+}
+
+/// The chords a key press can match, best first: the layout-independent
+/// symbol, so Super+Q is still Super+Q on a Cyrillic or Dvorak keymap, then
+/// the modified symbol.
+pub fn pressed_chords(
+    modifiers: &ModifiersState,
+    handle: &KeysymHandle<'_>,
+) -> impl Iterator<Item = Chord> {
+    let mods = ModMask::from_smithay(modifiers);
+    handle
+        .raw_latin_sym_or_raw_current_sym()
+        .into_iter()
+        .chain([handle.modified_sym()])
+        .map(move |key| Chord {
+            mods,
+            key: Some(key),
+        })
 }
 
 /// The keysym a config key names.

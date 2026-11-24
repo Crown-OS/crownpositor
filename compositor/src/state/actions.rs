@@ -320,6 +320,7 @@ impl State {
         self.config.current = new;
         self.set_context_access(access);
         self.rescope_context_clients(RevokeReason::User);
+        self.assign_app_keybinds();
         self.reapply_window_rules();
         self.apply_output_settings();
         self.refresh_output_heads();
@@ -409,6 +410,23 @@ impl State {
             Update::CustomKeybinds(custom) => {
                 self.input.bindings = Bindings::with_custom(&custom, self.backend.preference());
                 config.keybinds.custom_keybinds = custom;
+                self.assign_app_keybinds();
+            }
+            Update::AppKeybinds(app_keybinds) => {
+                config.keybinds.app_keybinds = app_keybinds;
+                self.assign_app_keybinds();
+            }
+            Update::Launcher(launcher) => {
+                config.keybinds.launcher = launcher;
+                self.assign_app_keybinds();
+            }
+            Update::DictationChord(dictation) => {
+                config.keybinds.dictation = dictation;
+                self.assign_app_keybinds();
+            }
+            Update::DictationHotkey(hotkey) => {
+                config.input.dictation_hotkey = hotkey;
+                self.assign_app_keybinds();
             }
             Update::Appearance(appearance) => {
                 self.shell.set_gaps(Gaps {

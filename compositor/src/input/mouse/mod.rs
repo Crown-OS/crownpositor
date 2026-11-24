@@ -205,6 +205,9 @@ impl State {
 
         let serial = SERIAL_COUNTER.next_serial();
         let state = event.state();
+        if state == ButtonState::Pressed {
+            self.input.app_keybinds.cancel_modifier_chord();
+        }
 
         // A press while a menu is open belongs to the menu: inside it, to
         // whichever row it landed on; outside, to dismissing it. Either way no
@@ -303,6 +306,7 @@ impl State {
         let Some(pointer) = self.wayland.seat.get_pointer() else {
             return;
         };
+        self.input.app_keybinds.cancel_modifier_chord();
 
         if self.scroll_as_pinch(axis_amount::<I>(&event, Axis::Vertical), event.time()) {
             return;

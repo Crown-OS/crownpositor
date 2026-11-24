@@ -248,6 +248,7 @@ impl State {
         // The global was created advertising everything the renderer can do;
         // the config gets the first word on what it will actually do.
         state.sync_background_effect_capabilities();
+        state.assign_app_keybinds();
         state.animate_cursor()?;
 
         Ok(state)

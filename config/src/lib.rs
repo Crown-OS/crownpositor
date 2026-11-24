@@ -3,9 +3,10 @@ pub mod startup;
 pub mod watch;
 
 pub use crownos_config::schema::{
-    AccessDecision, Agents, AnimationProfile, Binding, CloseAnimation, Compositor, ContextAccess,
-    EdgeGlow, GamingOptions, Glass as GlassSettings, Input, Lock, MinimizeAnimation, OutputLayout,
-    OutputSetting, OutputTransform, Theme, VisualContext, Vrr, WindowRule, WorkspaceMode,
+    AccessDecision, Agents, AnimationProfile, AppAction, AppActions, AppKeybind, Binding,
+    CloseAnimation, Compositor, ContextAccess, EdgeGlow, GamingOptions, Glass as GlassSettings,
+    Input, Lock, MinimizeAnimation, OutputLayout, OutputSetting, OutputTransform, Theme,
+    VisualContext, Vrr, WindowRule, WorkspaceMode,
 };
 pub use crownos_config::{Appearance, Display, Keybinds};
 pub use rules::{ResolvedRule, WindowRules};

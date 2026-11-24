@@ -73,6 +73,7 @@ use protocols::{
     crownos_context::ContextState,
     crownos_guest_seat::GuestSeatState,
     crownos_input::InputState as CrownosInputState,
+    crownos_keybind::KeybindState,
     crownos_output_brightness::OutputBrightnessState,
     crownos_output_info::OutputInfoState,
     crownos_plugin_host::PluginHostState,
@@ -135,6 +136,9 @@ pub struct WaylandState {
     pub context_grants: ContextGrants,
     /// `crownos_capture_privacy_v1`. Any client: it only hides its own surfaces.
     pub capture_privacy_state: CapturePrivacyState,
+    /// `crownos_keybind_v1`. Any client: an application only gets a chord
+    /// that the desktop and the user leave free.
+    pub keybind_state: KeybindState,
     pub appmenu_state: AppmenuState,
     pub background_effect_state: BackgroundEffectState,
     /// `wp_color_management_v1`. Unprivileged: any client may describe its own
@@ -309,6 +313,7 @@ impl WaylandState {
             guest_seat_state: GuestSeatState::new::<State, _>(display, is_media_engine),
             context_state: ContextState::new::<State, _>(display, has_app_key),
             capture_privacy_state: CapturePrivacyState::new::<State>(display),
+            keybind_state: KeybindState::new::<State>(display),
             agent_access_policy: AgentAccessPolicy::from_env(),
             secret_input_state: SecretInputState::new::<State, _>(display, is_secrets_daemon),
             plugin_host_state: PluginHostState::new::<State, _>(display, is_privileged),

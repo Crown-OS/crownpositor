@@ -68,8 +68,22 @@ impl State {
             serial,
             time,
             |state, modifiers, handle| {
+                let is_modifier_key = handle.modified_sym().is_modifier_key();
                 match key_state {
                     KeyState::Pressed => {
+                        if is_modifier_key {
+                            state.input.app_keybinds.modifier_pressed(
+                                ModMask::from_smithay(modifiers),
+                                !bypass,
+                                time.millis(),
+                            );
+                        } else {
+                            state
+                                .input
+                                .app_keybinds
+                                .ordinary_key_pressed(handle.raw_code());
+                        }
+
                         /*
                          * Disqualifies the modifier-only chord, so Super+Q does
                          * not also fire the bare-Super binding on release.
@@ -160,10 +174,26 @@ impl State {
                                 state.input.intercepted.insert(handle.raw_code());
                                 FilterResult::Intercept(action)
                             }
+                            None if state.input.app_keybinds.press(
+                                modifiers,
+                                &handle,
+                                time.millis(),
+                            ) =>
+                            {
+                                state.input.intercepted.insert(handle.raw_code());
+                                FilterResult::Intercept(Action::None)
+                            }
                             None => FilterResult::Forward,
                         }
                     }
                     KeyState::Released => {
+                        let app_keybinds = &mut state.input.app_keybinds;
+                        app_keybinds.release(handle.raw_code(), time.millis());
+                        if is_modifier_key {
+                            app_keybinds.modifier_released(time.millis());
+                        } else {
+                            app_keybinds.ordinary_key_released(handle.raw_code());
+                        }
                         // Caps Lock latches on its press, so the lock screen
                         // learns of it on the release.
                         if state.shell.lock_screen.is_active() {

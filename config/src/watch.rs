@@ -7,10 +7,11 @@
 use std::sync::Arc;
 
 use crownos_config::{
-    Appearance, Display, Key, Subscription,
+    Appearance, Display, Key, Keybind, Subscription,
     schema::{
-        Agents, Binding, ContextAccess, GamingOptions, Glass, Lock, OutputLayout, OutputSetting,
-        Theme, VisualContext, WorkspaceMode, WorkspaceScope, compositor, input, keybinds,
+        Agents, AppKeybind, Binding, ContextAccess, GamingOptions, Glass, Lock, OutputLayout,
+        OutputSetting, Theme, VisualContext, WorkspaceMode, WorkspaceScope, compositor, input,
+        keybinds,
     },
     subscribe_key, subscribe_typed,
 };
@@ -33,6 +34,10 @@ pub enum Update {
     Gaming(GamingOptions),
     SwapCapsAndEsc(bool),
     CustomKeybinds(Vec<Binding>),
+    AppKeybinds(Vec<AppKeybind>),
+    Launcher(Keybind),
+    DictationChord(Keybind),
+    DictationHotkey(Keybind),
     Appearance(Appearance),
     Display(Display),
     Glass(Glass),
@@ -73,6 +78,10 @@ impl Watch {
                 key(&sink, compositor::Gaming, Update::Gaming),
                 key(&sink, input::SwapCapsAndEsc, Update::SwapCapsAndEsc),
                 key(&sink, keybinds::CustomKeybinds, Update::CustomKeybinds),
+                key(&sink, keybinds::AppKeybinds, Update::AppKeybinds),
+                key(&sink, keybinds::Launcher, Update::Launcher),
+                key(&sink, keybinds::Dictation, Update::DictationChord),
+                key(&sink, input::DictationHotkey, Update::DictationHotkey),
                 section(&sink, Appearance::SECTION, Update::Appearance),
                 section(&sink, Display::SECTION, Update::Display),
                 section(&sink, Glass::SECTION, Update::Glass),
