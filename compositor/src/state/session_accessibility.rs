@@ -26,8 +26,10 @@ const MARKER: &str = "crownos/crownpositor/accessibility-enabled-by-engine";
 impl State {
     /// Starts the session apps. When this session owns the host bus, the
     /// accessibility switch follows `visual_context.enabled` first, for at
-    /// most [`STARTUP_WAIT`].
+    /// most [`STARTUP_WAIT`]. The user's CrownOS files get their commented
+    /// defaults in the background.
     pub fn start_session_apps(&self) {
+        std::thread::spawn(crownos_config::schema::write_user_files);
         if !matches!(self.backend, BackendState::Kms(_)) {
             self.run_startup();
             return;
