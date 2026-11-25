@@ -5,12 +5,11 @@
 //! up with text the wrong size. So each output gets its own, and an output
 //! with nothing configured gets this guess.
 //!
-//! The heuristic is Mutter's, because it is the one every GNOME user's
-//! hardware has already been judged against: aim for a *logical* density
-//! rather than a fixed multiplier, with a lower target for large displays
-//! because they are viewed from further away. So is its rule for which scales
-//! to offer at all: only those that divide the panel into whole logical
-//! pixels.
+//! The heuristic follows Mutter: aim for a *logical* density rather than a
+//! fixed multiplier, with a lower target for large displays because they are
+//! viewed from further away. The laptop target is lower than Mutter's, so that
+//! a 15.6" 1080p panel gets 1.25 and a 13.3" 1080p panel gets 1.5. The rule for which scales to offer at all is also
+//! Mutter's: only those that divide the panel into whole logical pixels.
 
 use smithay::utils::{Physical, Raw, Size};
 
@@ -31,7 +30,7 @@ const MIN_LOGICAL_AREA: i32 = 800 * 480;
 
 /// Diagonal inches at which a display stops being arm's-length.
 const LARGE_MIN_DIAGONAL_INCHES: f64 = 20.0;
-const MOBILE_TARGET_DPI: f64 = 135.0;
+const MOBILE_TARGET_DPI: f64 = 112.0;
 const LARGE_TARGET_DPI: f64 = 110.0;
 
 /// The scale an output should start at, from its physical size and resolution.
@@ -132,15 +131,24 @@ mod tests {
 
     #[test]
     fn a_hidpi_laptop_panel_scales_up() {
-        // 13.3" 2560x1600, ~227 dpi, viewed close: 1.68 ideally, and 5/3 is
-        // the nearest scale that leaves it 1536x960 logical pixels.
-        assert_eq!(guess((286, 179), (2560, 1600)), 200.0 / 120.0);
+        // 13.3" 2560x1600, ~227 dpi.
+        assert_eq!(guess((286, 179), (2560, 1600)), 2.0);
+        // 16" 2560x1600, ~189 dpi: 5/3 leaves it 1536x960 logical pixels.
+        assert_eq!(guess((345, 215), (2560, 1600)), 200.0 / 120.0);
     }
 
     #[test]
-    fn a_1080p_laptop_panel_stays_at_one() {
+    fn a_1080p_laptop_panel_scales_by_its_size() {
+        // 17.3" 1080p, ~127 dpi.
+        assert_eq!(guess((382, 215), (1920, 1080)), 1.25);
         // 15.6" 1080p, ~141 dpi.
-        assert_eq!(guess((344, 194), (1920, 1080)), 1.0);
+        assert_eq!(guess((344, 194), (1920, 1080)), 1.25);
+        // 16" 1920x1200, ~142 dpi.
+        assert_eq!(guess((345, 215), (1920, 1200)), 1.25);
+        // 14" 1080p, ~157 dpi.
+        assert_eq!(guess((310, 174), (1920, 1080)), 1.5);
+        // 13.3" 1080p, ~166 dpi.
+        assert_eq!(guess((294, 165), (1920, 1080)), 1.5);
     }
 
     #[test]
